@@ -43,6 +43,7 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef("hr:training:questionbank", "管理共享题库", "hr", "training", "questionbank"),
     PermissionDef("hr:training:exam", "管理笔试试卷", "hr", "training", "exam"),
     PermissionDef("hr:training:plan", "管理年度培训计划", "hr", "training", "plan"),
+    PermissionDef("hr:training:template", "维护培训导出模板", "hr", "training", "template"),
     # ── 花名册 ──
     PermissionDef("hr:roster:read", "查看员工花名册", "hr", "roster", "read"),
     # ── 组织架构 ──

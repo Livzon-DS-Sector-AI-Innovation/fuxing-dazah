@@ -1696,6 +1696,7 @@ class SopTrainingRecord(BaseModel):
     file_no: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="文件编号（SOP编号，(CA)前缀=草案）")
     effective_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="生效日期，草案填——")
     method: Mapped[str | None] = mapped_column(String(4), nullable=True, comment="培训方式：R（按完成时间）/ T（按课时）")
+    assessment_method: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="考核方式：阅读并理解/问答/笔试（空=按培训方式取默认）")
     complete_time: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="R：培训完成时间；T：培训课时（日期+时段）")
     trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（集中培训时填写）")
     trainees: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="培训对象，默认「X部门全体员工及相关部门培训师」")
@@ -1742,6 +1743,53 @@ class SopTrainingEntry(BaseModel):
     transferred_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="转培训时间"
     )
+
+
+# ─── 培训导出模板（用户自维护） ───
+
+
+class TrainingExportTemplateVersion(BaseModel):
+    """培训导出模板的自定义版本：换传即升版本（旧行保留可回滚），无当前版时回退仓库默认模板。
+
+    当前版唯一：部分唯一索引 (template_key) WHERE is_current AND NOT is_deleted；
+    上传人/时间取 BaseModel 的 created_by/created_at。文件存对象存储
+    （storage_key 用英文安全字符），template_key 对应
+    training_template_registry.TEMPLATES 中的注册项。
+    """
+
+    __tablename__ = "training_export_templates"
+    __table_args__ = (
+        Index("ix_training_tpl_key", "template_key"),
+        Index(
+            "uq_training_tpl_current",
+            "template_key",
+            unique=True,
+            postgresql_where=text("is_current = true AND is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    template_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="模板注册键（training_template_registry）"
+    )
+    version_no: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="版本号（1 起算）"
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+        comment="是否当前使用版本（false=历史版或已被恢复默认）",
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, comment="对象存储 key")
+    file_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, comment="展示/下载文件名（用户上传时的文件名）"
+    )
+    content_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        server_default="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        comment="MIME 类型（docx 的 MIME 串 71 字符，列宽放宽到 100）",
+    )
+    size: Mapped[int] = mapped_column(Integer, nullable=False, comment="文件大小（字节）")
+    remark: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="备注")
 
 
 # ─── HR 内部多部门数据范围 ───

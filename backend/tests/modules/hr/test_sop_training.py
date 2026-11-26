@@ -301,18 +301,6 @@ class TestMaterialsHelpers:
         # docx zip 签名
         assert content[:2] == b"PK"
 
-    def test_generate_register_docx(self):
-        from app.modules.hr.sop_training_routes import _generate_register_docx
-
-        buf = _generate_register_docx(
-            subject="测试培训", training_date="2026-08-21", department="测试部",
-            trainer="王老师", method="R", trainee_names=["张三", "李四"],
-            sick=1, maternity=0,
-        )
-        content = buf.getvalue()
-        assert len(content) > 0
-        assert content[:2] == b"PK"
-
     async def test_entry_personnel_excludes_leave(self, db_session):
         """二级表分类人员拉取：排除病假/产假，且只认体现部门（实际部门命中不带入）。"""
         from app.modules.hr import models as hr_models

@@ -327,6 +327,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
                      "PUT": "hr:profile:update", "DELETE": "hr:profile:delete"}),
     # 花名册
     (r"/roster", "hr:roster:read"),
+    # 培训导出模板管理（用户自维护 docx 模板）
+    (r"/training-export-templates.*", "hr:training:template"),
     # 组织架构
     (r"/departments/", {"GET": "hr:org:read", "POST": "hr:org:manage",
                         "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),

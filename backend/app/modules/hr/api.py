@@ -52,6 +52,7 @@ from app.modules.hr.notification_document_generator import (
 )
 from app.modules.hr.prejob_document_generator import generate_prejob_training_plan
 from app.modules.hr.repository import PerformanceEvaluationRepository
+from app.modules.hr.training_template_store import render_training_document
 from app.modules.hr.schemas import (
     AnnualTrainingPlanCreate,
     AnnualTrainingPlanItemBatchUpdate,
@@ -109,6 +110,7 @@ from app.modules.hr.signin_document_generator import generate_training_sign_in_s
 from app.modules.hr.sop_training_routes import router as sop_training_router
 from app.modules.hr.system_settings_routes import router as system_settings_router
 from app.modules.hr.title_review.routes import router as title_review_router
+from app.modules.hr.training_template_routes import router as training_template_router
 from app.modules.hr.user_department_access_routes import router as uda_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
@@ -135,6 +137,7 @@ router.include_router(departure_ledger_router)
 router.include_router(probation_router)
 router.include_router(analysis_router)
 router.include_router(sop_training_router)
+router.include_router(training_template_router)
 router.include_router(title_review_router)
 router.include_router(employee_sync_router)
 router.include_router(reminder_router)
@@ -473,7 +476,10 @@ async def download_roster(
         employees = [e for e in employees if e[1] == department]
     elif not hr_scope.is_unrestricted and hr_scope.scoped_departments:
         employees = [e for e in employees if e[1] in hr_scope.scoped_departments]
-    buffer = generate_roster_sync(employees, department)
+    buffer = await render_training_document(
+        session, "roster",
+        lambda tb: generate_roster_sync(employees, department, template_bytes=tb),
+    )
     filename = f"花名册_{department or '全部'}.docx"
     return StreamingResponse(
         iter([buffer.read()]),
@@ -520,7 +526,10 @@ async def download_training_registration(
             "入职日期": str(e.hire_date) if e.hire_date else "",
         })
 
-    buffer = generate_training_registration_sync(records)
+    buffer = await render_training_document(
+        session, "training_registration",
+        lambda tb: generate_training_registration_sync(records, template_bytes=tb),
+    )
     filename = f"个人培训登记表_{department or '全部'}.docx"
     return StreamingResponse(
         iter([buffer.read()]),
@@ -1503,6 +1512,7 @@ async def export_onboarding_training_record(
     employee_number: str,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     """根据员工工号自动生成并下载入职培训记录 Word 文档。"""
     emp = await service.repo.get_by_employee_number(employee_number)
@@ -1510,7 +1520,10 @@ async def export_onboarding_training_record(
         hr_scope.ensure_can_access_employee(emp)
     employee = await service.get_employee_by_number(employee_number)
     try:
-        buffer: BytesIO = generate_onboarding_training_record(employee)
+        buffer: BytesIO = await render_training_document(
+            session, "training_record",
+            lambda tb: generate_onboarding_training_record(employee, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1550,13 +1563,17 @@ async def export_onboarding_training_record_with_items(
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     """根据员工工号和前端选中的培训项，生成入职培训记录 Word 文档。"""
     employee = await service.get_employee_by_number(employee_number)
     hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
     try:
-        buffer: BytesIO = generate_onboarding_training_record(employee, training_items=items)
+        buffer: BytesIO = await render_training_document(
+            session, "training_record",
+            lambda tb: generate_onboarding_training_record(employee, training_items=items, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1581,6 +1598,7 @@ async def export_training_record(
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     """根据员工工号和培训项，生成新员工培训记录 Word 文档。"""
     from app.modules.hr.training_record_generator import generate_training_record
@@ -1590,8 +1608,12 @@ async def export_training_record(
     hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
     try:
-        buffer: BytesIO = generate_training_record(
-            employee, training_items=items, training_position=body.training_position
+        buffer: BytesIO = await render_training_document(
+            session, "training_record",
+            lambda tb: generate_training_record(
+                employee, training_items=items, training_position=body.training_position,
+                template_bytes=tb,
+            ),
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1617,6 +1639,7 @@ async def export_work_permit(
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     emp = await service.repo.get_by_employee_number(employee_number)
     if emp:
@@ -1627,7 +1650,10 @@ async def export_work_permit(
     employee = await service.get_employee_by_number(employee_number)
     items = [it.model_dump() for it in body.training_items]
     try:
-        buffer: BytesIO = generate_work_permit(employee, training_items=items)
+        buffer: BytesIO = await render_training_document(
+            session, "work_permit",
+            lambda tb: generate_work_permit(employee, training_items=items, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1792,8 +1818,12 @@ async def export_prejob_training_plan(
         ]
 
     try:
-        buffer: BytesIO = generate_prejob_training_plan(
-            person, training_items, payload.training_position if payload else None
+        buffer: BytesIO = await render_training_document(
+            session, "prejob_plan",
+            lambda tb: generate_prejob_training_plan(
+                person, training_items, payload.training_position if payload else None,
+                template_bytes=tb,
+            ),
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1902,7 +1932,10 @@ async def export_training_sign_in_sheet(
     payload.maternity_count = maternity
     safe_date = str(payload.training_date).replace("-", "")
     try:
-        buffer: BytesIO = generate_training_sign_in_sheet(payload)
+        buffer: BytesIO = await render_training_document(
+            session, "training_signin_sheet",
+            lambda tb: generate_training_sign_in_sheet(payload, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1963,7 +1996,10 @@ async def export_training_notification(
     payload.sick_count = sick
     payload.maternity_count = maternity
     try:
-        buffer: BytesIO = generate_training_notification(payload)
+        buffer: BytesIO = await render_training_document(
+            session, "training_notification",
+            lambda tb: generate_training_notification(payload, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -2258,7 +2294,10 @@ async def export_training_evaluation_admin(
         sick_leave=sick_count if department else None,
         maternity_leave=maternity_count if department else None,
     )
-    buffer: BytesIO = generate_training_evaluation(payload)
+    buffer: BytesIO = await render_training_document(
+        session, "training_evaluation",
+        lambda tb: generate_training_evaluation(payload, template_bytes=tb),
+    )
     safe_date = training_date.replace("-", "") if training_date else "nodate"
     filename = f"training_evaluation_{safe_date}.docx"
     return StreamingResponse(
@@ -2271,9 +2310,13 @@ async def export_training_evaluation_admin(
 @router.post("/training-evaluation", summary="生成培训效果评估表")
 async def export_training_evaluation(
     payload: TrainingEvaluationInput,
+    session: AsyncSession = Depends(get_db),
 ):
     """根据填写的培训信息自动生成培训效果评估表 Word 文档。"""
-    buffer: BytesIO = generate_training_evaluation(payload)
+    buffer: BytesIO = await render_training_document(
+        session, "training_evaluation",
+        lambda tb: generate_training_evaluation(payload, template_bytes=tb),
+    )
 
     def _iterfile():
         buffer.seek(0)
@@ -4632,7 +4675,13 @@ async def export_score_report(
                 )
     await session.commit()
 
-    buffer = generate_score_report(training_content=body.training_content, training_date=body.training_date, department=body.training_department, scores=scores)
+    buffer = await render_training_document(
+        session, "score_report",
+        lambda tb: generate_score_report(
+            training_content=body.training_content, training_date=body.training_date,
+            department=body.training_department, scores=scores, template_bytes=tb,
+        ),
+    )
     filename = f"成绩单_{body.training_date}.docx"
     return StreamingResponse(
         iter([buffer.read()]),
@@ -4650,6 +4699,7 @@ async def export_training_qa_record(
     training_department: str = Form("", description="受训部门"),
     questions_json: str = Form("[]", description="题目JSON"),
     trainee_names_json: str = Form("[]", description="学员姓名JSON"),
+    session: AsyncSession = Depends(get_db),
 ):
     """从培训通知页直接导出问答实操记录表（无评分数据，供打印后手写）。"""
     import json as _json
@@ -4660,14 +4710,18 @@ async def export_training_qa_record(
     trainee_names = _json.loads(trainee_names_json) if trainee_names_json else []
     training_date_val = date.fromisoformat(training_date) if training_date else None
 
-    buffer = generate_qa_record(
-        training_content=training_content,
-        training_purpose=training_purpose,
-        training_date=training_date_val,
-        training_method=training_method,
-        training_department=training_department,
-        questions=questions,
-        trainee_names=trainee_names,
+    buffer = await render_training_document(
+        session, "qa_record",
+        lambda tb: generate_qa_record(
+            training_content=training_content,
+            training_purpose=training_purpose,
+            training_date=training_date_val,
+            training_method=training_method,
+            training_department=training_department,
+            questions=questions,
+            trainee_names=trainee_names,
+            template_bytes=tb,
+        ),
     )
     filename = f"问答实操记录表_{training_date}.docx"
     return StreamingResponse(
@@ -4721,15 +4775,19 @@ async def export_qa_record(
         })
 
     try:
-        buffer = generate_qa_record(
-            training_content=row[0] or "",
-            training_department=row[1] or "",
-            training_date=row[2],
-            training_method=row[3] or "",
-            trainer_name=row[4] or "",
-            questions=questions,
-            trainee_names=trainee_names,
-            scores=score_entries,
+        buffer = await render_training_document(
+            session, "qa_record",
+            lambda tb: generate_qa_record(
+                training_content=row[0] or "",
+                training_department=row[1] or "",
+                training_date=row[2],
+                training_method=row[3] or "",
+                trainer_name=row[4] or "",
+                questions=questions,
+                trainee_names=trainee_names,
+                scores=score_entries,
+                template_bytes=tb,
+            ),
         )
     except Exception as e:
         raise HTTPException(400, f"生成记录表失败: {e}")
@@ -4799,7 +4857,10 @@ async def export_qa_evaluation(
         participation_rate=participation or None,
     )
     try:
-        buffer = generate_training_evaluation(payload)
+        buffer = await render_training_document(
+            session, "training_evaluation",
+            lambda tb: generate_training_evaluation(payload, template_bytes=tb),
+        )
     except Exception as e:
         raise HTTPException(400, f"生成评估表失败: {e}")
 
@@ -4902,11 +4963,15 @@ async def export_qa_scores(
     await session.commit()
 
     try:
-        buffer = generate_score_report(
-            training_content=row[0] or "",
-            training_date=str(row[2] or ""),
-            department=row[1] or "",
-            scores=score_list,
+        buffer = await render_training_document(
+            session, "score_report",
+            lambda tb: generate_score_report(
+                training_content=row[0] or "",
+                training_date=str(row[2] or ""),
+                department=row[1] or "",
+                scores=score_list,
+                template_bytes=tb,
+            ),
         )
     except FileNotFoundError as e:
         raise HTTPException(400, str(e))
@@ -6088,7 +6153,10 @@ async def download_exam_paper(
     if not paper:
         raise HTTPException(404, "试卷不存在")
 
-    buffer = generate_exam_paper(paper)
+    buffer = await render_training_document(
+        session, "exam_paper",
+        lambda tb: generate_exam_paper(paper, template_bytes=tb),
+    )
     filename = f"笔试试卷_{paper.subject}.docx"
     return StreamingResponse(
         iter([buffer.read()]),

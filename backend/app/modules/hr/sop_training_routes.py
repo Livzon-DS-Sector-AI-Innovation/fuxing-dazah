@@ -187,11 +187,34 @@ def _record_dict(r) -> dict:
         "change_note": r.change_note,
         "color": r.color,
         "status": r.status,
+        "assessment_method": r.assessment_method,
         "initiator_department": r.initiator_department,
         "created_by": r.created_by,
         "created_at": str(r.created_at),
         "updated_at": str(r.updated_at),
     }
+
+
+# ─── 考核方式 ───
+# 决定「生成一套材料」打包哪些文件：阅读并理解→通知+签到+评估；
+# 问答→通知+签到+问答实操记录+评估；笔试→通知+签到+试卷（题库有题才含）+评估
+SOP_ASSESSMENT_METHODS = ("阅读并理解", "问答", "笔试")
+# 考核方式未填时按培训方式取默认（R=自学 / T=面授）
+ASSESSMENT_DEFAULT_BY_METHOD = {"R": "阅读并理解", "T": "问答"}
+
+
+def _effective_assessment(stored: str | None, method: str | None) -> str:
+    """登记的考核方式优先；历史数据为空时按培训方式取默认。"""
+    val = (stored or "").strip()
+    if val:
+        return val
+    return ASSESSMENT_DEFAULT_BY_METHOD.get((method or "").strip(), "阅读并理解")
+
+
+def _method_label(method: str | None) -> str:
+    """R/T 转成 docx「培训方式」栏可读写法。"""
+    m = (method or "").strip()
+    return {"R": "自学", "T": "面授"}.get(m, m)
 
 
 # ─── 登记表 ───
@@ -267,6 +290,9 @@ async def create_sop_record(
         raise HTTPException(400, "年份格式不正确（应为 4 位数字年份）")
     if payload.get("method") and len(str(payload["method"]).strip()) > 4:
         raise HTTPException(400, "培训方式应为 R / T")
+    assessment = str(payload.get("assessment_method") or "").strip() or None
+    if assessment and assessment not in SOP_ASSESSMENT_METHODS:
+        raise HTTPException(400, "考核方式应为 阅读并理解 / 问答 / 笔试")
     if payload.get("color") and len(str(payload["color"]).strip()) > 8:
         raise HTTPException(400, "标记颜色值过长")
     involved = list(dict.fromkeys(
@@ -280,6 +306,7 @@ async def create_sop_record(
         file_no=payload.get("file_no"),
         effective_date=payload.get("effective_date"),
         method=payload.get("method"),
+        assessment_method=assessment,
         complete_time=payload.get("complete_time"),
         trainer=payload.get("trainer"),
         trainees=payload.get("trainees") or (f"「{initiator}」全体员工及相关部门培训师" if initiator else None),
@@ -360,11 +387,16 @@ async def update_sop_record(
         payload["year"] = year_val
     if payload.get("method") and len(str(payload["method"]).strip()) > 4:
         raise HTTPException(400, "培训方式应为 R / T")
+    if "assessment_method" in payload:
+        assessment = str(payload.get("assessment_method") or "").strip() or None
+        if assessment and assessment not in SOP_ASSESSMENT_METHODS:
+            raise HTTPException(400, "考核方式应为 阅读并理解 / 问答 / 笔试")
+        payload["assessment_method"] = assessment
     if payload.get("color") and len(str(payload["color"]).strip()) > 8:
         raise HTTPException(400, "标记颜色值过长")
     for key in ("year", "training_date", "file_name", "file_no", "effective_date",
-                "method", "complete_time", "trainer", "trainees", "change_note",
-                "color", "initiator_department"):
+                "method", "assessment_method", "complete_time", "trainer", "trainees",
+                "change_note", "color", "initiator_department"):
         if key in payload:
             setattr(r, key, payload[key])
     # status 由提交/转训流程控制，不允许客户端直接改写
@@ -744,42 +776,6 @@ def _generate_exam_docx(subject: str, questions: list[dict]) -> BytesIO:
     return buf
 
 
-def _generate_register_docx(
-    *, subject: str, training_date, department: str, trainer: str, method: str,
-    trainee_names: list[str], sick: int, maternity: int,
-) -> BytesIO:
-    """从零生成培训登记表 docx（信息表+人员名单）。"""
-    from docx import Document
-
-    doc = Document()
-    doc.add_heading("培训登记表", level=1)
-    table = doc.add_table(rows=8, cols=2)
-    table.style = "Table Grid"
-    info = [
-        ("培训主题", subject),
-        ("培训日期", str(training_date or "")),
-        ("培训部门", department),
-        ("培训师", trainer or ""),
-        ("培训方式", method or ""),
-        ("应到人数", f"{len(trainee_names)} 人"),
-        ("病假/产假", f"病假 {sick} 人、产假 {maternity} 人"),
-        ("实到人数", "____ 人"),
-    ]
-    for i, (k, v) in enumerate(info):
-        table.rows[i].cells[0].text = k
-        table.rows[i].cells[1].text = v
-    doc.add_heading("受训人员名单", level=2)
-    if trainee_names:
-        for name in trainee_names:
-            doc.add_paragraph(name, style="List Number")
-    else:
-        doc.add_paragraph("（无）")
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-
 
 
 @router.post("/sop-training-records/{record_id}/materials", summary="统筹总表一键生成全套培训材料")
@@ -788,7 +784,7 @@ async def generate_record_materials(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """按登记表涉及部门生成全套材料 zip：每部门 培训通知+签到表+试卷（有题则含）+培训登记表。"""
+    """按登记表涉及部门生成全套材料 zip：通知+签到表+评估，考核记录按考核方式加（问答→问答实操记录表，笔试→试卷，题库有题才含）。"""
     from app.modules.hr.models import SopTrainingRecord
 
     record = (
@@ -860,6 +856,14 @@ async def generate_record_materials(
     sick, maternity = await _query_leave_counts(session, initiator)
 
     questions = await _lookup_exam_questions(session, [record.file_no] if record.file_no else [])
+    assessment = _effective_assessment(record.assessment_method, record.method)
+    # 模板字节一次取齐（DB 自定义版优先，无则回退仓库默认模板）
+    from app.modules.hr.training_template_store import load_training_template_bytes
+
+    tpl_notification, _ = await load_training_template_bytes(session, "training_notification")
+    tpl_signin, _ = await load_training_template_bytes(session, "training_signin_sheet")
+    tpl_evaluation, _ = await load_training_template_bytes(session, "training_evaluation")
+    tpl_qa, _ = await load_training_template_bytes(session, "qa_record")
     buf = BytesIO()
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -868,25 +872,36 @@ async def generate_record_materials(
                 trainer=lead_trainer, content=record.change_note or "",
                 trainee_names=names, issuer_department=initiator,
                 issue_date=today, sick_count=sick, maternity_count=maternity,
-                training_method=record.method or "",
-            ))
+                training_method=_method_label(record.method),
+                assessment_method=assessment,
+            ), template_bytes=tpl_notification)
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=initiator, training_subject=subject,
                 topic=record.change_note or subject, instructor=lead_trainer,
                 employee_names=names, employee_departments=name_depts,
                 sick_count=sick, maternity_count=maternity,
-            ))
+                assessment_method=assessment,
+            ), template_bytes=tpl_signin)
             zf.writestr("培训通知.docx", notif_buf.getvalue())
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
-            if questions:
+            # 考核记录按考核方式：问答→问答实操记录表（题库按文件编号出题，无题留空白行手写）
+            if assessment == "问答":
+                from app.modules.hr.qa_record_generator import generate_qa_record
+
+                zf.writestr(
+                    "问答实操记录表.docx",
+                    generate_qa_record(
+                        training_content=subject, training_date=today,
+                        training_method=_method_label(record.method),
+                        training_department=initiator,
+                        questions=questions, trainee_names=names,
+                        trainer_name=lead_trainer or "",
+                        template_bytes=tpl_qa,
+                    ).getvalue(),
+                )
+            elif assessment == "笔试" and questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
-            zf.writestr("培训登记表.docx", _generate_register_docx(
-                subject=subject, training_date=record.training_date or today,
-                department=initiator, trainer=lead_trainer or "",
-                method=record.method or "", trainee_names=names,
-                sick=sick, maternity=maternity,
-            ).getvalue())
-            # 第四份文件：培训效果评估表（7.11 模板）
+            # 培训效果评估表（7.11 模板）
             from app.modules.hr.evaluation_document_generator import (
                 TrainingEvaluationInput,
                 generate_training_evaluation,
@@ -897,10 +912,11 @@ async def generate_record_materials(
                 generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=initiator,
                     trainer=lead_trainer or None,
-                    training_method=record.method or None,
+                    training_method=_method_label(record.method) or None,
+                    assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
-                )).getvalue(),
+                ), template_bytes=tpl_evaluation).getvalue(),
             )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
@@ -920,7 +936,8 @@ async def batch_generate_materials(
     """勾选二级表记录（1..n 条）生成**一套**培训材料。
 
     人员 = 各选中条目「分类人员」的并集（条目未选分类人员时直接 400 提示先选人）；
-    选中多条时培训内容并列体现多个文件名称，共用同一套通知/签到表/试卷/登记表。
+    选中多条时培训内容并列体现多个文件名称，共用同一套通知/签到表/考核记录/评估表
+    （考核记录按登记的考核方式：问答→问答实操记录表、笔试→试卷（有题才含）、阅读并理解→无）。
     """
     from app.modules.hr.models import SopTrainingEntry
     ids = payload.get("ids") or []
@@ -979,13 +996,20 @@ async def batch_generate_materials(
     from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 
     today = date.today()
-    # 培训方式在登记记录上（二级表无该列），取第一条有值的记录
+    # 培训方式/考核方式在登记记录上（二级表无该列），取第一条有值的记录
     method_val = ""
     for e in rows:
         rec = record_map.get(e.record_id or "")
         if rec and rec.method:
             method_val = rec.method
             break
+    assessment_val = ""
+    for e in rows:
+        rec = record_map.get(e.record_id or "")
+        if rec and rec.assessment_method:
+            assessment_val = rec.assessment_method
+            break
+    assessment = _effective_assessment(assessment_val, method_val)
     # 该部门培训师
     trainer = next((e.trainer for e in rows if e.trainer), None) or await _lookup_level1_trainer(session, dept)
     # 分类人员并集（过滤病假/产假/离职/待审批）
@@ -1003,6 +1027,13 @@ async def batch_generate_materials(
         names = [nm for _, nm in keep]
     sick, maternity = await _query_leave_counts(session, dept)
 
+    # 模板字节一次取齐（DB 自定义版优先，无则回退仓库默认模板）
+    from app.modules.hr.training_template_store import load_training_template_bytes
+
+    tpl_notification, _ = await load_training_template_bytes(session, "training_notification")
+    tpl_signin, _ = await load_training_template_bytes(session, "training_signin_sheet")
+    tpl_evaluation, _ = await load_training_template_bytes(session, "training_evaluation")
+    tpl_qa, _ = await load_training_template_bytes(session, "qa_record")
     buf = BytesIO()
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1011,25 +1042,37 @@ async def batch_generate_materials(
                 trainer=trainer or "", content=content, trainee_names=names,
                 issuer_department=dept, issue_date=today,
                 sick_count=sick, maternity_count=maternity,
-            ))
+                training_method=_method_label(method_val),
+                assessment_method=assessment,
+            ), template_bytes=tpl_notification)
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=dept, training_subject=subject,
                 topic=content, instructor=trainer or "",
                 employee_names=names, employee_departments={n: dept for n in names},
                 sick_count=sick, maternity_count=maternity,
-            ))
+                assessment_method=assessment,
+            ), template_bytes=tpl_signin)
             zf.writestr("培训通知.docx", notif_buf.getvalue())
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
-            # 试卷：按 SOP 编号匹配题库，有题才打包
+            # 考核记录按考核方式：问答→问答实操记录表（按 SOP 编号匹配题库，无题留空白行手写）；笔试→试卷（有题才含）
             questions = await _lookup_exam_questions(session, file_nos)
-            if questions:
+            if assessment == "问答":
+                from app.modules.hr.qa_record_generator import generate_qa_record
+
+                zf.writestr(
+                    "问答实操记录表.docx",
+                    generate_qa_record(
+                        training_content=subject, training_date=today,
+                        training_method=_method_label(method_val),
+                        training_department=dept,
+                        questions=questions, trainee_names=names,
+                        trainer_name=trainer or "",
+                        template_bytes=tpl_qa,
+                    ).getvalue(),
+                )
+            elif assessment == "笔试" and questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
-            zf.writestr("培训登记表.docx", _generate_register_docx(
-                subject=subject, training_date=today, department=dept,
-                trainer=trainer or "", method=method_val,
-                trainee_names=names, sick=sick, maternity=maternity,
-            ).getvalue())
-            # 第四份文件：培训效果评估表（7.11 模板）
+            # 培训效果评估表（7.11 模板）
             from app.modules.hr.evaluation_document_generator import (
                 TrainingEvaluationInput,
                 generate_training_evaluation,
@@ -1040,10 +1083,11 @@ async def batch_generate_materials(
                 generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=dept,
                     trainer=trainer or None,
-                    training_method=(method_val or None),
+                    training_method=(_method_label(method_val) or None),
+                    assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
-                )).getvalue(),
+                ), template_bytes=tpl_evaluation).getvalue(),
             )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
