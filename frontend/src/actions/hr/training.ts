@@ -385,13 +385,24 @@ export async function fetchAnnualPlanItems(params?: { year?: number; keyword?: s
   return fetchHrApi(`/hr/annual-plan-items${qs}`, { errorMessage: '加载失败' })
 }
 
-/** 上传年度计划明细（Excel） */
-export async function uploadAnnualTrainingPlans(formData: FormData): Promise<{ code: number; message: string; data?: unknown }> {
-  return fetchHrApi('/hr/annual-training-plans/upload', {
-    method: 'POST',
-    body: formData,
-    errorMessage: '上传失败',
-  })
+/** 上传年度计划明细（Excel）
+ *
+ * 失败不抛错而是结构化返回：Server Action 抛出的错误在生产构建里会被 Next 脱敏成
+ * 「An error occurred in the Server Components render…」，后端的中文提示到不了用户眼前。
+ */
+export async function uploadAnnualTrainingPlans(
+  formData: FormData,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  try {
+    const res = await fetchHrApi<{ message?: string }>('/hr/annual-training-plans/upload', {
+      method: 'POST',
+      body: formData,
+      errorMessage: '上传失败',
+    })
+    return { ok: true, message: res.message || '上传成功' }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : '上传失败' }
+  }
 }
 
 /** 新建单条计划明细 */

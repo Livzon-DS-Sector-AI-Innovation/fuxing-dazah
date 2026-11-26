@@ -5755,13 +5755,9 @@ async def upload_dept_training_personnel(
 
     try:
         content = await file.read()
-        from io import BytesIO
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
-        import openpyxl
-
-        wb = openpyxl.load_workbook(BytesIO(content))
-        ws = wb.active
-        rows = list(ws.iter_rows(min_row=2, values_only=True))  # skip header
+        rows = read_first_sheet_rows(content)[1:]  # skip header
 
         created = 0
         updated = 0

@@ -398,15 +398,10 @@ class EmployeeService:
 
     async def upload_trainers(self, file_bytes: bytes, allowed_departments: set[str] | None = None) -> dict:
         """上传内训师 Excel，按姓名+部门 upsert。allowed_departments 非空时仅导入该范围内的部门。"""
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-
         from app.modules.hr.models import HrTrainer
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
+        rows = await asyncio.to_thread(read_first_sheet_rows, file_bytes)
         if not rows:
             raise ValueError("文件为空")
         header = [str(c).strip() if c else "" for c in rows[0]]
@@ -477,15 +472,10 @@ class EmployeeService:
         self, file_bytes: bytes, allowed_departments: set[str] | None = None,
     ) -> dict:
         """上传 SOP 目录 Excel，按 SOP 编号 + 部门 upsert。"""
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-
         from app.modules.hr.models import PositionTraining, SopCatalog
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
+        rows = await asyncio.to_thread(read_first_sheet_rows, file_bytes)
         if not rows: raise ValueError("文件为空")
         header = [str(c).strip() if c else "" for c in rows[0]]
         col_map = {}
@@ -799,9 +789,9 @@ class EmployeeService:
     async def upload_annual_plan(
         self, file_bytes: bytes, *, allowed_departments: set[str] | None = None,
     ) -> dict:
-        """从 Excel 批量导入年度培训计划，按年度+部门自动分类。
+        """从 Excel（.xlsx 或旧版 .xls）批量导入年度培训计划，按年度+部门自动分类。
 
-        支持两种 Excel 格式：
+        支持两种 Excel 布局：
         1. 系统导出格式：标题行 → 部门行 → 表头行 → 数据行
         2. 自定义格式：第一行直接为表头，需包含「年度」「部门」列
 
@@ -809,15 +799,10 @@ class EmployeeService:
         「厂级」）的数据行，越权行计入 errors 跳过。
         每行使用独立 SAVEPOINT，单行失败不影响其他行。
         """
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-
         from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
+        rows = await asyncio.to_thread(read_first_sheet_rows, file_bytes)
         if not rows:
             raise ValueError("文件为空")
 

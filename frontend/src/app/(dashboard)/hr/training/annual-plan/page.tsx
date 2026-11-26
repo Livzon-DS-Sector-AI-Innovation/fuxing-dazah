@@ -72,8 +72,12 @@ function PlanListView({ year, keyword, reloadKey, onYearChange, onKeywordChange,
               <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
                 const fd = new FormData(); fd.append('file', file as File)
                 try {
-                  const d = await uploadAnnualTrainingPlans(fd)
-                  message.success(d.message || '上传成功'); onReload()
+                  const r = await uploadAnnualTrainingPlans(fd)
+                  if (r.ok) {
+                    message.success(r.message); onReload()
+                  } else {
+                    message.error(r.error)
+                  }
                 } catch (err) { message.error((err as Error)?.message || '上传失败') }
               }}>
                 <Button icon={<UploadOutlined />}>上传计划明细</Button>
