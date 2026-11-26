@@ -294,6 +294,13 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
                               "PUT": "hr:contract:manage", "DELETE": "hr:contract:manage"}),
     # 劳动合同公开签字（挂全局 api_router 免登，token 即凭证；登记仅为通过路由覆盖巡检，None=不设权限）
     (r"/contract-sign/.*", None),
+    # 离职办理（权限复用离职台账读写）。路径是子串匹配、首个命中即止：
+    # 带子路径的条目必须排在前面，否则会被宽泛条目遮住、其 PUT/DELETE 取不到权限码
+    (r"/offboarding-cases/.+", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
+                                "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
+    (r"/offboarding-cases", {"GET": "hr:departure:read", "POST": "hr:departure:manage"}),
+    # 离职证明公开签字（免登，token 即凭证）
+    (r"/departure-cert-sign/.*", None),
     # 员工证件资料库（具体子路径在通用条目之前）
     (r"/certificates/access-logs", "hr:certificate:audit"),
     (r"/certificates/requirements", {"GET": "hr:certificate:read",
@@ -382,6 +389,15 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 离职管理
     (r"/departure-records", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
                              "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
+    # 离职台账增强：筛选查询 / 勾选导出 / 保存视图走读权限，导出记录仅管理权限可见。
+    # 同样是子串匹配、首个命中即止，越具体的路径越靠前
+    # （/export 会命中 /export-logs，/saved-views 会命中 /saved-views/<id>）
+    (r"/departure-ledger/export-logs", "hr:departure:manage"),
+    (r"/departure-ledger/export", {"POST": "hr:departure:read"}),
+    (r"/departure-ledger/saved-views/", {"GET": "hr:departure:read", "POST": "hr:departure:read",
+                                         "PUT": "hr:departure:read", "DELETE": "hr:departure:read"}),
+    (r"/departure-ledger/saved-views", {"GET": "hr:departure:read", "POST": "hr:departure:read"}),
+    (r"/departure-ledger", "hr:departure:read"),
     (r"/offboarding-records", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
                                "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
     # 培训台账

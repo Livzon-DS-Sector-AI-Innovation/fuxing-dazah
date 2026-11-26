@@ -66,6 +66,9 @@ def test_register_declares_every_hr_task_exactly_once(
         "hr.contract.reminder",
         "hr.contract.renewal_announcement",
         "hr.employee_sync.reconcile",
+        "hr.offboarding.approval_sync",
+        "hr.offboarding.clearance_due_reminder",
+        "hr.offboarding.lead_reminder",
         "hr.probation.reminder",
         "hr.title_review.reconcile",
     ]

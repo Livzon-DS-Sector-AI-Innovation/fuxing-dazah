@@ -509,6 +509,9 @@ class DepartureRecord(BaseModel):
     )
 
     # ─── 离职证明签署 ───
+    cert_issued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="解除劳动关系证明开具时间（离职办理流程回写）"
+    )
     cert_sign_token: Mapped[str | None] = mapped_column(
         String(64), nullable=True, unique=True, comment="签署链接 token"
     )

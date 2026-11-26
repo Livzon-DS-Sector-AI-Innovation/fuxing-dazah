@@ -1,6 +1,7 @@
 """解除劳动关系证明：HTML 预览 + WeasyPrint 转 PDF。"""
 
 from datetime import date
+from html import escape
 from io import BytesIO
 
 from app.modules.hr.template_utils import find_font, find_hr_template
@@ -128,6 +129,14 @@ def generate_termination_certificate_html(
 
     font_path = find_font("NotoSansSC.ttf")
 
+    # 字段值来自档案/台账/HR 手填的离职原因，拼进 HTML 前必须转义：这段 HTML 会经
+    # 预览窗 document.write 和离职证明签字页（免登 H5）直接进 DOM，不转义即存储型 XSS
+    safe_name = escape(name)
+    safe_id_number = escape(id_number)
+    safe_department = escape(department)
+    safe_position = escape(position)
+    safe_leave_reason = escape(leave_reason)
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -149,9 +158,9 @@ def generate_termination_certificate_html(
 <p style="text-align:right;font-size:9pt;color:#666;">HR-RE-013</p>
 <p class="center title">解除劳动关系证明</p>
 <p>&nbsp;</p>
-<p class="indent">兹有我司原职工姓名：{name}，身份证号：{id_number}，
-入职时间 {entry_str} 到我公司工作，{department}部门，
-{position}岗位 工作。现因{leave_reason}，
+<p class="indent">兹有我司原职工姓名：{safe_name}，身份证号：{safe_id_number}，
+入职时间 {entry_str} 到我公司工作，{safe_department}部门，
+{safe_position}岗位 工作。现因{safe_leave_reason}，
 于 {leave_str} 正式解除劳动关系。</p>
 <p>特此证明。</p>
 <p>&nbsp;</p>

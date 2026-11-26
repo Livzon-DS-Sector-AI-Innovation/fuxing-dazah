@@ -413,6 +413,7 @@ class DepartureRecordResponse(DepartureRecordBase):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     # 离职证明签署
+    cert_issued_at: datetime | None = Field(None, description="解除劳动关系证明开具时间（离职办理流程回写）")
     cert_sign_status: str | None = None
     cert_signed_at: datetime | None = None
     cert_sign_name: str | None = None

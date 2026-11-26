@@ -51,6 +51,9 @@ class HrExtension(ModuleExtension):
         from app.modules.hr.labor_contract.scheduled import (
             register_labor_contract_tasks,
         )
+        from app.modules.hr.offboarding.scheduled import (
+            register_offboarding_tasks,
+        )
         from app.modules.hr.probation_service import (
             register_feishu_callbacks as register_probation_callbacks,
         )
@@ -76,6 +79,8 @@ class HrExtension(ModuleExtension):
         # 劳动合同续签流程（公告期扫描 09:05 / 飞书审批结果轮询 15min；
         # 新流程启用后旧合同到期提醒自动退出，开关在 hr_contract.* 配置）
         register_labor_contract_tasks(host.scheduler)
+        # 离职管理（飞书审批结果轮询 15min，办结自动推进状态机）
+        register_offboarding_tasks(host.scheduler)
 
         host.add_background_loop("hr:probation_config_warmup", _warm_probation_config)
 
