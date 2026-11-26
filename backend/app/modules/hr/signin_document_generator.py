@@ -6,7 +6,7 @@ combined into a single .docx with page breaks in between.
 """
 
 import copy
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -80,10 +80,38 @@ def _compute_duration_hours(start: str | None, end: str | None) -> str:
         return ""
 
 
+def _dash(text: str | None) -> str:
+    """没填的项写横杠，导出的签到表不留空白格（与培训通知同口径）."""
+    return text if text and text.strip() else "—"
+
+
+def _fmt_date(d: date | None, t_start: str | None, t_end: str | None, label: str) -> str:
+    """「标签：日期 起止时间」；没有起止时间（自学）时只写「标签：日期」."""
+    if not d:
+        return ""
+    ds = f"{d.year}年{d.month}月{d.day}日"
+    if t_start and t_end:
+        return f"{label}：{ds} {t_start}—{t_end}"
+    if t_start:
+        return f"{label}：{ds} {t_start}"
+    return f"{label}：{ds}"
+
+
+def _fmt_slot(d: str, t_start: str, t_end: str) -> str:
+    """「日期 起止时间」；没有起止时间（自学）时只写日期."""
+    if not d:
+        return ""
+    if t_start and t_end:
+        return f"{d} {t_start}—{t_end}"
+    if t_start:
+        return f"{d} {t_start}"
+    return d
+
+
 def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
     """Fill metadata into template table by cell position."""
     # Row 0, Col 1: 培训内容 (merged cols 1-3)
-    _set_cell_text(table.rows[0].cells[1], data.topic)
+    _set_cell_text(table.rows[0].cells[1], _dash(data.topic))
     # Row 1, Col 1: 培训对象（统一「x部门 全体成员」+ 病假/产假人数）
     sick = data.sick_count if data.sick_count is not None else 0
     maternity = data.maternity_count if data.maternity_count is not None else 0
@@ -92,7 +120,7 @@ def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
         f"「{data.department}」全体成员（病假{sick}人、产假{maternity}人除外）",
     )
     # Row 1, Col 3: 培训方式
-    _set_cell_text(table.rows[1].cells[3], data.training_method or "")
+    _set_cell_text(table.rows[1].cells[3], _dash(data.training_method))
     # Row 2, Col 1: 课时
     if data.time_slots:
         total_minutes = 0
@@ -109,15 +137,15 @@ def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
                 except ValueError:
                     pass
         total_hours = round(total_minutes / 30) / 2
-        hours_text = f"{int(total_hours)}小时" if total_hours == int(total_hours) else f"{total_hours}小时" if total_hours > 0 else ""
-        _set_cell_text(table.rows[2].cells[1], hours_text)
+        hours_text = "" if total_hours <= 0 else (f"{int(total_hours)}小时" if total_hours == int(total_hours) else f"{total_hours}小时")
+        _set_cell_text(table.rows[2].cells[1], _dash(hours_text))
     else:
         face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
         face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
         hours = _compute_duration_hours(face_start, face_end)
-        _set_cell_text(table.rows[2].cells[1], hours)
+        _set_cell_text(table.rows[2].cells[1], _dash(hours))
     # Row 2, Col 3: 考核方式
-    _set_cell_text(table.rows[2].cells[3], data.assessment_method or "")
+    _set_cell_text(table.rows[2].cells[3], _dash(data.assessment_method))
     # Row 3, Col 1: 培训日期含时间 (merged cols 1-3)
     if data.time_slots:
         slot_parts = []
@@ -125,30 +153,24 @@ def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
             d = s.get("date", "")
             t_start = s.get("start", "")
             t_end = s.get("end", "")
-            if d and t_start:
-                slot_parts.append(f"{d} {t_start}—{t_end}")
+            if d:
+                slot_parts.append(_fmt_slot(d, t_start, t_end))
         date_text = "；".join(slot_parts)
-        _set_cell_text(table.rows[3].cells[1], date_text)
+        _set_cell_text(table.rows[3].cells[1], _dash(date_text))
     else:
-        def _fmt_date(d, t_start, t_end, label):
-            if not d or not t_start:
-                return ""
-            ds = f"{d.year}年{d.month}月{d.day}日"
-            if t_start and t_end:
-                return f"{label}：{ds} {t_start}—{t_end}"
-            return f"{label}：{ds} {t_start}"
         face_date = getattr(data, "face_date", None) or data.training_date
         self_date = getattr(data, "self_study_date", None)
         self_start = getattr(data, "self_study_time_start", None)
         self_end = getattr(data, "self_study_time_end", None)
         parts = []
-        face_part = _fmt_date(face_date, face_start, face_end, "面授")
+        # 面授必须有时间才写，自学只选了日期也要写
+        face_part = _fmt_date(face_date, face_start, face_end, "面授") if face_start else ""
         if face_part:
             parts.append(face_part)
-        if self_date and self_start:
+        if self_date:
             parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
         date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
-        _set_cell_text(table.rows[3].cells[1], date_text)
+        _set_cell_text(table.rows[3].cells[1], _dash(date_text))
 
 
 def _fill_employee_rows(table, employee_names: list[str], employee_departments: dict[str, str], default_department: str) -> None:

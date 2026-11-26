@@ -1828,16 +1828,19 @@ async def list_employee_varieties(
     """获取指定部门名单人员的品种列表（去重），用于签到表二级筛选。
 
     人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门
-    （与按部门带入人员的口径一致，兼任部门不参与）。
+    （与按部门带入人员的口径一致，兼任部门不参与）；
+    「厂级」= 全厂培训，不下发部门过滤（与名单接口口径一致）。
     """
     from app.modules.hr.models import TrainingRosterProfile
+    conditions = [
+        TrainingRosterProfile.is_deleted == False,
+        TrainingRosterProfile.status == '在职',
+    ]
+    if department != "厂级":
+        conditions.append(TrainingRosterProfile.department == department)
     rows = (await session.execute(
         select(TrainingRosterProfile.variety, TrainingRosterProfile.concurrent_variety)
-        .where(
-            TrainingRosterProfile.is_deleted == False,
-            TrainingRosterProfile.status == '在职',
-            TrainingRosterProfile.department == department,
-        )
+        .where(*conditions)
     )).all()
     varieties: list[str] = []
     for variety, concurrent in rows:
@@ -1854,14 +1857,15 @@ async def list_employee_varieties(
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
     """统计部门病假/产假人数（无则 0），供通知/签到表人数栏展示。
 
-    人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门。
+    人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门；
+    「厂级」= 全厂培训，不下发部门过滤（与名单接口口径一致）。
     """
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.training_roster_profiles "
-                "WHERE department = :dept "
+                "WHERE (:dept = '厂级' OR department = :dept) "
                 "AND is_deleted = false "
                 "AND status IN ('病假', '产假') GROUP BY status"
             ),

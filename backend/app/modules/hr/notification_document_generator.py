@@ -78,6 +78,34 @@ def _compute_hours(start: str | None, end: str | None) -> str:
         return ""
 
 
+def _dash(text: str | None) -> str:
+    """没填的项写横杠，导出的通知不留空白格."""
+    return text if text and text.strip() else "—"
+
+
+def _fmt_date(d: date | None, t_start: str | None, t_end: str | None, label: str) -> str:
+    """「标签：日期 起止时间」；没有起止时间（自学）时只写「标签：日期」."""
+    if not d:
+        return ""
+    ds = f"{d.year}年{d.month}月{d.day}日"
+    if t_start and t_end:
+        return f"{label}：{ds} {t_start}—{t_end}"
+    if t_start:
+        return f"{label}：{ds} {t_start}"
+    return f"{label}：{ds}"
+
+
+def _fmt_slot(d: str, t_start: str, t_end: str) -> str:
+    """「日期 起止时间」；没有起止时间（自学）时只写日期."""
+    if not d:
+        return ""
+    if t_start and t_end:
+        return f"{d} {t_start}—{t_end}"
+    if t_start:
+        return f"{d} {t_start}"
+    return d
+
+
 def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
     """Generate training notification docx from template."""
     template_path = _find_template()
@@ -88,7 +116,7 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
     topic_parts = [data.subject]
     if data.content:
         topic_parts.append(data.content)
-    _set_cell(table.rows[0].cells[1], " — ".join(topic_parts))
+    _set_cell(table.rows[0].cells[1], _dash(" — ".join(topic_parts)))
 
     # ── Row 1: 培训日期 | value (含时间) | 课时 | value ──
     # 优先使用 time_slots（多时段），否则回退到旧字段
@@ -99,8 +127,8 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
             d = s.get("date", "")
             t_start = s.get("start", "")
             t_end = s.get("end", "")
-            if d and t_start:
-                slot_parts.append(f"{d} {t_start}—{t_end}")
+            if d:
+                slot_parts.append(_fmt_slot(d, t_start, t_end))
             if t_start and t_end:
                 try:
                     s_dt = datetime.strptime(t_start, "%H:%M")
@@ -112,9 +140,9 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
                     pass
         date_text = "；".join(slot_parts)
         total_hours = round(total_minutes / 30) / 2
-        hours_text = f"{int(total_hours)}小时" if total_hours == int(total_hours) else f"{total_hours}小时" if total_hours > 0 else ""
-        _set_cell(table.rows[1].cells[1], date_text)
-        _set_cell(table.rows[1].cells[3], hours_text)
+        hours_text = "" if total_hours <= 0 else (f"{int(total_hours)}小时" if total_hours == int(total_hours) else f"{total_hours}小时")
+        _set_cell(table.rows[1].cells[1], _dash(date_text))
+        _set_cell(table.rows[1].cells[3], _dash(hours_text))
     else:
         face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
         face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
@@ -122,28 +150,21 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
         self_end = getattr(data, "self_study_time_end", None)
         face_date = getattr(data, "face_date", None) or data.training_date
         self_date = getattr(data, "self_study_date", None)
-        # 格式化中文日期
-        def _fmt_date(d, t_start, t_end, label):
-            if not d or not t_start:
-                return ""
-            ds = f"{d.year}年{d.month}月{d.day}日"
-            if t_start and t_end:
-                return f"{label}：{ds} {t_start}—{t_end}"
-            return f"{label}：{ds} {t_start}"
         parts = []
-        face_part = _fmt_date(face_date, face_start, face_end, "面授")
+        # 格式化中文日期；面授必须有时间才写，自学只选了日期也要写
+        face_part = _fmt_date(face_date, face_start, face_end, "面授") if face_start else ""
         if face_part:
             parts.append(face_part)
-        if self_date and self_start:
+        if self_date:
             parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
         date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
-        _set_cell(table.rows[1].cells[1], date_text)
+        _set_cell(table.rows[1].cells[1], _dash(date_text))
         # 课时仅按面授时间计算
-        _set_cell(table.rows[1].cells[3], _compute_hours(face_start, face_end))
+        _set_cell(table.rows[1].cells[3], _dash(_compute_hours(face_start, face_end)))
 
     # ── Row 2: 培训方式 | value | 授课人 | value ──
-    _set_cell(table.rows[2].cells[1], data.training_method or "")
-    _set_cell(table.rows[2].cells[3], data.trainer or "")
+    _set_cell(table.rows[2].cells[1], _dash(data.training_method))
+    _set_cell(table.rows[2].cells[3], _dash(data.trainer))
 
     # ── Row 3: 培训对象 (merged cols 1-3) ──
     # 培训对象统一以「x部门 全体成员」展示，不再列人名；附病假/产假人数
@@ -157,10 +178,10 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
     _set_cell(table.rows[3].cells[1], people)
 
     # ── Row 4: 培训地点 (merged cols 1-3) ──
-    _set_cell(table.rows[4].cells[1], data.location or "")
+    _set_cell(table.rows[4].cells[1], _dash(data.location))
 
     # ── Row 5: 考核方式 (merged cols 1-3) ──
-    _set_cell(table.rows[5].cells[1], data.assessment_method or "")
+    _set_cell(table.rows[5].cells[1], _dash(data.assessment_method))
 
     # ── Row 6: 注意事项 (merged cols 1-3) ──
     _set_cell(table.rows[6].cells[1],
