@@ -2,8 +2,8 @@
 
 登记表（对齐 010版 Excel 模板）：每年一张，每行一个培训文件，按年归档、颜色标注、可导出。
 提交登记时按「培训涉及部门」自动生成各部二级表记录，并飞书卡片通知各部门培训管理员。
-二级表：转培训自动带出部门当前培训师；培训管理员选择自定义分类人员；
-支持多条 SOP 同场一起转训、合并生成一套培训材料。
+二级表：培训管理员选择自定义分类人员后生成培训材料（生成即完成，自动带出部门当前培训师）；
+支持多条 SOP 同场合并生成一套培训材料。
 """
 import json
 import logging
@@ -13,7 +13,7 @@ from io import BytesIO
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -153,7 +153,7 @@ async def _notify_training_admins(
 
 
 async def _sync_entries(session: AsyncSession, record) -> None:
-    """按登记记录的培训涉及部门同步二级表：新增缺失部门，移除已取消且未转训的部门。"""
+    """按登记记录的培训涉及部门同步二级表：新增缺失部门，移除已取消且未生成材料的部门。"""
     from app.modules.hr.models import SopTrainingEntry
     related = _json_loads(record.involved_departments)
     related = list(dict.fromkeys(str(d).strip() for d in related if str(d).strip()))
@@ -168,7 +168,7 @@ async def _sync_entries(session: AsyncSession, record) -> None:
         if dept not in existing_depts:
             session.add(SopTrainingEntry(record_id=str(record.id), department=dept))
     for e in existing_rows:
-        if e.department not in related and e.status != "已转训":
+        if e.department not in related and e.status != "已生成":
             e.is_deleted = True
 
 
@@ -464,7 +464,7 @@ async def update_sop_record(
                 "change_note", "color", "initiator_department"):
         if key in payload:
             setattr(r, key, payload[key])
-    # status 由提交/转训流程控制，不允许客户端直接改写
+    # status 由提交/生成材料流程控制，不允许客户端直接改写
     added_departments: list[str] = []
     if "involved_departments" in payload:
         old_departments = set(_json_loads(r.involved_departments))
@@ -507,7 +507,7 @@ async def delete_sop_record(
         )
     )).scalars().all()
     for e in entries:
-        if e.status != "已转训":
+        if e.status != "已生成":
             e.is_deleted = True
     await session.commit()
     return success_response(message="已删除")
@@ -613,8 +613,8 @@ def _entry_dict(e, record_map: dict[str, object]) -> dict:
         "classification": e.classification,
         "personnel": personnel,
         "personnel_count": len(personnel),
-        "transferred_by": e.transferred_by,
-        "transferred_at": str(e.transferred_at) if e.transferred_at else None,
+        "generated_by": e.generated_by,
+        "generated_at": str(e.generated_at) if e.generated_at else None,
         "created_at": str(e.created_at),
         "updated_at": str(e.updated_at),
     }
@@ -624,7 +624,7 @@ def _entry_dict(e, record_map: dict[str, object]) -> dict:
 async def list_sop_entries(
     record_id: str | None = Query(None, description="登记记录筛选"),
     department: str | None = Query(None, description="部门筛选"),
-    status: str | None = Query(None, description="状态筛选：待转训/已转训"),
+    status: str | None = Query(None, description="状态筛选：待生成/已生成"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
@@ -675,20 +675,20 @@ async def update_sop_entry(
     return success_response(message="已更新")
 
 
-async def _do_transfer(session: AsyncSession, e, operator: str) -> None:
-    """单条转培训：自动带出该部门当前培训师，并把涉及人员自动关联到该条分类标签。"""
-    if e.status == "已转训":
+async def _mark_generated(session: AsyncSession, e, operator: str) -> None:
+    """生成材料即完成：自动带出该部门当前培训师，并把涉及人员自动关联到该条分类标签。"""
+    if e.status == "已生成":
         return
     trainer = await _lookup_level1_trainer(session, e.department)
     e.trainer = trainer or e.trainer
-    e.status = "已转训"
-    e.transferred_by = operator
-    e.transferred_at = datetime.now(UTC)
+    e.status = "已生成"
+    e.generated_by = operator
+    e.generated_at = datetime.now(UTC)
     await _link_classification_tags(session, e, operator)
 
 
 async def _link_classification_tags(session: AsyncSession, e, operator: str) -> None:
-    """转训自动关联分类：二级表涉及人员的自定义分类写入员工标签（幂等）。
+    """生成材料自动关联分类：二级表涉及人员的自定义分类写入员工标签（幂等）。
 
     之后「员工档案-分类」与「二级表按分类拉人」会自动包含这些人。
     """
@@ -713,7 +713,7 @@ async def _link_classification_tags(session: AsyncSession, e, operator: str) -> 
     }
     if not numbers:
         return
-    # ON CONFLICT DO NOTHING：与活跃行部分唯一索引配合，并发转训/批量打标不 500
+    # ON CONFLICT DO NOTHING：与活跃行部分唯一索引配合，并发生成/批量打标不 500
     # （部分索引推断必须显式给出 index_where）
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     for num in numbers:
@@ -726,56 +726,6 @@ async def _link_classification_tags(session: AsyncSession, e, operator: str) -> 
             ),
         )
     await session.flush()
-
-
-@router.post("/sop-training-entries/{entry_id}/transfer", summary="转培训")
-async def transfer_sop_entry(
-    entry_id: UUID,
-    session: AsyncSession = Depends(get_db),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """转培训：自动带出该部门一级培训师为培训师，状态置为已转训。"""
-    from app.modules.hr.models import SopTrainingEntry
-    e = await session.get(SopTrainingEntry, entry_id)
-    if not e or e.is_deleted:
-        raise HTTPException(404, "记录不存在")
-    _ensure_entry_in_scope(hr_scope, e)
-    await _do_transfer(session, e, hr_scope.user.name or "")
-    await session.commit()
-    return success_response(data={"trainer": e.trainer}, message="已转培训")
-
-
-@router.post("/sop-training-entries/batch-transfer", summary="批量转培训（多条SOP一起转训）")
-async def batch_transfer_sop_entries(
-    payload: dict,
-    session: AsyncSession = Depends(get_db),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """勾选多条二级表记录一起转训，每条自动带出本部门当前培训师。"""
-    from app.modules.hr.models import SopTrainingEntry
-    ids = payload.get("ids") or []
-    if not ids:
-        raise HTTPException(400, "请选择要转训的记录")
-    try:
-        entry_ids = [UUID(i) for i in ids]
-    except (TypeError, ValueError):
-        raise HTTPException(400, "记录 ID 格式不正确")
-    rows = (await session.execute(
-        select(SopTrainingEntry).where(
-            SopTrainingEntry.is_deleted == False,  # noqa: E712
-            SopTrainingEntry.id.in_(entry_ids),
-        )
-    )).scalars().all()
-    transferred = 0
-    for e in rows:
-        if e.status == "已转训":
-            continue
-        _ensure_entry_in_scope(hr_scope, e)
-        await _do_transfer(session, e, hr_scope.user.name or "")
-        transferred += 1
-    await session.commit()
-    return success_response(data={"transferred": transferred}, message=f"已转培训 {transferred} 条")
-
 
 
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
@@ -798,6 +748,48 @@ async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[i
     except Exception:
         pass
     return sick, maternity
+
+
+def _evaluation_stats_kwargs(
+    stats: dict, expected: int, sick: int, maternity: int
+) -> dict:
+    """评估表统计预填：校验弹窗传来的统计并换算成 TrainingEvaluationInput kwargs。
+
+    口径（用户拍板）：不合格恒为 0（优秀+合格=参加考核）；事假=应到-实到-病产假（负则 0）；
+    参与率=实到/应到、合格率恒 100%。expected 为 0 时（名单为空）不预填，原样返回 {}。
+    """
+    def _int(key: str) -> int:
+        try:
+            return int(stats.get(key) or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"评估表统计的「{key}」不是有效数字")
+
+    actual = _int("actual_count")
+    exam = _int("exam_count")
+    excellent = _int("excellent_count")
+    qualified = _int("qualified_count")
+    if min(actual, exam, excellent, qualified) < 0:
+        raise HTTPException(400, "评估表统计不能为负数")
+    if excellent + qualified != exam:
+        raise HTTPException(400, "优秀人数 + 合格人数 必须等于 参加考核人数（不合格恒为 0）")
+    if expected <= 0:
+        return {}
+    if actual > expected:
+        raise HTTPException(400, f"实到人数（{actual}）不能超过应到人数（{expected}）")
+    if exam > actual:
+        raise HTTPException(400, f"参加考核人数（{exam}）不能超过实到人数（{actual}）")
+    personal_leave = max(expected - actual - sick - maternity, 0)
+    participation = f"{round(actual / expected * 100)}%" if expected else None
+    return {
+        "actual_count": actual,
+        "exam_count": exam,
+        "excellent_count": excellent,
+        "qualified_count": qualified,
+        "unqualified_count": 0,
+        "personal_leave": personal_leave,
+        "participation_rate": participation,
+        "pass_rate": "100%" if exam else None,
+    }
 
 
 async def _lookup_exam_questions(session, file_nos: list[str]) -> list[dict]:
@@ -846,6 +838,7 @@ def _generate_exam_docx(subject: str, questions: list[dict]) -> BytesIO:
 @router.post("/sop-training-records/{record_id}/materials", summary="统筹总表一键生成全套培训材料")
 async def generate_record_materials(
     record_id: UUID,
+    payload: dict | None = Body(default=None),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
@@ -989,6 +982,13 @@ async def generate_record_materials(
                     assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
+                    # 病产假与通知/签到表同口径（主办部门在职名单状态统计）
+                    sick_leave=sick, maternity_leave=maternity,
+                    # 弹窗预填的评估表统计（可选）：校验与比率换算见 _evaluation_stats_kwargs
+                    **_evaluation_stats_kwargs(
+                        (payload or {}).get("evaluation_stats") or {},
+                        expected=len(names), sick=sick, maternity=maternity,
+                    ),
                     trainee_group=trainee_group,
                 ), template_bytes=tpl_evaluation).getvalue(),
             )
@@ -1001,6 +1001,105 @@ async def generate_record_materials(
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
     )
+@router.get("/sop-training-records/{record_id}/materials-preview", summary="全套材料·评估表统计基数预览")
+async def preview_record_materials(
+    record_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """弹窗预填用：返回单条材料导出时的应到人数（主办部门名单∪涉及部门一级培训师）与病产假数。
+
+    口径与 materials 接口的人员查询一致（两处同步改）。
+    """
+    from app.modules.hr.models import SopTrainingRecord
+
+    record = (
+        await session.execute(
+            select(SopTrainingRecord).where(
+                SopTrainingRecord.id == record_id,
+                SopTrainingRecord.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).scalar_one_or_none()
+    if not record:
+        raise HTTPException(404, "登记记录不存在")
+    departments = _json_loads(record.involved_departments) or []
+    initiator = (record.initiator_department or "").strip() or (str(departments[0]).strip() if departments else "")
+    if initiator:
+        if not hr_scope.is_unrestricted:
+            if not hr_scope.scoped_departments or initiator not in hr_scope.scoped_departments:
+                raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+    name_set: set[str] = set()
+    sick = maternity = 0
+    if initiator:
+        emp_rows = (await session.execute(
+            text(
+                "SELECT name FROM hr.training_roster_profiles "
+                "WHERE department = :dept "
+                "AND is_deleted = false AND status NOT IN ('离职', '待审批', '病假', '产假') "
+                "ORDER BY name"
+            ),
+            {"dept": initiator},
+        )).fetchall()
+        trainer_map: dict[str, str] = {}
+        for dept in departments:
+            dept = str(dept).strip()
+            level1 = await _lookup_level1_trainer(session, dept)
+            if level1:
+                trainer_map.setdefault(level1, dept)
+        name_set = {r[0] for r in emp_rows} | set(trainer_map)
+        sick, maternity = await _query_leave_counts(session, initiator)
+    return success_response(data={
+        "expected_count": len(name_set),
+        "sick_leave": sick,
+        "maternity_leave": maternity,
+    })
+
+
+@router.post("/sop-training-entries/materials-preview", summary="一套材料·评估表统计基数预览")
+async def preview_batch_materials(
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """弹窗预填用：返回勾选条目一套材料的应到人数（分类人员并集）与部门病产假数。
+
+    未选分类人员时 expected_count 返回 0（导出接口会拦，弹窗先提示）。
+    """
+    from app.modules.hr.models import SopTrainingEntry
+
+    ids = payload.get("ids") or []
+    if not ids:
+        raise HTTPException(400, "请选择记录")
+    try:
+        entry_ids = [UUID(i) for i in ids]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "记录 ID 格式不正确")
+    rows = (await session.execute(
+        select(SopTrainingEntry).where(
+            SopTrainingEntry.is_deleted == False,  # noqa: E712
+            SopTrainingEntry.id.in_(entry_ids),
+        )
+    )).scalars().all()
+    if not rows:
+        raise HTTPException(404, "记录不存在")
+    for row in rows:
+        _ensure_entry_in_scope(hr_scope, row)
+    names: list[str] = []
+    for e in rows:
+        for p in _json_loads(e.personnel) or []:
+            nm = str(p.get("name", "")).strip()
+            if nm and nm not in names:
+                names.append(nm)
+    dept = str(rows[0].department or "").strip()
+    sick, maternity = await _query_leave_counts(session, dept) if dept else (0, 0)
+    return success_response(data={
+        "expected_count": len(names),
+        "sick_leave": sick,
+        "maternity_leave": maternity,
+    })
+
+
 @router.post("/sop-training-entries/batch-materials", summary="多条SOP生成一套培训材料")
 async def batch_generate_materials(
     payload: dict,
@@ -1009,6 +1108,8 @@ async def batch_generate_materials(
 ):
     """勾选二级表记录（1..n 条）生成**一套**培训材料。
 
+    生成即完成：成功生成后条目状态置「已生成」，自动带出本部门一级培训师并关联分类标签
+    （重复生成幂等，状态不回退）。
     人员 = 各选中条目「分类人员」的并集（条目未选分类人员时直接 400 提示先选人）；
     选中多条时培训内容并列体现多个文件名称，共用同一套通知/签到表/考核记录/评估表
     （考核记录按登记的考核方式：问答→问答实操记录表、笔试→试卷（有题才含）、阅读并理解→无）。
@@ -1177,11 +1278,23 @@ async def batch_generate_materials(
                     assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
+                    # 病产假与通知/签到表同口径（部门在职名单状态统计）
+                    sick_leave=sick, maternity_leave=maternity,
+                    # 弹窗预填的评估表统计（可选）：校验与比率换算见 _evaluation_stats_kwargs
+                    **_evaluation_stats_kwargs(
+                        payload.get("evaluation_stats") or {},
+                        expected=len(names), sick=sick, maternity=maternity,
+                    ),
                     trainee_group=trainee_group,
                 ), template_bytes=tpl_evaluation).getvalue(),
             )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
+    # 生成即完成：带出培训师、关联分类标签、状态置已生成（模板缺失 400 时不落状态）
+    operator = hr_scope.user.name or ""
+    for e in rows:
+        await _mark_generated(session, e, operator)
+    await session.commit()
     buf.seek(0)
     filename = f"SOP培训材料_{today.isoformat()}.zip"
     return StreamingResponse(
@@ -1291,7 +1404,7 @@ async def sop_entry_personnel(
 async def export_sop_entries(
     record_id: str | None = Query(None, description="登记记录筛选"),
     department: str | None = Query(None, description="部门筛选"),
-    status: str | None = Query(None, description="状态筛选：待转训/已转训"),
+    status: str | None = Query(None, description="状态筛选：待生成/已生成"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
@@ -1325,7 +1438,7 @@ async def export_sop_entries(
     wb = Workbook()
     ws = wb.active
     ws.title = "SOP培训清单"
-    headers = ["部门", "文件名称", "文件编号", "培训方式", "培训师", "状态", "完成时间/课时", "自定义分类", "分类人员", "转培训人", "转培训时间"]
+    headers = ["部门", "文件名称", "文件编号", "培训方式", "培训师", "状态", "完成时间/课时", "自定义分类", "分类人员", "生成人", "生成时间"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -1339,8 +1452,8 @@ async def export_sop_entries(
             rec.file_no if rec else "",
             rec.method if rec else "",
             e.trainer or "", e.status, e.complete_time or "",
-            e.classification or "", names, e.transferred_by or "",
-            str(e.transferred_at)[:19] if e.transferred_at else "",
+            e.classification or "", names, e.generated_by or "",
+            str(e.generated_at)[:19] if e.generated_at else "",
         ])
     for col, width in zip("ABCDEFGHIJK", (18, 44, 20, 10, 14, 10, 20, 16, 40, 12, 20)):
         ws.column_dimensions[col].width = width

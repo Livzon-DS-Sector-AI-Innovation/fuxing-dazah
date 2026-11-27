@@ -117,10 +117,10 @@ export const SOP_RECORD_STATUS_META: Record<string, { label: string; bg: string;
   已提交: { label: '已转培训', bg: 'var(--color-tint-sky)', text: '#005bab' },
 }
 
-/** 二级表状态（部门维度的培训是否已安排培训师并关联分类人员） */
+/** 二级表状态（部门维度：分类人员定好后培训材料是否已生成，生成即完成） */
 export const SOP_ENTRY_STATUS_META: Record<string, { bg: string; text: string }> = {
-  待转训: { bg: 'var(--color-tint-peach)', text: '#9a3f00' },
-  已转训: { bg: 'var(--color-tint-mint)', text: 'var(--color-success-deep)' },
+  待生成: { bg: 'var(--color-tint-peach)', text: '#9a3f00' },
+  已生成: { bg: 'var(--color-tint-mint)', text: 'var(--color-success-deep)' },
 }
 
 /** 分类名 → 胶囊配色。names 传分类清单的名称顺序，清单外的名字一律按残留标签处理 */

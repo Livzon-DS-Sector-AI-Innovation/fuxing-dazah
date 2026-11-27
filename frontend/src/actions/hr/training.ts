@@ -19,6 +19,8 @@ import {
   SopTrainingPersonnel,
   SopClassificationOption,
   SopPersonnelOption,
+  SopEvaluationStats,
+  SopMaterialsPreview,
   ClassificationMember,
   DepartmentTrainingPosition,
   EmployeeClassification,
@@ -563,34 +565,28 @@ export async function updateSopTrainingEntry(id: string, data: {
   return res
 }
 
-export async function transferSopTrainingEntry(id: string): Promise<{ code: number; message: string; data: { trainer: string | null } }> {
-  const res = await fetchHrApi(`/hr/sop-training-entries/${id}/transfer`, {
-    method: 'POST',
-    errorMessage: '转培训失败',
-  })
-  revalidatePath('/hr/training/sop-secondary')
-  return res
-}
-
-/** 多条SOP一起转训（批量） */
-export async function batchTransferSopEntries(ids: string[]): Promise<{ code: number; message: string; data: { transferred: number } }> {
-  const res = await fetchHrApi('/hr/sop-training-entries/batch-transfer', {
-    method: 'POST',
-    body: JSON.stringify({ ids }),
-    errorMessage: '批量转培训失败',
-  })
-  revalidatePath('/hr/training/sop-secondary')
-  return res
-}
-
-/** 多条SOP生成一套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含）） */
-export async function generateSopTrainingMaterials(ids: string[]): Promise<{ base64: string; filename: string }> {
+/** 多条SOP生成一套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含））
+ *  生成即完成：后端带出培训师、关联分类标签并置「已生成」
+ *  stats 非空时评估表预填统计（不合格恒为 0）；缺省保持统计区空白 */
+export async function generateSopTrainingMaterials(
+  ids: string[],
+  stats?: SopEvaluationStats | null,
+): Promise<{ base64: string; filename: string }> {
   const { base64, filename } = await fetchHrDownload('/hr/sop-training-entries/batch-materials', {
     method: 'POST',
-    body: JSON.stringify({ ids }),
+    body: JSON.stringify(stats ? { ids, evaluation_stats: stats } : { ids }),
     errorMessage: '生成材料失败',
   })
   return { base64, filename: filename || 'SOP培训材料.zip' }
+}
+
+/** 生成材料弹窗预填用：勾选条目一套材料的应到人数（分类人员并集）与部门病产假数 */
+export async function previewSopBatchMaterials(ids: string[]): Promise<SopMaterialsPreview> {
+  const res = await fetchHrApi<{ code: number; message: string; data: SopMaterialsPreview }>(
+    '/hr/sop-training-entries/materials-preview',
+    { method: 'POST', body: JSON.stringify({ ids }), errorMessage: '获取统计基数失败' },
+  )
+  return res.data
 }
 
 export async function fetchSopClassifications(department: string): Promise<{ code: number; message: string; data: SopClassificationOption[] }> {
@@ -799,10 +795,26 @@ export async function removeClassificationMembers(id: string, employee_numbers: 
 }
 
 
-/** 统筹总表一键生成全套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含）） */
-export async function downloadSopMasterMaterials(recordId: string): Promise<{ base64: string; filename: string | null }> {
-  const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/${recordId}/materials`, { method: 'POST' })
+/** 统筹总表一键生成全套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含））
+ *  stats 非空时评估表预填统计（不合格恒为 0）；缺省保持统计区空白 */
+export async function downloadSopMasterMaterials(
+  recordId: string,
+  stats?: SopEvaluationStats | null,
+): Promise<{ base64: string; filename: string | null }> {
+  const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/${recordId}/materials`, {
+    method: 'POST',
+    ...(stats ? { body: JSON.stringify({ evaluation_stats: stats }) } : {}),
+  })
   return { base64, filename: filename || 'SOP全套培训材料.zip' }
+}
+
+/** 生成材料弹窗预填用：单条材料导出时的应到人数（主办部门名单∪涉及部门一级培训师）与病产假数 */
+export async function previewSopMasterMaterials(recordId: string): Promise<SopMaterialsPreview> {
+  const res = await fetchHrApi<{ code: number; message: string; data: SopMaterialsPreview }>(
+    `/hr/sop-training-records/${recordId}/materials-preview`,
+    { errorMessage: '获取统计基数失败' },
+  )
+  return res.data
 }
 
 // ─── 培训导出模板管理（hr:training:template） ───

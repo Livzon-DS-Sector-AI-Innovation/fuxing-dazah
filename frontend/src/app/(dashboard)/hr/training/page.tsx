@@ -105,7 +105,7 @@ const zones = [
       {
         key: 'sop-secondary',
         title: 'SOP培训二级表',
-        desc: '二级表批量转培训、合并生成培训材料',
+        desc: '二级表生成培训材料，生成即完成；多条 SOP 可合并生成一套',
         icon: <TableOutlined className="text-2xl text-[var(--color-primary)]" />,
         path: '/hr/training/sop-secondary',
       },

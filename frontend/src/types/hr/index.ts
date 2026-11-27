@@ -626,8 +626,8 @@ export interface SopTrainingEntry {
   classification: string | null
   personnel: SopTrainingPersonnel[]
   personnel_count: number
-  transferred_by: string | null
-  transferred_at: string | null
+  generated_by: string | null
+  generated_at: string | null
   created_at: string
   updated_at: string
 }
@@ -635,6 +635,21 @@ export interface SopTrainingEntry {
 export interface SopClassificationOption {
   tag_name: string
   count: number
+}
+
+/** 培训效果评估表统计预填（生成材料弹窗）：不合格恒为 0，优秀+合格=参加考核 */
+export interface SopEvaluationStats {
+  actual_count: number
+  exam_count: number
+  excellent_count: number
+  qualified_count: number
+}
+
+/** 生成材料弹窗的统计基数（materials-preview 接口返回） */
+export interface SopMaterialsPreview {
+  expected_count: number
+  sick_leave: number
+  maternity_leave: number
 }
 
 export interface SopPersonnelOption {

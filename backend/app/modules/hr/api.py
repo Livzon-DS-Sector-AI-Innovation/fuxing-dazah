@@ -6243,7 +6243,7 @@ async def save_employee_tag(
         raise HTTPException(400, "员工工号和标签名不能为空")
     await _ensure_ledger_employee_in_scope(session, hr_scope, emp_no)
     if action == "remove":
-        # 删除该工号+标签的全部行（不限创建人）：转训自动打上的标签
+        # 删除该工号+标签的全部行（不限创建人）：二级表生成材料自动打上的标签
         # 在员工档案中必须能被移除，否则删了又出现
         await session.execute(
             text("UPDATE hr.employee_tags SET is_deleted = true WHERE employee_number = :en AND tag_name = :tn AND is_deleted = false"),

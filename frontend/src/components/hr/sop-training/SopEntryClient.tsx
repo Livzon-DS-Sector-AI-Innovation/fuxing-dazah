@@ -1,36 +1,36 @@
 'use client'
 
-// SOP 培训二级表：总表「转培训」后，任务按涉及部门派发到这里，各部门培训管理员在这里转训、定分类人员。
-// 一个部门一张表：部门页签上直接显示待转训数；勾选后可批量转培训，多条 SOP 可合并生成一套材料。
+// SOP 培训二级表：总表「转培训」后，任务按涉及部门派发到这里，各部门培训管理员在这里定分类人员、生成培训材料。
+// 一个部门一张表：部门页签上直接显示待生成数；单条生成或勾选多条合并生成一套，生成即完成（带出培训师、状态置已生成）。
 
 import { useEffect, useMemo, useReducer, useState } from 'react'
 import type { ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { App, Button, Empty, Input, Popconfirm, Segmented, Select, Space, Table, Tabs, Tooltip } from 'antd'
+import { App, Button, Empty, Input, Segmented, Select, Space, Table, Tabs, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { DownloadOutlined, FileZipOutlined, ReloadOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import {
-  batchTransferSopEntries,
   exportSopTrainingEntries,
   fetchSopTrainingEntries,
   generateSopTrainingMaterials,
-  transferSopTrainingEntry,
+  previewSopBatchMaterials,
 } from '@/actions/hr'
 import { downloadBase64File, ORPHAN_TAG_CHIP_COLOR, classificationChipColors } from '@/lib/hr'
 import { useHasPermission } from '@/hooks/hr'
-import type { SopTrainingEntry } from '@/types/hr'
+import type { SopEvaluationStats, SopMaterialsPreview, SopTrainingEntry } from '@/types/hr'
 import PageHeader from '@/components/hr/PageHeader'
 import { ClassificationChip } from '@/components/hr/training-roster/classificationChip'
 import SopEntryPersonnelModal from './SopEntryPersonnelModal'
+import SopMaterialsModal, { randomStats } from './SopMaterialsModal'
 import { FileCell, MethodTimeCell, SoftTag, entryStatusTagMeta } from './cells'
 import styles from './sop-training.module.css'
 
 const ALL_DEPARTMENTS = '__all__'
 const PAGE_SIZE = 20
 
-type StatusFilter = 'all' | '待转训' | '已转训'
+type StatusFilter = 'all' | '待生成' | '已生成'
 
-const isPending = (e: SopTrainingEntry) => e.status !== '已转训'
+const isPending = (e: SopTrainingEntry) => e.status !== '已生成'
 
 const byZh = (a: string, b: string) => a.localeCompare(b, 'zh-CN')
 
@@ -56,7 +56,7 @@ const SEARCH_BY_LABEL = (input: string, option?: { label?: string }) =>
   (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
 
 export default function SopEntryClient() {
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
   const canManage = useHasPermission('hr:training:manage')
   const canGenerateDoc = useHasPermission('hr:training:document')
 
@@ -75,9 +75,17 @@ export default function SopEntryClient() {
   const [page, setPage] = useState(1)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [exporting, setExporting] = useState(false)
-  const [transferringId, setTransferringId] = useState<string | null>(null)
-  const [batchTransferring, setBatchTransferring] = useState(false)
   const [generating, setGenerating] = useState(false)
+  // 行上「生成材料」按钮的 loading（预览统计基数期间）；null=无行级生成在进行
+  const [generatingIds, setGeneratingIds] = useState<string[] | null>(null)
+  // 本次生成弹窗对应的条目 ids：行上单条生成与勾选批量生成都走它
+  const [materialIds, setMaterialIds] = useState<string[]>([])
+  // 生成材料弹窗：先拉统计基数（应到/病产假）再让用户填或随机生成合格统计
+  const [materialsOpen, setMaterialsOpen] = useState(false)
+  const [materialsBase, setMaterialsBase] = useState<SopMaterialsPreview | null>(null)
+  const [materialsInit, setMaterialsInit] = useState<SopEvaluationStats | null>(null)
+  // 每次打开弹窗换 key：统计弹窗整体重新挂载，初值不用靠 effect 复位
+  const [materialsSeq, setMaterialsSeq] = useState(0)
   const [personnelEntry, setPersonnelEntry] = useState<SopTrainingEntry | null>(null)
   const [personnelOpen, setPersonnelOpen] = useState(false)
   // 每次打开换 key：弹窗整体重新挂载，初值不用靠 effect 重置
@@ -151,7 +159,7 @@ export default function SopEntryClient() {
           if (kw && !`${e.file_name ?? ''}\n${e.file_no ?? ''}`.toLowerCase().includes(kw)) return false
           return true
         })
-        // 待转训的排在前面（要处理的先看到），同状态内保持后端的「新收录在前」
+        // 待生成的排在前面（要处理的先看到），同状态内保持后端的「新收录在前」
         .sort((a, b) => Number(isPending(b)) - Number(isPending(a))),
     [base, status, kw],
   )
@@ -160,7 +168,6 @@ export default function SopEntryClient() {
     () => visible.filter((e) => selectedKeys.includes(e.id)),
     [visible, selectedKeys],
   )
-  const selectedPending = useMemo(() => selectedRows.filter(isPending), [selectedRows])
 
   const chipColors = useMemo(
     () =>
@@ -213,64 +220,35 @@ export default function SopEntryClient() {
     setPersonnelOpen(true)
   }
 
-  const handleTransfer = async (e: SopTrainingEntry) => {
-    setTransferringId(e.id)
+  // 点「生成材料」（行上单条或头部勾选批量）先拉统计基数（按钮转圈），到手后带着随机初值开弹窗；
+  // 基数拉不到也开（可手填/无统计导出）。生成即完成：后端会带出培训师、关联分类标签并置「已生成」。
+  const handleGenerateMaterials = async (ids: string[]) => {
+    if (!ids.length) return
+    setGenerating(true)
+    setGeneratingIds(ids)
+    setMaterialIds(ids)
+    let p: SopMaterialsPreview | null = null
     try {
-      const r = await transferSopTrainingEntry(e.id)
-      message.success(`已转培训（培训师：${r.data?.trainer || '未配置'}）`)
-      refresh()
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : '转培训失败')
-    } finally {
-      setTransferringId(null)
+      p = await previewSopBatchMaterials(ids)
+    } catch {
+      // 基数拉不到不阻塞弹窗：统计手动填，或清空后按无统计导出
     }
+    setMaterialsBase(p)
+    setMaterialsInit(p && p.expected_count > 0 ? randomStats(p) : null)
+    setMaterialsOpen(true)
+    setMaterialsSeq((s) => s + 1)
+    setGenerating(false)
+    setGeneratingIds(null)
   }
 
-  const confirmBatchTransfer = () => {
-    const ids = selectedPending.map((e) => e.id)
-    const depts = [...new Set(selectedPending.map((e) => e.department))].sort(byZh)
-    modal.confirm({
-      title: `把选中的 ${ids.length} 条转为培训？`,
-      width: 500,
-      content: (
-        <div className="space-y-2 pt-1">
-          <div className="flex flex-wrap gap-1.5">
-            {depts.map((d) => (
-              <span key={d} className={styles.deptChip}>
-                {d}
-              </span>
-            ))}
-          </div>
-          <div className="text-[13px] text-[var(--color-steel)]">
-            转培训会自动带出各部门当前的一级培训师；已选分类人员的记录，人员会同步归入对应分类。
-          </div>
-        </div>
-      ),
-      okText: '确认转培训',
-      cancelText: '取消',
-      onOk: async () => {
-        setBatchTransferring(true)
-        try {
-          const r = await batchTransferSopEntries(ids)
-          message.success(`已转培训 ${r.data?.transferred ?? ids.length} 条`)
-          setSelectedKeys([])
-          refresh()
-        } catch (err) {
-          message.error(err instanceof Error ? err.message : '批量转培训失败')
-        } finally {
-          setBatchTransferring(false)
-        }
-      },
-    })
-  }
-
-  const handleBatchMaterials = async () => {
-    if (!selectedRows.length) return
+  const handleMaterialsExport = async (stats: SopEvaluationStats | null) => {
     setGenerating(true)
     try {
-      const { base64, filename } = await generateSopTrainingMaterials(selectedRows.map((e) => e.id))
+      const { base64, filename } = await generateSopTrainingMaterials(materialIds, stats)
       downloadBase64File(base64, filename)
       message.success('已生成一套培训材料（按分类人员）')
+      setMaterialsOpen(false)
+      refresh()
     } catch (e) {
       message.error(e instanceof Error ? e.message : '生成失败')
     } finally {
@@ -322,7 +300,7 @@ export default function SopEntryClient() {
           withYear
           footnote={
             isPending(e) ? (
-              <>培训师 <span className={styles.placeholder}>转培训时带出</span></>
+              <>培训师 <span className={styles.placeholder}>生成材料时带出</span></>
             ) : e.trainer ? (
               <>培训师 {e.trainer}</>
             ) : (
@@ -370,30 +348,25 @@ export default function SopEntryClient() {
     {
       title: '操作',
       key: 'actions',
-      width: 160,
+      width: 150,
       render: (_, e) =>
-        canManage ? (
+        canManage || canGenerateDoc ? (
           <Space size={4}>
-            <Button type="text" size="small" onClick={() => openPersonnel(e)}>
-              分类人员
-            </Button>
-            {isPending(e) && (
-              <Popconfirm
-                title="确认转培训？"
-                description="将自动带出本部门当前的一级培训师。"
-                okText="转培训"
-                cancelText="取消"
-                onConfirm={() => { void handleTransfer(e) }}
+            {canManage && (
+              <Button type="text" size="small" onClick={() => openPersonnel(e)}>
+                分类人员
+              </Button>
+            )}
+            {canGenerateDoc && (
+              <Button
+                size="small"
+                color="primary"
+                variant="outlined"
+                loading={!!generatingIds && generatingIds.length === 1 && generatingIds[0] === e.id}
+                onClick={() => { void handleGenerateMaterials([e.id]) }}
               >
-                <Button
-                  size="small"
-                  color="primary"
-                  variant="outlined"
-                  loading={transferringId === e.id}
-                >
-                  转培训
-                </Button>
-              </Popconfirm>
+                生成材料
+              </Button>
             )}
           </Space>
         ) : (
@@ -413,35 +386,20 @@ export default function SopEntryClient() {
     <div className="space-y-4">
       <PageHeader
         title="SOP培训二级表"
-        description="总表「转培训」后，任务按涉及部门派发到这里；转训时带出本部门一级培训师，勾选多条 SOP 可合并生成一套培训材料"
+        description="总表「转培训」后，任务按涉及部门派发到这里；选择分类人员后生成材料即完成，自动带出本部门一级培训师；勾选多条 SOP 可合并生成一套培训材料"
         actions={
           <Space>
             <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => { void handleExport() }}>
               导出培训清单
             </Button>
-            {canManage && (
-              <Tooltip title={selectedPending.length ? undefined : '先勾选待转训的记录'}>
-                <span>
-                  <Button
-                    icon={<SendOutlined />}
-                    disabled={!selectedPending.length}
-                    loading={batchTransferring}
-                    onClick={confirmBatchTransfer}
-                  >
-                    批量转培训
-                  </Button>
-                </span>
-              </Tooltip>
-            )}
             {canGenerateDoc && (
               <Tooltip title={selectedRows.length ? undefined : '先勾选记录，可多选合并成一套'}>
                 <span>
                   <Button
                     type="primary"
-                    icon={<FileZipOutlined />}
                     disabled={!selectedRows.length}
                     loading={generating}
-                    onClick={() => { void handleBatchMaterials() }}
+                    onClick={() => { void handleGenerateMaterials(selectedRows.map((e) => e.id)) }}
                   >
                     生成一套材料
                   </Button>
@@ -487,8 +445,8 @@ export default function SopEntryClient() {
           }}
           options={[
             { value: 'all', label: withCount('全部', base.length) },
-            { value: '待转训', label: withCount('待转训', basePending) },
-            { value: '已转训', label: withCount('已转训', base.length - basePending) },
+            { value: '待生成', label: withCount('待生成', basePending) },
+            { value: '已生成', label: withCount('已生成', base.length - basePending) },
           ]}
         />
         <Input
@@ -558,6 +516,16 @@ export default function SopEntryClient() {
           setPersonnelOpen(false)
           refresh()
         }}
+      />
+
+      <SopMaterialsModal
+        key={materialsSeq}
+        open={materialsOpen}
+        base={materialsBase}
+        initialStats={materialsInit}
+        onClose={() => setMaterialsOpen(false)}
+        onExport={(stats) => { void handleMaterialsExport(stats) }}
+        loading={generating}
       />
     </div>
   )

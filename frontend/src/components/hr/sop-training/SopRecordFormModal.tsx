@@ -10,6 +10,7 @@ import dayjs, { type Dayjs } from 'dayjs'
 import {
   createSopTrainingRecord,
   fetchDepartmentsAction,
+  fetchQuestionBankCounts,
   fetchSopDeptTrainers,
   updateSopTrainingRecord,
 } from '@/actions/hr'
@@ -130,6 +131,46 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
   const initialValues = useMemo(() => toFormValues(editing, year), [editing, year])
   const method = Form.useWatch('method', form)
   const selectedDepartments = (Form.useWatch('involved_departments', form) ?? []) as string[]
+
+  // 考核方式=问答时提示题库收录情况：问答实操记录表按 SOP 编号从题库带题，缺题就留空白行手写。
+  // 防抖 400ms：文件编号是逐字输入的，不必每敲一个字符查一次
+  const watchedAssessment = Form.useWatch('assessment_method', form)
+  const watchedFiles = (Form.useWatch('files', form) ?? []) as { file_no?: string | null }[]
+  const effectiveAssessment =
+    watchedAssessment || ASSESSMENT_DEFAULT_BY_METHOD[method ?? ''] || '阅读并理解'
+  const fileNos = [...new Set(watchedFiles.map((f) => (f?.file_no ?? '').trim()).filter(Boolean))]
+  const fileNoKey = fileNos.join('\n')
+  const [qaHint, setQaHint] = useState<{ total: number | null; missing: string[] } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      let next: { total: number | null; missing: string[] } | null = null
+      if (effectiveAssessment === '问答') {
+        if (!fileNos.length) {
+          next = { total: null, missing: [] } // 还没填编号也提示：不查库，纯文案
+        } else {
+          try {
+            const r = await fetchQuestionBankCounts(fileNos)
+            const counts = r.data?.counts ?? {}
+            next = {
+              total: fileNos.reduce((sum, no) => sum + (counts[no] ?? 0), 0),
+              missing: fileNos.filter((no) => !(counts[no] ?? 0)),
+            }
+          } catch {
+            next = null // 计数拉不到就不提示，不阻塞登记
+          }
+        }
+      }
+      if (!cancelled) setQaHint(next)
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+    // fileNos 是每次渲染新建的数组，用拼接串做依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveAssessment, fileNoKey])
 
   // 历史数据的完成时间若不是「日期(时段)」写法，表单解析不出来；
   // 用户没动时间字段时原样保留，避免只是改个文件名就把完成时间清空
@@ -434,6 +475,19 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
             <Input placeholder="集中培训时填写" />
           </Form.Item>
         </div>
+        {effectiveAssessment === '问答' && qaHint && (
+          <div className="mb-[14px] rounded-[var(--rounded-md)] bg-[var(--color-surface)] px-3 py-2.5 text-[12px] text-[var(--color-steel)]">
+            {qaHint.total === null ? (
+              <>培训文件还没填 SOP 编号：题库按编号匹配考题，生成材料时问答实操记录表会留空白行手写</>
+            ) : qaHint.total > 0 && !qaHint.missing.length ? (
+              <>题库已收录这些编号的 <b className="text-[var(--color-ink)]">{qaHint.total}</b> 道考题，「生成一套材料」时问答实操记录表自动带题</>
+            ) : qaHint.total > 0 ? (
+              <>题库已收录 {qaHint.total} 道考题；这些编号尚无题：{qaHint.missing.join('、')}——保存后可在总表行上用「AI 出题」补题</>
+            ) : (
+              <>题库还没有这些编号（{fileNos.join('、')}）的考题：保存后可在总表行上用「AI 出题」补题，生成材料时问答实操记录表留空白行手写</>
+            )}
+          </div>
+        )}
 
         <div className={styles.sectionTitle}>培训范围</div>
         <div className="grid grid-cols-5 gap-x-4">

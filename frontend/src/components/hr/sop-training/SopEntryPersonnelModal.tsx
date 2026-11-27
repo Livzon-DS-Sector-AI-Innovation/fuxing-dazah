@@ -184,7 +184,7 @@ export default function SopEntryPersonnelModal({
         <Form.Item
           name="classification"
           label="自定义分类"
-          tooltip="对应部门的员工分类；转培训时，这里选的人员会自动归入该分类"
+          tooltip="对应部门的员工分类；生成材料时，这里选的人员会自动归入该分类"
         >
           <Select
             allowClear

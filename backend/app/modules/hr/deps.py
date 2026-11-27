@@ -369,8 +369,7 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/sop-catalog", {"GET": "hr:training:read", "POST": "hr:training:manage",
                        "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # SOP培训文件登记表（查看/编辑对所有人开放）
-    # SOP培训二级表（查看开放；编辑/转培训需培训管理权限；批量生成材料需培训文档权限）
-    (r"/sop-training-entries/batch-transfer", {"POST": "hr:training:manage"}),
+    # SOP培训二级表（查看开放；编辑需培训管理权限；生成材料需培训文档权限）
     (r"/sop-training-entries/batch-materials", {"POST": "hr:training:document"}),
     (r"/sop-training-records/.*/materials", {"POST": "hr:training:document"}),
     # GET 不设权限码，但数据范围必须按 training resource 计算：

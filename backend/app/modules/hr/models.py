@@ -1729,9 +1729,9 @@ class SopTrainingEntry(BaseModel):
     department: Mapped[str] = mapped_column(
         String(128), nullable=False, comment="培训部门"
     )
-    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（转培训时自动带出当前培训师）")
+    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（生成材料时自动带出当前培训师）")
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="待转训", server_default="待转训", comment="待转训/已转训"
+        String(16), nullable=False, default="待生成", server_default="待生成", comment="待生成/已生成"
     )
     complete_time: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="该部门培训完成时间/课时")
     classification: Mapped[str | None] = mapped_column(
@@ -1740,9 +1740,9 @@ class SopTrainingEntry(BaseModel):
     personnel: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="分类人员，JSON 数组：[{\"employee_number\":\"\",\"name\":\"\"}]"
     )
-    transferred_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="转培训操作人")
-    transferred_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="转培训时间"
+    generated_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="生成材料操作人")
+    generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="生成材料时间"
     )
 
 

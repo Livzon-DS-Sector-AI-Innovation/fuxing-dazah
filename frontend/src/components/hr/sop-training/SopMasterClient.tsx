@@ -1,7 +1,7 @@
 'use client'
 
 // SOP 培训总表（每年一张，菜单名「SOP培训登记表」）：登记要培训的 SOP 文件 →「转培训」把任务派发给
-// 各涉及部门的二级表 → 各部门在二级表里转训。这页的主线是派发：进度列汇总各部门的转训进度，可直达二级表。
+// 各涉及部门的二级表 → 各部门在二级表里生成培训材料。这页的主线是派发：进度列汇总各部门的生成进度，可直达二级表。
 // 纸质登记表的 10 列在屏幕上收成 7 列两行单元格，1366 宽度下不横向滚动；
 // 变更类型 / 进度 / 关键词筛选和计数都在前端算（单年数据量小，切筛选不再请求）。
 
@@ -30,13 +30,15 @@ import {
   fetchSopTrainingAdmins,
   fetchSopTrainingEntries,
   fetchSopTrainingRecords,
+  previewSopMasterMaterials,
   submitSopTrainingRecord,
 } from '@/actions/hr'
 import { downloadBase64File, SOP_CHANGE_TYPE_META } from '@/lib/hr'
 import { useHasPermission } from '@/hooks/hr'
-import type { SopTrainingRecord } from '@/types/hr'
+import type { SopEvaluationStats, SopMaterialsPreview, SopTrainingRecord } from '@/types/hr'
 import PageHeader from '@/components/hr/PageHeader'
 import SopRecordFormModal from './SopRecordFormModal'
+import SopMaterialsModal, { randomStats } from './SopMaterialsModal'
 import {
   ChangeTypeFilter,
   DepartmentCell,
@@ -51,7 +53,7 @@ import styles from './sop-training.module.css'
 
 type ProgressFilter = 'all' | 'pending' | 'done'
 
-/** 一条登记在各部门二级表的转训进度（只统计当前账号数据范围内看得到的记录） */
+/** 一条登记在各部门二级表的生成进度（只统计当前账号数据范围内看得到的记录） */
 interface DispatchProgress {
   total: number
   done: number
@@ -98,6 +100,12 @@ export default function SopMasterClient() {
   // 每次打开弹窗换 key：表单弹窗整体重新挂载，初值/脏标记不用靠 effect 重置
   const [formSeq, setFormSeq] = useState(0)
   const [reloadSeq, bumpReload] = useReducer((n: number) => n + 1, 0)
+  // 生成材料弹窗：先拉统计基数（应到/病产假）再让用户填或随机生成合格统计
+  const [materialsTarget, setMaterialsTarget] = useState<SopTrainingRecord | null>(null)
+  const [materialsBase, setMaterialsBase] = useState<SopMaterialsPreview | null>(null)
+  const [materialsInit, setMaterialsInit] = useState<SopEvaluationStats | null>(null)
+  // 每次打开弹窗换 key：统计弹窗整体重新挂载，初值不用靠 effect 复位
+  const [materialsSeq, setMaterialsSeq] = useState(0)
 
   // 只按年份取数；其余筛选在前端做
   useEffect(() => {
@@ -117,7 +125,7 @@ export default function SopMasterClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, reloadSeq])
 
-  // 各部门二级表的转训进度，按登记记录归到总表每一行上（派发之后在这页看各部门做没做）
+  // 各部门二级表的生成进度，按登记记录归到总表每一行上（派发之后在这页看各部门做没做）
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -129,7 +137,7 @@ export default function SopMasterClient() {
           if (!e.record_id) continue
           const p = (map[e.record_id] ??= { total: 0, done: 0 })
           p.total += 1
-          if (e.status === '已转训') p.done += 1
+          if (e.status === '已生成') p.done += 1
         }
         setDispatchProgress(map)
       } catch {
@@ -218,7 +226,7 @@ export default function SopMasterClient() {
       title: `删除「${r.file_name}」的登记？`,
       content:
         r.status === '已提交'
-          ? '这条登记已转培训：各部门已转训的二级表记录会保留，还没转训的会一并删除。'
+          ? '这条登记已转培训：各部门已生成材料的二级表记录会保留，还没生成的会一并删除。'
           : '删除后不可恢复。',
       okText: '删除',
       okButtonProps: { danger: true },
@@ -289,12 +297,30 @@ export default function SopMasterClient() {
     })
   }
 
+  // 点「下载全套培训材料」先拉统计基数（按钮转圈），到手后带着随机初值开弹窗；基数拉不到也开（可手填/无统计导出）
   const handleMaterials = async (r: SopTrainingRecord) => {
     setGeneratingId(r.id)
+    let p: SopMaterialsPreview | null = null
     try {
-      const { base64, filename } = await downloadSopMasterMaterials(r.id)
+      p = await previewSopMasterMaterials(r.id)
+    } catch {
+      // 基数拉不到不阻塞弹窗：统计手动填，或清空后按无统计导出
+    }
+    setMaterialsBase(p)
+    setMaterialsInit(p && p.expected_count > 0 ? randomStats(p) : null)
+    setMaterialsTarget(r)
+    setMaterialsSeq((s) => s + 1)
+    setGeneratingId(null)
+  }
+
+  const handleMaterialsExport = async (stats: SopEvaluationStats | null) => {
+    if (!materialsTarget) return
+    setGeneratingId(materialsTarget.id)
+    try {
+      const { base64, filename } = await downloadSopMasterMaterials(materialsTarget.id, stats)
       downloadBase64File(base64, filename || 'SOP全套培训材料.zip')
       message.success('全套材料已生成')
+      setMaterialsTarget(null)
     } catch (e) {
       message.error(e instanceof Error ? e.message : '生成失败')
     } finally {
@@ -400,7 +426,7 @@ export default function SopMasterClient() {
                 className={`${styles.progressLink} ${seesAll && dp.done === dp.total ? styles.progressDone : ''}`}
                 title="在二级表里查看各部门的记录"
               >
-                {seesAll ? `${dp.done}/${dp.total} 部门已转训` : `${dp.done} 个部门已转训`}
+                {seesAll ? `${dp.done}/${dp.total} 部门已生成材料` : `${dp.done} 个部门已生成`}
                 <RightOutlined />
               </Link>
             )}
@@ -473,7 +499,7 @@ export default function SopMasterClient() {
     <div className="space-y-4">
       <PageHeader
       title="SOP培训登记表"
-      description="登记需要培训的 SOP 文件；「转培训」即派发给涉及部门的二级表，各部门的转训进度在这里汇总"
+      description="登记需要培训的 SOP 文件；「转培训」即派发给涉及部门的二级表，各部门的生成进度在这里汇总"
         actions={
           <Space>
             <Tooltip title={`导出 ${year} 年全部登记（Excel，不受筛选影响）`}>
@@ -582,6 +608,15 @@ export default function SopMasterClient() {
           setFormOpen(false)
           refresh()
         }}
+      />
+      <SopMaterialsModal
+        key={materialsSeq}
+        open={materialsTarget !== null}
+        base={materialsBase}
+        initialStats={materialsInit}
+        onClose={() => setMaterialsTarget(null)}
+        onExport={(stats) => { void handleMaterialsExport(stats) }}
+        loading={generatingId !== null}
       />
     </div>
   )
