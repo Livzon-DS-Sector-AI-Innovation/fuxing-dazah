@@ -24,7 +24,8 @@ class TrainingEvaluationInput(BaseModel):
     trainer: str | None = Field(None, max_length=64)
     trainee_names: list[str] = Field(default_factory=list)
     assessment_method: str | None = Field(None, max_length=32)
-    department: str | None = Field(None, max_length=64, description="培训部门（培训对象以「x部门 全体成员」展示）")
+    department: str | None = Field(None, max_length=64, description="培训部门（培训对象以「x部门 + 群体词」展示）")
+    trainee_group: str | None = Field(None, max_length=64, description="培训对象群体词（缺省「全体成员」；按标签选人时传标签名，如「班组长」）")
     # Post-training fields
     expected_count: int | None = Field(None, description="应到人数（模板标记 {部门总人数}）")
     actual_count: int | None = Field(None, description="实到人数（模板标记 {参与人数}）")
@@ -83,9 +84,10 @@ def generate_training_evaluation(
         h = data.duration_hours
         hours_str = f"{int(h)}h" if h == int(h) else f"{h}h"
 
-    # 培训对象 — 统一「x部门 全体成员」
+    # 培训对象 —「x部门 + 群体词」（缺省群体词=全体成员）
+    group = (getattr(data, "trainee_group", None) or "").strip() or "全体成员"
     if data.department:
-        people = f"「{data.department}」全体成员"
+        people = f"「{data.department}」{group}"
         if data.trainee_names:
             people += f"（{len(data.trainee_names)}人）"
     else:

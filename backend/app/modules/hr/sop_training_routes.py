@@ -849,7 +849,10 @@ async def generate_record_materials(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """按登记表涉及部门生成全套材料 zip：通知+签到表+评估，考核记录按考核方式加（问答→问答实操记录表，笔试→试卷，题库有题才含）。"""
+    """按登记表涉及部门生成全套材料 zip：通知+签到表+评估，考核记录按考核方式加（问答→问答实操记录表，笔试→试卷，题库有题才含）。
+
+    培训对象统一写「发起部门 全体成员及相关一级培训师」。
+    """
     from app.modules.hr.models import SopTrainingRecord
 
     record = (
@@ -922,6 +925,8 @@ async def generate_record_materials(
 
     questions = await _lookup_exam_questions(session, _record_file_nos(record))
     assessment = _effective_assessment(record.assessment_method, record.method)
+    # 培训对象口径：总表材料 = 发起部门全体成员 + 相关一级培训师（病产假附注按主办部门统计，保留）
+    trainee_group = "全体成员及相关一级培训师"
     # 模板字节一次取齐（DB 自定义版优先，无则回退仓库默认模板）
     from app.modules.hr.training_template_store import load_training_template_bytes
 
@@ -939,6 +944,7 @@ async def generate_record_materials(
                 issue_date=today, sick_count=sick, maternity_count=maternity,
                 training_method=_method_label(record.method),
                 assessment_method=assessment,
+                trainee_group=trainee_group,
             ), template_bytes=tpl_notification)
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=initiator, training_subject=subject,
@@ -946,6 +952,7 @@ async def generate_record_materials(
                 employee_names=names, employee_departments=name_depts,
                 sick_count=sick, maternity_count=maternity,
                 assessment_method=assessment,
+                trainee_group=trainee_group,
             ), template_bytes=tpl_signin)
             zf.writestr("培训通知.docx", notif_buf.getvalue())
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
@@ -961,6 +968,7 @@ async def generate_record_materials(
                         training_department=initiator,
                         questions=questions, trainee_names=names,
                         trainer_name=lead_trainer or "",
+                        trainee_group=trainee_group,
                         template_bytes=tpl_qa,
                     ).getvalue(),
                 )
@@ -981,6 +989,7 @@ async def generate_record_materials(
                     assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
+                    trainee_group=trainee_group,
                 ), template_bytes=tpl_evaluation).getvalue(),
             )
     except FileNotFoundError as e:
@@ -1003,6 +1012,8 @@ async def batch_generate_materials(
     人员 = 各选中条目「分类人员」的并集（条目未选分类人员时直接 400 提示先选人）；
     选中多条时培训内容并列体现多个文件名称，共用同一套通知/签到表/考核记录/评估表
     （考核记录按登记的考核方式：问答→问答实操记录表、笔试→试卷（有题才含）、阅读并理解→无）。
+    培训对象：默认「xx部门 全体成员」；条目按标签选人时写「xx部门 标签名」（如「xx部门 班组长」），
+    此时省略全部门口径的病产假附注。
     """
     from app.modules.hr.models import SopTrainingEntry
     ids = payload.get("ids") or []
@@ -1077,6 +1088,13 @@ async def batch_generate_materials(
             assessment_val = rec.assessment_method
             break
     assessment = _effective_assessment(assessment_val, method_val)
+    # 培训对象口径：二级表材料默认「该部门 全体成员」；条目按标签选人时写「xx部门 标签名」
+    # （多条不同标签按「、」连接），如「xx部门 班组长」。标签选人已排除病产假，
+    # 全部门口径的「（病假x人、产假y人除外）」附注不适用，随之省略。
+    groups = list(dict.fromkeys(
+        str(e.classification).strip() for e in rows if (e.classification or "").strip()
+    ))
+    trainee_group = "、".join(groups) or None
     # 该部门培训师
     trainer = next((e.trainer for e in rows if e.trainer), None) or await _lookup_level1_trainer(session, dept)
     # 分类人员并集（过滤病假/产假/离职/待审批）
@@ -1111,6 +1129,8 @@ async def batch_generate_materials(
                 sick_count=sick, maternity_count=maternity,
                 training_method=_method_label(method_val),
                 assessment_method=assessment,
+                trainee_group=trainee_group,
+                omit_leave_note=bool(groups),
             ), template_bytes=tpl_notification)
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=dept, training_subject=subject,
@@ -1118,6 +1138,8 @@ async def batch_generate_materials(
                 employee_names=names, employee_departments={n: dept for n in names},
                 sick_count=sick, maternity_count=maternity,
                 assessment_method=assessment,
+                trainee_group=trainee_group,
+                omit_leave_note=bool(groups),
             ), template_bytes=tpl_signin)
             zf.writestr("培训通知.docx", notif_buf.getvalue())
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
@@ -1134,6 +1156,7 @@ async def batch_generate_materials(
                         training_department=dept,
                         questions=questions, trainee_names=names,
                         trainer_name=trainer or "",
+                        trainee_group=trainee_group,
                         template_bytes=tpl_qa,
                     ).getvalue(),
                 )
@@ -1154,6 +1177,7 @@ async def batch_generate_materials(
                     assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
+                    trainee_group=trainee_group,
                 ), template_bytes=tpl_evaluation).getvalue(),
             )
     except FileNotFoundError as e:

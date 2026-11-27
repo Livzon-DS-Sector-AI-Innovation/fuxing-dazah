@@ -132,10 +132,17 @@ def _compute_date_text(data: TrainingSignInSheetInput) -> str:
 
 
 def _compute_trainee_text(data: TrainingSignInSheetInput) -> str:
-    """培训对象（统一「x部门 全体成员」+ 病假/产假人数，与培训通知同口径）。"""
+    """培训对象（「x部门 + 群体词」，缺省群体词=全体成员，与培训通知同口径；病假/产假人数可省略）。
+
+    trainee_group / omit_leave_note 走 getattr：兼容各调用方的本地 Input 类。
+    """
+    group = (getattr(data, "trainee_group", None) or "").strip() or "全体成员"
+    people = f"「{data.department}」{group}"
+    if getattr(data, "omit_leave_note", False):
+        return people
     sick = data.sick_count if data.sick_count is not None else 0
     maternity = data.maternity_count if data.maternity_count is not None else 0
-    return f"「{data.department}」全体成员（病假{sick}人、产假{maternity}人除外）"
+    return people + f"（病假{sick}人、产假{maternity}人除外）"
 
 
 def _fill_metadata(doc: Document, data: TrainingSignInSheetInput) -> None:

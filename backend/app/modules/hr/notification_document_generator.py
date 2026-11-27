@@ -36,6 +36,8 @@ class TrainingNotificationInput(BaseModel):
     trainee_names: list[str] = []
     sick_count: int | None = None
     maternity_count: int | None = None
+    trainee_group: str | None = None
+    omit_leave_note: bool = False
     issuer_department: str | None = None
     issue_date: date | None = None
 
@@ -131,11 +133,17 @@ def _compute_date_and_hours(data: TrainingNotificationInput) -> tuple[str, str]:
 
 
 def _compute_trainee_text(data: TrainingNotificationInput) -> str:
-    """培训对象统一以「x部门 全体成员」展示，不再列人名；附病假/产假人数。"""
+    """培训对象以「x部门 + 群体词」展示（缺省群体词=全体成员），不再列人名；附病假/产假人数。
+
+    trainee_group / omit_leave_note 走 getattr：兼容各调用方的本地 Input 类（如测试自建模型）。
+    """
+    group = (getattr(data, "trainee_group", None) or "").strip() or "全体成员"
     if data.trainee_names:
-        people = f"「{data.department}」全体成员（{len(data.trainee_names)}人）"
+        people = f"「{data.department}」{group}（{len(data.trainee_names)}人）"
     else:
-        people = f"「{data.department}」全体成员"
+        people = f"「{data.department}」{group}"
+    if getattr(data, "omit_leave_note", False):
+        return people
     sick = data.sick_count if data.sick_count is not None else 0
     maternity = data.maternity_count if data.maternity_count is not None else 0
     people += f"（病假{sick}人、产假{maternity}人除外）"

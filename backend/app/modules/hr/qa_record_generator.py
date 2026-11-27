@@ -65,6 +65,7 @@ def generate_qa_record(
     trainee_names: list[str] | None = None,
     scores: list[dict] | None = None,
     trainer_name: str = "",
+    trainee_group: str | None = None,
     template_bytes: bytes | None = None,
 ) -> BytesIO:
     """生成现场问答/实操记录表（marker-based）。"""
@@ -75,13 +76,16 @@ def generate_qa_record(
     date_str = str(training_date) if training_date else ""
     questions = questions or []
     trainee_names = trainee_names or []
+    # 培训对象与同套材料同口径：「x部门 + 群体词」（缺省群体词=全体成员）
+    group = (trainee_group or "").strip() or "全体成员"
+    trainee_text = f"「{training_department}」{group}" if training_department else ""
 
     # ── 头部标记 ──
     replace_markers(doc, {
         "{培训内容}": training_content or "",
         "{实施日期}": date_str,
         "{培训方式}": training_method or "",
-        "{培训对象}": training_department or "",
+        "{培训对象}": trainee_text,
         "{培训目的}": training_purpose or "",
     })
 
