@@ -6,7 +6,6 @@ import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import {
   App,
   Button,
-  DatePicker,
   Form,
   Input,
   Modal,
@@ -20,6 +19,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import {
   CheckCircleFilled,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleFilled,
@@ -60,6 +60,7 @@ import {
   CoaResultInput,
   draftToValueInput,
   emptyResultDraft,
+  focusNextHeadInput,
   toResultDraft,
 } from './CoaResultInput'
 import type { CoaResultDraft } from './CoaResultInput'
@@ -85,6 +86,8 @@ import {
   tallyLimitHits,
 } from './coaSpecLimit'
 import type { CoaItemLimitHit } from './coaSpecLimit'
+import { CoaCopyModal } from './CoaCopyModal'
+import { CoaEnterDatePicker } from './CoaEnterDatePicker'
 import { CoaRenderModal } from './CoaRenderModal'
 import { CoaVerifyModal } from './CoaVerifyModal'
 import { reportColumnKeyOf, stripBuiltinFields } from './CoaBatchFieldsEditor'
@@ -328,7 +331,8 @@ function CoaReportFormModal({
     try {
       const head = {
         batch_no: values.batch_no.trim(),
-        serial_no: values.serial_no.trim(),
+        // 流水号选填：没填传 null（后端把 null 当清空）
+        serial_no: values.serial_no?.trim() || null,
       }
       const result = editing
         ? await updateCoaReport(editing.id, { ...head, batch_data: batchData, values: valueInputs })
@@ -395,7 +399,7 @@ function CoaReportFormModal({
           <span className={styles.detailError}>报告详情加载失败，请关闭后重试。</span>
         </div>
       ) : (
-        <div className={styles.entryBody}>
+        <div className={styles.entryBody} data-coa-form-scope>
           <section className={styles.entrySheet}>
             <div className={styles.entryHead}>
               <h3 className={styles.entryTitle}>检测结果</h3>
@@ -451,18 +455,28 @@ function CoaReportFormModal({
             </dl>
 
             <Form form={form} {...PANEL_FORM_LAYOUT}>
+              {/* 报告信息的输入框回车跳到下一个（字段走完跳到检测结果的第一个），与结果格一致 */}
               <Form.Item name="batch_no" label="批号" rules={[{ required: true, message: '请输入批号' }]}>
-                <Input placeholder="如 TEST001" />
+                <Input
+                  placeholder="如 TEST001"
+                  data-coa-head-input
+                  onPressEnter={focusNextHeadInput}
+                />
               </Form.Item>
-              <Form.Item name="serial_no" label="流水号" rules={[{ required: true, message: '请输入流水号' }]}>
-                <Input placeholder="如 001" />
+              {/* 流水号选填：登记时往往还没分配，出 COA 时模板标注会拦 */}
+              <Form.Item name="serial_no" label="流水号">
+                <Input
+                  placeholder="还没分配可留空"
+                  data-coa-head-input
+                  onPressEnter={focusNextHeadInput}
+                />
               </Form.Item>
               {customFields.map((f) => (
                 <Form.Item key={f.key} name={`bf_${f.key}`} label={f.label_cn}>
                   {f.field_type === 'date' ? (
-                    <DatePicker style={{ width: '100%' }} />
+                    <CoaEnterDatePicker style={{ width: '100%' }} />
                   ) : (
-                    <Input />
+                    <Input data-coa-head-input onPressEnter={focusNextHeadInput} />
                   )}
                 </Form.Item>
               ))}
@@ -556,9 +570,9 @@ function importBatchValue(entry: CoaImportEntry, key: string): string {
   return column ? (draft[column] ?? '') : ''
 }
 
-/** 这份文件登记前还缺的必填项（批号/流水号，识别或补填都算）。 */
-function importMissingHead(entry: CoaImportEntry): Array<'batch_no' | 'serial_no'> {
-  return (['batch_no', 'serial_no'] as const).filter((key) => !importBatchValue(entry, key).trim())
+/** 这份文件登记前还缺的必填项（批号；流水号选填，识别不到就留空）。 */
+function importMissingHead(entry: CoaImportEntry): Array<'batch_no'> {
+  return (['batch_no'] as const).filter((key) => !importBatchValue(entry, key).trim())
 }
 
 /** 这份文件的越界结果：按模板项目的当前草稿现判。模板项目还没就绪时返回 null（不判）；
@@ -610,7 +624,7 @@ function buildImportPayload(entry: CoaImportEntry, standardDetail: CoaStandard):
     product_id: preview.standard.product_id,
     standard_id: preview.standard.id,
     batch_no: importBatchValue(entry, 'batch_no').trim(),
-    serial_no: importBatchValue(entry, 'serial_no').trim(),
+    serial_no: importBatchValue(entry, 'serial_no').trim() || null,
     ...fixed,
     batch_data: batchData,
     values,
@@ -681,7 +695,7 @@ function CoaImportFileReview({
     onPatch({ batchEdits: { ...entry.batchEdits, [key]: value } })
 
   return (
-    <div className={styles.entryBody}>
+    <div className={styles.entryBody} data-coa-form-scope>
       <section className={styles.entrySheet}>
         {!standard ? (
           <div className={styles.entryNotice}>
@@ -861,6 +875,7 @@ function CoaImportFileReview({
               onChange={onStandardChange}
             />
           </Form.Item>
+          {/* 报告信息的输入框回车跳到下一个（字段走完跳到检测结果的第一个），与手工登记一致 */}
           <Form.Item
             label="批号"
             required
@@ -871,24 +886,23 @@ function CoaImportFileReview({
             <Input
               id={fieldId('batch_no')}
               data-import-field="batch_no"
+              data-coa-head-input
               value={batchNo}
               placeholder="未识别，请填写"
               onChange={(e) => setBatch('batch_no', e.target.value)}
+              onPressEnter={focusNextHeadInput}
             />
           </Form.Item>
-          <Form.Item
-            label="流水号"
-            required
-            htmlFor={fieldId('serial_no')}
-            validateStatus={entry.submitted && !serialNo.trim() ? 'error' : undefined}
-            help={entry.submitted && !serialNo.trim() ? '请填写流水号' : undefined}
-          >
+          {/* 流水号选填：登记时往往还没分配 */}
+          <Form.Item label="流水号" htmlFor={fieldId('serial_no')}>
             <Input
               id={fieldId('serial_no')}
               data-import-field="serial_no"
+              data-coa-head-input
               value={serialNo}
-              placeholder="未识别，请填写"
+              placeholder="未识别，可不填"
               onChange={(e) => setBatch('serial_no', e.target.value)}
+              onPressEnter={focusNextHeadInput}
             />
           </Form.Item>
           {customFields.map((f) => {
@@ -906,7 +920,7 @@ function CoaImportFileReview({
                 help={badDate ? `识别为「${raw}」，不是有效日期，请重新选择` : undefined}
               >
                 {isDate ? (
-                  <DatePicker
+                  <CoaEnterDatePicker
                     id={fieldId(f.key)}
                     style={{ width: '100%' }}
                     value={iso ? dayjs(iso) : null}
@@ -917,8 +931,10 @@ function CoaImportFileReview({
                 ) : (
                   <Input
                     id={fieldId(f.key)}
+                    data-coa-head-input
                     value={raw}
                     onChange={(e) => setBatch(f.key, e.target.value)}
+                    onPressEnter={focusNextHeadInput}
                   />
                 )}
               </Form.Item>
@@ -1201,7 +1217,7 @@ function CoaImportReportModal({
     if (!entry || !standard || registeringId) return
     const missing = importMissingHead(entry)
     if (missing.length) {
-      // 识别不到批号/流水号是常态（空白模板、表头不规范）：就地补填，不必改走手工登记
+      // 识别不到批号是常态（空白模板、表头不规范）：就地补填，不必改走手工登记
       patchEntry(entry.id, { submitted: true })
       const field = missing[0]
       requestAnimationFrame(() => {
@@ -1289,11 +1305,11 @@ function CoaImportReportModal({
       }`
     }
     if (!e.preview?.standard) return '未匹配客户标准'
-    if (importMissingHead(e).length) return '待填批号 / 流水号'
+    if (importMissingHead(e).length) return '待填批号'
     return limitCountsText(tally) || e.preview.standard.code
   }
   /** 第二行的越界着色：有确定超标的用红色，只有可能超限的用橙色。
-   *  还卡在批号/流水号时文字报的是待填，不着越界色（越界由图标带出）。 */
+   *  还卡在批号时文字报的是待填，不着越界色（越界由图标带出）。 */
   const railTone = (e: CoaImportEntry): string => {
     if (e.status === 'ready' && importMissingHead(e).length) return ''
     const { overs, possible } = railTallyOf(e)
@@ -1307,7 +1323,7 @@ function CoaImportReportModal({
     }
     if (e.status === 'registered') return <CheckCircleFilled className={styles.railIconOk} />
     const { overs, possible } = railTallyOf(e)
-    // 待填批号/流水号 与 越界 同用警示图标：越界用红/橙区分，待填是琥珀
+    // 待填批号 与 越界 同用警示图标：越界用红/橙区分，待填是琥珀
     if (overs + possible > 0) {
       return (
         <ExclamationCircleFilled
@@ -1580,6 +1596,8 @@ export function CoaIssuancePage() {
   const [rendering, setRendering] = useState<CoaReport | null>(null)
   // 验证弹窗：一份 docx 是不是系统出的、生成后有没有被改
   const [verifyOpen, setVerifyOpen] = useState(false)
+  // 正在复制到其它模板的报告（复制弹窗按它挂载）
+  const [copying, setCopying] = useState<CoaReport | null>(null)
 
   /** 把局部改动合并进当前查询串；空值即删除该参数。 */
   const syncUrl = (patch: Record<string, string | null>) => {
@@ -2119,6 +2137,18 @@ export function CoaIssuancePage() {
                               onClick={() => setEditing(record)}
                             />
                           </Tooltip>
+                          {/* 产品还有别的模板才能复制；同产品只有一个模板时不出这个按钮 */}
+                          {standards.length > 1 && (
+                            <Tooltip title="复制到其它模板">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<CopyOutlined />}
+                                aria-label={`把批号 ${record.batch_no} 复制到其它模板`}
+                                onClick={() => setCopying(record)}
+                              />
+                            </Tooltip>
+                          )}
                           <Tooltip title="作废">
                             <Button
                               type="text"
@@ -2156,6 +2186,17 @@ export function CoaIssuancePage() {
           )}
           {verifyOpen && (
             <CoaVerifyModal productId={activeProduct.id} onClose={() => setVerifyOpen(false)} />
+          )}
+          {copying && (
+            <CoaCopyModal
+              key={copying.id}
+              source={copying}
+              product={activeProduct}
+              sourceStandard={matrixStandard ?? activeStandard}
+              standards={standards}
+              onSaved={invalidate}
+              onClose={() => setCopying(null)}
+            />
           )}
           <CoaImportReportModal
             open={importOpen}

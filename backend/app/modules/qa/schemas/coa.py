@@ -392,8 +392,8 @@ class CoaReportCreate(BaseModel):
     product_id: str
     standard_id: str
     batch_no: str = Field(min_length=1, max_length=64)
-    # 流水号与批号同为内置必填批次字段（品名由产品带出）
-    serial_no: str = Field(min_length=1, max_length=32)
+    # 流水号是内置批次字段但选填：登记时往往还没分配，空白按没填（品名由产品带出）
+    serial_no: str | None = Field(default=None, max_length=32)
     mfg_date: date | None = None
     exp_date: date | None = None
     packaging: str | None = Field(default=None, max_length=100)
@@ -404,12 +404,12 @@ class CoaReportCreate(BaseModel):
     values: list[CoaValueIn] = Field(default_factory=list, max_length=500)
     raw_extract: dict[str, Any] | None = None
 
-    @field_validator("product_id", "standard_id", "batch_no", "serial_no")
+    @field_validator("product_id", "standard_id", "batch_no")
     @classmethod
     def _clean_req(cls, value: str | None) -> str | None:
         return _clean_required(value)
 
-    @field_validator("packaging", "batch_size", "storage", "remark")
+    @field_validator("serial_no", "packaging", "batch_size", "storage", "remark")
     @classmethod
     def _clean_opt(cls, value: str | None) -> str | None:
         return _clean_optional(value)
@@ -421,10 +421,14 @@ class CoaReportCreate(BaseModel):
 
 
 class CoaReportUpdate(BaseModel):
+    """编辑 COA 报告。报告头字段没带的键不动，带了的键里 null / 空白算清空；
+    batch_data、values 的 None 表示不动（见各自说明）。
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     batch_no: str | None = Field(default=None, min_length=1, max_length=64)
-    serial_no: str | None = Field(default=None, min_length=1, max_length=32)
+    serial_no: str | None = Field(default=None, max_length=32)
     mfg_date: date | None = None
     exp_date: date | None = None
     packaging: str | None = Field(default=None, max_length=100)
@@ -439,12 +443,12 @@ class CoaReportUpdate(BaseModel):
         default=None, description="提供即全量替换（空列表=清空所有值）；None=不动值"
     )
 
-    @field_validator("batch_no", "serial_no")
+    @field_validator("batch_no")
     @classmethod
     def _clean_req(cls, value: str | None) -> str | None:
         return _clean_required(value)
 
-    @field_validator("packaging", "batch_size", "storage", "remark")
+    @field_validator("serial_no", "packaging", "batch_size", "storage", "remark")
     @classmethod
     def _clean_opt(cls, value: str | None) -> str | None:
         return _clean_optional(value)
@@ -453,3 +457,59 @@ class CoaReportUpdate(BaseModel):
     @classmethod
     def _clean_batch_data(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         return _clean_batch_data_dict(value)
+
+
+class CoaCopyCellIn(BaseModel):
+    """复制到其它模板的一格：来源格 + 目标格 + 写入目标的值。
+
+    值由调用方给（原样复制的，或就地改过的——个别项目各模板取值不同）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["batch", "item"]
+    source: str = Field(
+        min_length=1, max_length=64, description="来源格：批次字段键 / 来源项目 id"
+    )
+    target: str = Field(
+        min_length=1, max_length=64, description="目标格：批次字段键 / 目标项目 id"
+    )
+    value: str | None = Field(
+        default=None, max_length=300, description="batch：写入的文本（日期为 ISO 文本）"
+    )
+    value_num: float | None = Field(default=None, description="item：数值")
+    value_text: str | None = Field(default=None, max_length=300, description="item：结果原文")
+    remark: str | None = Field(default=None, max_length=500, description="item：备注")
+
+    @field_validator("source", "target")
+    @classmethod
+    def _clean_req(cls, value: str | None) -> str | None:
+        return _clean_required(value)
+
+    @field_validator("value", "value_text", "remark")
+    @classmethod
+    def _clean_opt(cls, value: str | None) -> str | None:
+        return _clean_optional(value)
+
+
+class CoaCopyReportIn(BaseModel):
+    """复制到其它模板：目标模板 + 要写的格。
+
+    目标模板下该批号还没有记录 → 新建（流水号选填）；已有 → 只覆盖载荷里的格。
+    """
+
+    standard_id: str
+    serial_no: str | None = Field(
+        default=None, max_length=32, description="新建目标记录时写入，选填；已有记录时不看"
+    )
+    cells: list[CoaCopyCellIn] = Field(min_length=1, max_length=500)
+
+    @field_validator("standard_id")
+    @classmethod
+    def _clean_req(cls, value: str | None) -> str | None:
+        return _clean_required(value)
+
+    @field_validator("serial_no")
+    @classmethod
+    def _clean_opt(cls, value: str | None) -> str | None:
+        return _clean_optional(value)

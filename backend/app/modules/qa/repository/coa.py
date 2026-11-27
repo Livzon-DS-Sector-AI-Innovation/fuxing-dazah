@@ -5,11 +5,12 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.qa.models import (
+    CoaCopyLink,
     CoaProduct,
     CoaProductField,
     CoaRenderRecord,
@@ -388,6 +389,27 @@ async def delete_report_values(db: AsyncSession, report_id: uuid.UUID) -> None:
     await db.execute(
         delete(CoaReportValue).where(CoaReportValue.report_id == report_id)
     )
+
+
+# ───────────────────────── 复制来源关系 ─────────────────────────
+
+
+async def replace_copy_links(
+    db: AsyncSession, target_report_id: uuid.UUID, rows: list[dict[str, Any]]
+) -> None:
+    """写入一批目标格的来源关系：同目标格的旧行先删（一格只留最新一条来源）。"""
+    if not rows:
+        return
+    keys = [(row["kind"], row["target_key"]) for row in rows]
+    await db.execute(
+        delete(CoaCopyLink).where(
+            CoaCopyLink.target_report_id == target_report_id,
+            tuple_(CoaCopyLink.kind, CoaCopyLink.target_key).in_(keys),
+        )
+    )
+    for row in rows:
+        db.add(CoaCopyLink(target_report_id=target_report_id, **row))
+    await db.flush()
 
 
 # ───────────────────────── 生成留档 ─────────────────────────

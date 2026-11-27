@@ -72,11 +72,36 @@ export function draftToValueInput(item_id: string, draft: CoaResultDraft): CoaVa
   return { item_id, value_num: draft.num, value_text: draft.text?.trim() || null }
 }
 
-/** 回车跳到下一项结果框：同一张表内按 DOM 顺序找下一个，浏览器顺带把它滚进可视区。 */
+/** 回车跳到列表里当前输入框的下一个，浏览器顺带把它滚进可视区；列表走完停在原地。 */
+function focusNextOf(inputs: HTMLElement[], current: HTMLElement) {
+  inputs[inputs.indexOf(current) + 1]?.focus()
+}
+
+/** 检测结果格回车：同一张表内按 DOM 顺序找下一个结果框。 */
 function focusNextResultInput(current: HTMLElement) {
   const scope = current.closest<HTMLElement>('[data-coa-result-scope]') ?? document
-  const inputs = Array.from(scope.querySelectorAll<HTMLElement>('[data-coa-result-input]'))
-  inputs[inputs.indexOf(current) + 1]?.focus()
+  focusNextOf(
+    Array.from(scope.querySelectorAll<HTMLElement>('[data-coa-result-input]')),
+    current,
+  )
+}
+
+/**
+ * 报告信息里的输入框回车：跳到报告信息的下一个输入框，字段走完就跳到检测结果的
+ * 第一个（先填报告信息、再从上往下填结果，是登记的实际顺序）。
+ * 报告信息的输入框带 data-coa-head-input，整个表单容器带 data-coa-form-scope；
+ * 报告信息在 DOM 里排在检测结果后面，所以顺序要自己拼。手工登记与导入审核共用。
+ */
+export function focusNextHeadInput(event: { currentTarget: HTMLElement }) {
+  const root = event.currentTarget.closest<HTMLElement>('[data-coa-form-scope]')
+  if (!root) return
+  focusNextOf(
+    [
+      ...root.querySelectorAll<HTMLElement>('[data-coa-head-input]'),
+      ...root.querySelectorAll<HTMLElement>('[data-coa-result-input]'),
+    ],
+    event.currentTarget,
+  )
 }
 
 /**

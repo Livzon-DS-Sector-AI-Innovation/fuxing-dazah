@@ -442,6 +442,35 @@ class TestRender:
             blocked = await ac.post(f"/api/v1/qa/coa/reports/{report['id']}/render")
             assert blocked.status_code == 422 and "没有登记值" in blocked.json()["message"]
 
+    async def test_report_without_serial_cannot_render_until_filled(
+        self, memory_storage: dict[str, bytes], stub_annotation: list[str]
+    ) -> None:
+        """流水号登记时选填，但模板标注默认把它当必填：没填就出不了 COA，补上后能出。"""
+        async with _client(MANAGE | ISSUE) as (ac, _):
+            standard = await _bound_standard(ac)
+            report = await _report(ac, standard, serial_no=None)
+            assert report["serial_no"] is None
+            render = f"/api/v1/qa/coa/reports/{report['id']}/render"
+            check = _check(await ac.post(render, params={"dry_run": "true"}))
+            assert check["ok"] is False
+            assert {(b["field"], b["label"]) for b in check["blocking"]} == {
+                ("batch:serial_no", "流水号")
+            }
+            blocked = await ac.post(render)
+            assert blocked.status_code == 422 and "没有登记值" in blocked.json()["message"]
+
+            # 补上流水号后能出
+            resp = await ac.patch(
+                f"/api/v1/qa/coa/reports/{report['id']}", json={"serial_no": "26081215"}
+            )
+            assert resp.status_code == 200, resp.text
+            assert _check(await ac.post(render, params={"dry_run": "true"}))["ok"] is True
+            resp = await ac.post(render)
+            assert resp.status_code == 200, resp.text[:200]
+            assert TemplateDoc(resp.content).by_id["P1"].text == (
+                "CERTIFICATE OF ANALYSIS   26081215"
+            )
+
     async def test_render_downloads_the_filled_docx(
         self, memory_storage: dict[str, bytes], stub_annotation: list[str]
     ) -> None:

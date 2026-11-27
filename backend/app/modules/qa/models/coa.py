@@ -51,6 +51,13 @@ class CoaFieldType(enum.StrEnum):
     DATE = "date"
 
 
+class CoaCopyKind(enum.StrEnum):
+    """复制到其它模板时被复制的格的种类：批次信息字段 / 检测项目。"""
+
+    BATCH = "batch"
+    ITEM = "item"
+
+
 def _enum_sql_list(values: type[enum.StrEnum]) -> str:
     return ", ".join(f"'{member.value}'" for member in values)
 
@@ -524,4 +531,48 @@ class CoaRenderRecord(BaseModel):
         JSONB,
         nullable=False,
         comment="当时写进模板的内容：字段 → 登记值 → 各数据位的写入文字",
+    )
+
+
+class CoaCopyLink(BaseModel):
+    """跨模板复制的来源关系：目标记录的一格来自哪条记录的哪一格。
+
+    「复制到其它模板」每写一格记一行，同一目标格只留最新一条（旧行硬删）。
+    只写不展示，记录作废后也不动——这格数据当初从哪来，库里要查得到。
+    跨对象只保存逻辑引用。
+    """
+
+    __tablename__ = "coa_copy_links"
+    __table_args__ = (
+        CheckConstraint(
+            f"kind IN ({_enum_sql_list(CoaCopyKind)})",
+            name="ck_qa_coa_copy_links_kind",
+        ),
+        Index(
+            "uq_qa_coa_copy_links_target",
+            "target_report_id",
+            "kind",
+            "target_key",
+            unique=True,
+        ),
+        Index("ix_qa_coa_copy_links_source", "source_report_id"),
+        {"schema": "qa"},
+    )
+
+    source_report_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_reports.id（来源记录）"
+    )
+    target_report_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_reports.id（目标记录）"
+    )
+    kind: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        comment="batch/item",
+    )
+    source_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="来源格：批次字段键 或 来源项目 id"
+    )
+    target_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="目标格：批次字段键 或 目标项目 id"
     )

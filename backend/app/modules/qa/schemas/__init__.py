@@ -31,6 +31,8 @@ from app.modules.qa.schemas.apr import (
     TrendPointStatus,
 )
 from app.modules.qa.schemas.coa import (
+    CoaCopyCellIn,
+    CoaCopyReportIn,
     CoaItemIn,
     CoaProductCreate,
     CoaProductFieldIn,
@@ -112,6 +114,8 @@ from app.modules.qa.schemas.processing import (
 
 __all__ = [
     # COA 域
+    "CoaCopyCellIn",
+    "CoaCopyReportIn",
     "CoaItemIn",
     "CoaProductCreate",
     "CoaProductFieldIn",

@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { API_BASE, actionFetch, type ActionResult } from '@/actions/production/helpers'
 import type {
+  CoaCopyReportInput,
+  CoaCopyReportResult,
   CoaItemInput,
   CoaProduct,
   CoaProductField,
@@ -157,6 +159,19 @@ export async function updateCoaReport(
 
 export async function deleteCoaReport(id: string): Promise<ActionResult> {
   const result = await actionFetch(`${BASE}/reports/${id}`, { method: 'DELETE' })
+  if (result.success) revalidateCoa()
+  return result
+}
+
+/** 复制到其它模板：把一条记录的若干格登记到同产品另一模板的同批号记录（没有就新建）。 */
+export async function copyCoaReport(
+  sourceId: string,
+  input: CoaCopyReportInput
+): Promise<ActionResult<CoaCopyReportResult>> {
+  const result = await actionFetch<CoaCopyReportResult>(`${BASE}/reports/${sourceId}/copy`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
   if (result.success) revalidateCoa()
   return result
 }

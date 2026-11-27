@@ -144,7 +144,7 @@ def _field_rows(
             raise AppException(
                 status_code=400,
                 message=f"字段 [{field.key}] 与内置字段 {builtin_key} 重复："
-                "品名/批号/流水号恒定存在且必填，无需配置",
+                "品名/批号/流水号是内置字段，恒定存在，无需配置",
             )
         if field.key in seen_keys:
             raise AppException(

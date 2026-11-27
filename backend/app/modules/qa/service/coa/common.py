@@ -58,13 +58,33 @@ async def get_report_or_404(db: AsyncSession, report_id: uuid.UUID) -> CoaReport
 
 
 # ─────────────────────── 内置批次字段 ───────────────────────
-# 品名/批号/流水号恒定存在且必填：代码常量不落库，读时合并置顶、
+# 品名/批号/流水号恒定存在：代码常量不落库，读时合并置顶、
 # 写路径拒绝保留键（DB 只存自定义字段，后续填数据/填模板的稳定锚点）。
+# 品名、批号必填；流水号登记时选填——出 COA 时要不要拦，由模板标注里
+# 该字段的「必填」决定。
 
 BUILTIN_BATCH_FIELDS: tuple[dict[str, Any], ...] = (
-    {"key": "product_name", "label_cn": "品名", "label_en": "Product Name", "field_type": "text"},
-    {"key": "batch_no", "label_cn": "批号", "label_en": "Batch No.", "field_type": "text"},
-    {"key": "serial_no", "label_cn": "流水号", "label_en": "Serial No.", "field_type": "text"},
+    {
+        "key": "product_name",
+        "label_cn": "品名",
+        "label_en": "Product Name",
+        "field_type": "text",
+        "required": True,
+    },
+    {
+        "key": "batch_no",
+        "label_cn": "批号",
+        "label_en": "Batch No.",
+        "field_type": "text",
+        "required": True,
+    },
+    {
+        "key": "serial_no",
+        "label_cn": "流水号",
+        "label_en": "Serial No.",
+        "field_type": "text",
+        "required": False,
+    },
 )
 RESERVED_BATCH_KEYS = frozenset(f["key"] for f in BUILTIN_BATCH_FIELDS)
 
@@ -104,7 +124,7 @@ def builtin_key_of(key_or_label: str) -> str | None:
 
 
 def merge_builtin_fields(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """生效字段集 = 内置 3 字段置顶（必填锁定）+ 自定义字段顺延。"""
+    """生效字段集 = 内置 3 字段置顶（恒定存在，是否必填见各自定义）+ 自定义字段顺延。"""
     builtin_rows = [
         {
             "id": None,
@@ -114,7 +134,7 @@ def merge_builtin_fields(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
             "field_type": field["field_type"],
             "sort_order": idx,
             "builtin": True,
-            "required": True,
+            "required": field["required"],
         }
         for idx, field in enumerate(BUILTIN_BATCH_FIELDS)
     ]

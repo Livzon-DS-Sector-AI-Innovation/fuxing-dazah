@@ -1,5 +1,5 @@
-"""QA COA HTTP API：产品/客户标准配置、docx 导入预览、出具登记、矩阵透视、
-模板标注与回填、生成留档与验证。
+"""QA COA HTTP API：产品/客户标准配置、docx 导入预览、出具登记（含复制到其它
+模板）、矩阵透视、模板标注与回填、生成留档与验证。
 
 挂在 QA 模块路由下（``/api/v1/qa/coa``）。读取放行模块全域读码
 ``qa:all:read``、COA 专用读码或 coa 写码（写权限隐含读）。
@@ -23,6 +23,7 @@ from app.core.response import paginated_response, success_response
 from app.modules.qa import file_service
 from app.modules.qa.api._deps import coa_issue, coa_manage, coa_read
 from app.modules.qa.schemas.coa import (
+    CoaCopyReportIn,
     CoaProductCreate,
     CoaProductFieldsReplace,
     CoaProductUpdate,
@@ -355,6 +356,20 @@ async def delete_report(
 ) -> Any:
     await service.delete_report(db, report_id, user)
     return success_response(data=None)
+
+
+@router.post(
+    "/coa/reports/{report_id}/copy",
+    summary="复制到其它模板：把若干格登记到同产品另一模板的同批号记录"
+    "（没有就新建、流水号选填；已有只覆盖这些格）",
+)
+async def copy_report(
+    payload: CoaCopyReportIn,
+    report_id: uuid.UUID,
+    user: User = Depends(coa_issue),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(data=await service.copy_report(db, report_id, payload, user))
 
 
 @router.post(

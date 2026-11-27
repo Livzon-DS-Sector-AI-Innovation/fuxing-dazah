@@ -3,6 +3,7 @@
 子模块：ai_parse（DeepSeek 文档解析+提取，版式无关）/ docx_parse（域模型
 与确定性文本工具）/ common（序列化与 404）/ standards（产品与标准 CRUD）/
 import_standard（docx→标准草稿）/ issuance（报告登记、导入匹配、矩阵）/
+copy（复制到其它模板：同批号登记到另一模板，记每格来源）/
 report_log（出具登记操作日志：逐格前后快照）/ template_address（模板编址与
 写入）/ template_bind（AI 标注+确定性校验+人工确认）/ template_render（按
 标注回填登记数据）/ template_pdf（回填结果转 PDF 供快速打印，带缓存）/
@@ -16,6 +17,7 @@ from app.modules.qa.service.coa.ai_parse import (
     parse_docx_ai,
 )
 from app.modules.qa.service.coa.common import resolve_standard_fields
+from app.modules.qa.service.coa.copy import copy_report
 from app.modules.qa.service.coa.docx_parse import (
     CoaDocxParse,
     CoaParsedField,
@@ -91,6 +93,7 @@ __all__ = [
     "split_bilingual",
     "import_standard_preview",
     "create_report",
+    "copy_report",
     "delete_report",
     "get_render_record_or_404",
     "get_report_detail",

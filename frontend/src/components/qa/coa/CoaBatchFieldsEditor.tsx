@@ -5,7 +5,7 @@ import type { CoaProductFieldInput, CoaFieldType } from '@/types/qa'
 
 /**
  * 内置批次字段（与后端 service/coa/common.py BUILTIN_BATCH_FIELDS 同表）：
- * 品名/批号/流水号恒定存在且必填，编辑器置顶锁定展示，不进载荷。
+ * 品名/批号必填、流水号选填（登记时往往还没分配），三者在编辑器置顶锁定展示，不进载荷。
  */
 export const BUILTIN_FIELD_DEFS: {
   key: string
@@ -143,7 +143,7 @@ export function validateFieldRows(rows: CoaBatchFieldRow[]): string | null {
     const k = (row.key ?? '').trim()
     const hit = builtinKeyOf(k) ?? builtinKeyOf((row.label_cn ?? '').trim())
     if (hit) {
-      return `字段 [${k}] 与内置字段重复：品名/批号/流水号恒定存在且必填，无需配置`
+      return `字段 [${k}] 与内置字段重复：品名/批号/流水号是内置字段，恒定存在，无需配置`
     }
     const folded = k.toLowerCase()
     if (seen.has(folded)) return `字段键 [${k}] 重复，同一产品内需唯一`
@@ -228,7 +228,7 @@ export function CoaBatchFieldsEditor({
               <span>
                 {v}{' '}
                 <Tag color="blue" style={{ marginInlineEnd: 0 }}>
-                  内置 · 必填
+                  {v === 'serial_no' ? '内置 · 选填' : '内置 · 必填'}
                 </Tag>
               </span>
             ) : editable && !row.persisted ? (

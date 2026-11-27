@@ -23,6 +23,8 @@ from app.modules.qa.models.apr import (
     AprValueType,
 )
 from app.modules.qa.models.coa import (
+    CoaCopyKind,
+    CoaCopyLink,
     CoaFieldType,
     CoaProduct,
     CoaProductField,
@@ -157,4 +159,6 @@ __all__ = [
     "CoaReport",
     "CoaReportValue",
     "CoaRenderRecord",
+    "CoaCopyKind",
+    "CoaCopyLink",
 ]

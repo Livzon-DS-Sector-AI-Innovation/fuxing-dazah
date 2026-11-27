@@ -705,8 +705,8 @@ class TestReports:
             )
             assert resp.status_code == 400
 
-    async def test_serial_no_required(self):
-        """流水号为内置必填批次字段：缺失 → 422。"""
+    async def test_serial_no_optional(self):
+        """流水号登记时选填：不传或纯空白都按没填落库；编辑时可以补填，也可以清空。"""
         async with _client(MANAGE | ISSUE) as (ac, _):
             product = await _mk_product(ac)
             std = await _mk_standard(ac, product["id"])
@@ -716,12 +716,32 @@ class TestReports:
                 "batch_no": _uniq("HAF2601"),
             }
             resp = await ac.post("/api/v1/qa/coa/reports", json=payload)
-            assert resp.status_code == 422
-            # 纯空白同样拒绝（清洗后为空）
+            assert resp.status_code == 201, resp.text
+            created = resp.json()["data"]
+            assert created["serial_no"] is None
+            assert "serial_no" not in created["batch_info"]
+            # 纯空白 = 没填
             resp = await ac.post(
-                "/api/v1/qa/coa/reports", json={**payload, "serial_no": " 　"}
+                "/api/v1/qa/coa/reports",
+                json={**payload, "serial_no": " 　", "batch_no": _uniq("HAF2602")},
             )
-            assert resp.status_code == 422
+            assert resp.status_code == 201, resp.text
+            assert resp.json()["data"]["serial_no"] is None
+
+            url = f"/api/v1/qa/coa/reports/{created['id']}"
+            resp = await ac.patch(url, json={"serial_no": " 26081215 "})
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["data"]["serial_no"] == "26081215"
+            # 不带这个键 = 不动
+            resp = await ac.patch(url, json={"remark": "补录"})
+            assert resp.json()["data"]["serial_no"] == "26081215"
+            # 显式清空：null 与空串都算
+            for empty in (None, ""):
+                resp = await ac.patch(url, json={"serial_no": "26081215"})
+                assert resp.status_code == 200, resp.text
+                resp = await ac.patch(url, json={"serial_no": empty})
+                assert resp.status_code == 200, resp.text
+                assert resp.json()["data"]["serial_no"] is None
 
 
 async def _mk_product_with_batch_fields(
@@ -990,10 +1010,9 @@ class TestProductFields:
                 *self._BUILTIN_KEYS, "retest_date", "storage_conditions",
             ]
             builtin_rows = listed[:3]
-            assert all(
-                f["builtin"] is True and f["required"] is True and f["id"] is None
-                for f in builtin_rows
-            )
+            assert all(f["builtin"] is True and f["id"] is None for f in builtin_rows)
+            # 品名、批号必填；流水号登记时选填（出 COA 时要不要拦由模板标注决定）
+            assert [f["required"] for f in builtin_rows] == [True, True, False]
             assert [f["label_cn"] for f in builtin_rows] == ["品名", "批号", "流水号"]
             customs = listed[3:]
             assert customs[0]["field_type"] == "date"

@@ -173,8 +173,8 @@ export interface CoaReportInput {
   product_id: string
   standard_id: string
   batch_no: string
-  /** 流水号：与批号同为内置必填批次字段（品名由产品带出）。 */
-  serial_no: string
+  /** 流水号：内置批次字段但选填（没填传 null；出 COA 时由模板标注决定要不要拦）。 */
+  serial_no: string | null
   mfg_date?: string | null
   exp_date?: string | null
   packaging?: string | null
@@ -185,6 +185,37 @@ export interface CoaReportInput {
   batch_data?: Record<string, string> | null
   values?: CoaValueInput[]
   raw_extract?: Record<string, unknown> | null
+}
+
+// ─────────────────────── 复制到其它模板 ───────────────────────
+
+/** 复制到其它模板的一格：来源格 + 目标格 + 写入目标的值（原样复制的，或就地改过的）。 */
+export interface CoaCopyCellInput {
+  kind: 'batch' | 'item'
+  /** 来源格：批次字段键 / 来源项目 id */
+  source: string
+  /** 目标格：批次字段键 / 目标项目 id */
+  target: string
+  /** 批次字段写入的文本（日期为 ISO） */
+  value?: string | null
+  /** 检测项目写入的数值 */
+  value_num?: number | null
+  /** 检测项目写入的结果原文 */
+  value_text?: string | null
+  remark?: string | null
+}
+
+/** 复制到其它模板：目标模板下同批号的记录不存在就新建（流水号必填），已有只覆盖这些格。 */
+export interface CoaCopyReportInput {
+  standard_id: string
+  /** 新建目标记录时必填；目标已有记录时不传 */
+  serial_no?: string | null
+  cells: CoaCopyCellInput[]
+}
+
+export interface CoaCopyReportResult extends CoaReport {
+  /** true=这次新建了目标记录；false=覆盖到了已有记录 */
+  created: boolean
 }
 
 // ─────────────────────── docx 导入预览 ───────────────────────

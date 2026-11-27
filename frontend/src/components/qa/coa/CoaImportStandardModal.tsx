@@ -223,7 +223,7 @@ function DraftPanel({
               批次信息字段<span className={styles.count}>{fieldRows.length}</span>
             </h3>
             <p className={styles.sectionHint}>
-              品名/批号/流水号为内置必填字段，此处配置其余字段。
+              品名/批号/流水号为内置字段，此处配置其余字段。
               {preview.product
                 ? '与产品默认不同时，保存为该模板的自定义字段集'
                 : '保存为该产品的默认字段集'}
