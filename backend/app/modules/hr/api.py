@@ -2209,6 +2209,7 @@ async def export_training_evaluation_admin(
                 break
 
     # 从台账统计成绩（混合文字+数字）
+    scores: list = []
     if department and training_subject:
         if department and training_subject:
             scores_result = await session.execute(
@@ -2282,10 +2283,11 @@ async def export_training_evaluation_admin(
         duration_hours=plan_duration,
         expected_count=plan_expected or None,
         actual_count=actual_count or None,
-        exam_count=exam_count or None,
-        excellent_count=excellent_count or None,
-        qualified_count=qualified_count or None,
-        unqualified_count=unqualified_count or None,
+        # 台账有成绩时统计如实呈现（0 也写 0）；无成绩时统计区留空
+        exam_count=exam_count if scores else None,
+        excellent_count=excellent_count if scores else None,
+        qualified_count=qualified_count if scores else None,
+        unqualified_count=unqualified_count if scores else None,
         trainee_names=trainee_names,
         participation_rate=participation_rate,
         pass_rate=pass_rate,
