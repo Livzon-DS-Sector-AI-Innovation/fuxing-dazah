@@ -29,7 +29,6 @@ app/
 └── modules/                      # 业务模块，按负责人边界维护
     ├── production/
     ├── equipment/
-    ├── safety/
     ├── environment/
     ├── energy/
     ├── warehouse/

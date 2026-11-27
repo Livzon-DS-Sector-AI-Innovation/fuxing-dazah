@@ -162,7 +162,7 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
-    LOG_ENABLED_MODULES: str = ""  # 逗号分隔，如 "safety,equipment"，空 = 全部启用
+    LOG_ENABLED_MODULES: str = ""  # 逗号分隔，如 "equipment,energy"，空 = 全部启用
     LOG_DISABLED_MODULES: str = ""  # 逗号分隔，如 "energy,hr"，空 = 不禁用任何模块
     LOG_THIRD_PARTY_LEVEL: str = "WARNING"  # 三方库统一日志级别
     LOG_THIRD_PARTY_HANDLER_LEVEL: str = "WARNING"  # 三方库 handler 级过滤阈值
