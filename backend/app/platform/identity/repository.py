@@ -2,6 +2,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.platform.identity.models import Department, User
 
@@ -110,6 +111,24 @@ class UserRepository:
         return users, total
 
 
+def active_department_filters(
+    *, include_deleted: bool = False,
+) -> list[ColumnElement[bool]]:
+    """部门「当前有效」的统一口径。
+
+    identity.departments 同时有平台软删除 ``is_deleted`` 和飞书同步删除
+    ``status_is_deleted`` 两个标记。仓储层和 ``public_api`` 必须共用这一份
+    条件：各写一份的话，同一个部门会在组织架构树里可见、在跨模块引用里不可见
+    （或反过来），排查起来没有任何线索。
+    """
+    if include_deleted:
+        return []
+    return [
+        Department.is_deleted == False,  # noqa: E712
+        Department.status_is_deleted == False,  # noqa: E712
+    ]
+
+
 class DepartmentRepository:
     async def get_by_feishu_id(
         self, session: AsyncSession, feishu_dept_id: str,
@@ -126,10 +145,8 @@ class DepartmentRepository:
         *, include_deleted: bool = False,
     ) -> list[Department]:
         stmt = select(Department).where(
-            Department.is_deleted == False,  # noqa: E712
+            *active_department_filters(include_deleted=include_deleted),
         )
-        if not include_deleted:
-            stmt = stmt.where(Department.status_is_deleted == False)  # noqa: E712
         stmt = stmt.order_by(Department.order, Department.name)
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -141,8 +158,7 @@ class DepartmentRepository:
             select(Department)
             .where(
                 Department.parent_feishu_department_id == parent_id,
-                Department.is_deleted == False,  # noqa: E712
-                Department.status_is_deleted == False,  # noqa: E712
+                *active_department_filters(),
             )
             .order_by(Department.order, Department.name)
         )

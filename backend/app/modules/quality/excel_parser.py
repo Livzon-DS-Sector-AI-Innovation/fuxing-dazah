@@ -1,7 +1,8 @@
 """液相计算表 Excel 解析器。
 
 支持多种产品/标准的计算表模板，通过识别关键标签定位数据区域。
-当前已适配：盐酸万古霉素 USP 标准（EX-HA-5246-001），其他模板可扩展。
+当前已适配：盐酸万古霉素 USP 标准（EX-HA-5246-001）。EP/CP 标题可识别标准类型
+并按同版式回退解析（独立版式待拿到样表后扩展）。
 """
 
 import re
@@ -10,6 +11,7 @@ from io import BytesIO
 from typing import Any
 
 import openpyxl
+from openpyxl.worksheet.worksheet import Worksheet
 
 # ─── 解析结果数据结构 ───
 
@@ -20,8 +22,6 @@ class QualityStandard:
 
     name: str  # 项目名称，如"万古霉素B"
     limit: float | None = None  # 合格限度值
-    oot_haf: float | None = None  # OOT 阈值（HAF 产品线）
-    oot_haa: float | None = None  # OOT 阈值（HAA 产品线）
     operator: str = "≤"  # 比较运算符：≤、≥、<、>
 
 
@@ -42,8 +42,6 @@ class ImpurityResult:
     first_percent: float  # 第一份%
     second_percent: float  # 第二份%
     limit: float | None = None  # 合格标准
-    oot_haf: float | None = None
-    oot_haa: float | None = None
 
 
 @dataclass
@@ -56,8 +54,6 @@ class CalculatedResult:
     rounded_first: float  # 四舍五入后的值（报告用）
     rounded_second: float
     limit: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
 
 
 @dataclass
@@ -103,6 +99,17 @@ class LcReportData:
 # ─── 解析器 ───
 
 
+def detect_standard_type(title: str) -> str:
+    """从标题行识别药典标准类型：USP / EP / CP，识别不了返回空串。"""
+    if "USP" in title:
+        return "USP"
+    if "EP" in title or "Ph.Eur" in title or "欧洲" in title:
+        return "EP"
+    if "CP" in title or "中国药典" in title:
+        return "CP"
+    return ""
+
+
 class LcExcelParser:
     """液相计算表解析器基类。
 
@@ -115,21 +122,9 @@ class LcExcelParser:
         wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
         ws = wb.active if wb.active else wb[wb.sheetnames[0]]
 
-        # 读取前几行识别模板
-        rows = list(ws.iter_rows(min_row=1, max_row=min(5, ws.max_row), values_only=True))
-
-        # 根据标题行判断模板类型
-        title = str(rows[0][0]) if rows and rows[0] and rows[0][0] else ""
-
-        if "USP" in title:
-            parser = _UsrVancomycinParser()
-        elif "EP" in title or "Ph.Eur" in title or "欧洲" in title:
-            parser = _UsrVancomycinParser()  # TODO: 后续扩展 EP 模板
-        elif "CP" in title or "中国药典" in title:
-            parser = _UsrVancomycinParser()  # TODO: 后续扩展 CP 模板
-        else:
-            # 默认尝试 USP 格式
-            parser = _UsrVancomycinParser()
+        # 模板版式分发：当前所有标准类型同走万古霉素计算表版式（既有回退行为）。
+        # 拿到 EP/CP 样表后，在此按 detect_standard_type(标题) 接独立解析器。
+        parser = _UsrVancomycinParser()
 
         return parser._do_parse(ws, filename)
 
@@ -137,7 +132,7 @@ class LcExcelParser:
 class _UsrVancomycinParser:
     """盐酸万古霉素 USP 标准计算表解析器（EX-HA-5246-001）。"""
 
-    def _do_parse(self, ws, filename: str) -> LcReportData:
+    def _do_parse(self, ws: Worksheet, filename: str) -> LcReportData:
         data = LcReportData()
         data.raw_rows = ws.max_row
         data.raw_cols = ws.max_column
@@ -153,7 +148,7 @@ class _UsrVancomycinParser:
         title_raw = str(ws.cell(1, 1).value or "")
         data.product_name = self._extract_product_name(title_raw)
         data.form_id = self._extract_form_id(title_raw)
-        data.standard_type = "USP" if "USP" in title_raw else ""
+        data.standard_type = detect_standard_type(title_raw)
 
         # ── R2: 批号 + 标准头 ──
         data.batch_number = str(ws.cell(2, 2).value or "").strip()
@@ -209,9 +204,8 @@ class _UsrVancomycinParser:
                 return f
         return 0.0
 
-    def _parse_standards(self, ws, data: LcReportData) -> None:
+    def _parse_standards(self, ws: Worksheet, data: LcReportData) -> None:
         """解析质量标准区域（O列及之后）。"""
-        # O列（col 15）开始是合格标准，Q列（col 17）是 OOT(HAF)，R列（col 18）是 OOT(HAA)
         standards_map: dict[str, QualityStandard] = {}
 
         for row_idx in range(2, ws.max_row + 1):
@@ -222,8 +216,6 @@ class _UsrVancomycinParser:
             std = QualityStandard(
                 name=name,
                 limit=self._safe_float(ws.cell(row_idx, 16).value),  # P列
-                oot_haf=self._safe_float(ws.cell(row_idx, 17).value),  # Q列
-                oot_haa=self._safe_float(ws.cell(row_idx, 18).value),  # R列
             )
             # 万古霉素B 是 ≥，其他都是 ≤
             if "万古霉素" in name or "Vancomycin" in name.lower():
@@ -232,7 +224,7 @@ class _UsrVancomycinParser:
 
         data.standards = list(standards_map.values())
 
-    def _parse_peak_areas(self, ws, data: LcReportData) -> None:
+    def _parse_peak_areas(self, ws: Worksheet, data: LcReportData) -> None:
         """解析供试液A 各峰面积（R4-R19）。"""
         # C列=项目名，F列=第一份值，J列=第二份值
         col_name = 2  # B列
@@ -271,7 +263,7 @@ class _UsrVancomycinParser:
             return label[: label.index("（")].strip()
         return label.strip()
 
-    def _parse_results(self, ws, data: LcReportData) -> None:
+    def _parse_results(self, ws: Worksheet, data: LcReportData) -> None:
         """解析万古霉素B和总杂质的计算结果。
 
         列映射（从实际 .xlsx 调试确认）：
@@ -298,8 +290,6 @@ class _UsrVancomycinParser:
             rounded_first=vb_first_rnd,
             rounded_second=vb_second_rnd,
             limit=vb_std.limit if vb_std else None,
-            oot_haf=vb_std.oot_haf if vb_std else None,
-            oot_haa=vb_std.oot_haa if vb_std else None,
         )
 
         # 总杂质（R77，K列=11 是 "＝"，L列=12 是值）
@@ -313,11 +303,9 @@ class _UsrVancomycinParser:
             rounded_first=total_first_raw,
             rounded_second=total_second,
             limit=ts.limit if ts else None,
-            oot_haf=ts.oot_haf if ts else None,
-            oot_haa=ts.oot_haa if ts else None,
         )
 
-    def _parse_impurity_details(self, ws, data: LcReportData) -> None:
+    def _parse_impurity_details(self, ws: Worksheet, data: LcReportData) -> None:
         """解析各杂质百分比计算结果（R25-R76）。
 
         实际格式（从 .xlsx 调试确认）：
@@ -359,8 +347,6 @@ class _UsrVancomycinParser:
                     first_percent=first_pct,
                     second_percent=second_pct,
                     limit=std.limit if std else None,
-                    oot_haf=std.oot_haf if std else None,
-                    oot_haa=std.oot_haa if std else None,
                 )
             )
             row += 4  # 跳到下一个杂质组

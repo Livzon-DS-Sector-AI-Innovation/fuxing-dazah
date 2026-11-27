@@ -194,9 +194,10 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
         <div style={{ display: 'flex', gap: 12 }}>
           <Form.Item name="product_id" label="产品" rules={[{ required: true, message: '请选择产品' }]} style={{ flex: 1 }}>
             <Select
-              showSearch
               placeholder="搜索并选择产品"
-              filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
+              showSearch={{
+                filterOption: (input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
               onChange={(id: string) => { setSelectedProductId(id); form.setFieldValue('route_id', undefined); setSelectedRouteId(undefined); setUserStageConfig(null) }}
               options={(products ?? []).map((p) => ({ value: p.id, label: p.product_name }))}
             />

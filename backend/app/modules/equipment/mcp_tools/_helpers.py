@@ -21,8 +21,8 @@ from app.modules.equipment.models.inspection_template import (
     InspectionTemplateItem,
 )
 from app.modules.equipment.repository.equipment import (
-    get_equipment_by_id,
     get_equipment_by_no,
+    get_equipment_unscoped,
 )
 from app.modules.equipment.repository.inspection_template import (
     get_inspection_template_by_id,
@@ -59,18 +59,26 @@ def _wo_to_dict(wo: Any) -> dict[str, Any]:
     }
 
 
+def _task_equipment_count(task: Any) -> int:
+    """任务涉及的去重设备数（线路巡检按路线绑定，设备巡检按 equipment_ids）。"""
+    if task.route and task.route.locations_rel:
+        return len(
+            {
+                str(e.equipment_id)
+                for loc in task.route.locations_rel
+                for e in (loc.equipments or [])
+                if not e.is_deleted
+            }
+        )
+    eq_ids = {str(eid) for eid in (task.equipment_ids or [])}
+    if task.equipment_id:
+        eq_ids.add(str(task.equipment_id))
+    return len(eq_ids)
+
+
 def _it_to_dict(task: Any) -> dict[str, Any]:
     """InspectionTask ORM → 字典"""
-    route = task.route
-    eq_count = 0
-    if route and route.locations_rel:
-        for loc in route.locations_rel:
-            eq_count += len([e for e in (loc.equipments or []) if not e.is_deleted])
-    elif task.equipment_ids or task.equipment_id:
-        eq_ids = list(task.equipment_ids or [])
-        if task.equipment_id and str(task.equipment_id) not in eq_ids:
-            eq_ids.append(str(task.equipment_id))
-        eq_count = len(eq_ids)
+    eq_count = _task_equipment_count(task)
 
     return {
         "id": str(task.id),
@@ -144,7 +152,13 @@ async def _get_template_item_map(
 
     elif task.equipment_templates:
         seen_tids: set[uuid.UUID] = set()
-        for tpl_ids in task.equipment_templates.values():
+        # 多设备任务只取该设备绑定的模板；None 时保持全量（兼容旧调用）
+        tpl_groups = (
+            [task.equipment_templates.get(str(equipment_id), [])]
+            if equipment_id is not None
+            else list(task.equipment_templates.values())
+        )
+        for tpl_ids in tpl_groups:
             for tid_str in tpl_ids:
                 tid = uuid.UUID(tid_str) if isinstance(tid_str, str) else tid_str
                 if tid not in seen_tids:
@@ -181,13 +195,17 @@ async def _get_template_item_map(
 
 
 async def _resolve_equipment(db: AsyncSession, identifier: str) -> Any:
-    """将设备编号或 UUID 解析为 Equipment 对象。"""
+    """将设备编号或 UUID 解析为 Equipment 对象。
+
+    无范围读取：MCP 工具层统一以 data_scope="all" 构建访问上下文（用户身份已由
+    resolve_user 校验），授权决策交给各工具的服务层调用。
+    """
     equipment = await get_equipment_by_no(db, identifier)
     if equipment:
         return equipment
     try:
         eid = uuid.UUID(identifier)
-        equipment = await get_equipment_by_id(db, eid)
+        equipment = await get_equipment_unscoped(db, eid)
         if equipment:
             return equipment
     except ValueError:

@@ -164,6 +164,7 @@ export function BatchUploadDialog({ open, source, onClose }: Props) {
     setMatches([])
     setResult(null)
     setMatching(false)
+    setUploading(false)
     setAnalyzeProgress(null)
     onClose()
   }
@@ -178,6 +179,7 @@ export function BatchUploadDialog({ open, source, onClose }: Props) {
     setMatches([])
     setResult(null)
     setMatching(false)
+    setUploading(false)
     setAnalyzeProgress(null)
   }
 

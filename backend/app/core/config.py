@@ -56,39 +56,48 @@ class Settings(BaseSettings):
     # Feishu WebSocket 长连接（接收消息/事件推送）
     FEISHU_WS_ENABLED: bool = True
 
+    # HR 专属飞书应用凭证：员工档案 bitable 同步与职称评审审批同步共用
+    # 同一应用时只需配这一对，下面两对专用变量留空自动回填本值。
+    HR_FEISHU_APP_ID: str = ""
+    HR_FEISHU_APP_SECRET: str = ""
+
     # 职称评审：独立飞书应用凭证（审批同步用：approval:approval:readonly / approval:definition；
-    # 缺省回落全局应用）。多维表格读写与通知卡片始终使用全局应用。
+    # 缺省回落 HR_FEISHU_* → 全局应用）。多维表格读写与通知卡片始终使用全局应用。
     HR_TITLE_REVIEW_FEISHU_APP_ID: str = ""
     HR_TITLE_REVIEW_FEISHU_APP_SECRET: str = ""
     HR_TITLE_REVIEW_FEISHU_WS_ENABLED: bool = False
 
-    # HR 飞书日历 ID（primary=主日历，或指定团队日历 ID）
-    HR_FEISHU_CALENDAR_ID: str = "primary"
+    # 员工档案多维表格同步：独立应用凭证（bitable 读写；缺省回落 HR_FEISHU_* → 全局应用）。
+    # 多环境共用一个应用时可让本地与服务器共用同一份 Base 授权。
+    HR_EMPLOYEE_SYNC_FEISHU_APP_ID: str = ""
+    HR_EMPLOYEE_SYNC_FEISHU_APP_SECRET: str = ""
+
     # 职称评审定时对账开关（默认开启；关闭后仅保留手动「同步」按钮）
     HR_TITLE_REVIEW_SYNC_ENABLED: bool = True
 
     # HR AI（DeepSeek）：出题/人事问答/面试评价/胜任度分析统一使用一个 key
     HR_AI_API_KEY: str = ""
-    HR_DEEPSEEK_API_KEY: str = ""  # 旧命名兼容：仅作为 HR_AI_API_KEY 为空时的兜底
     HR_AI_MODEL: str = "deepseek-chat"
 
-    @model_validator(mode="after")
-    def _ai_key_fallback(self) -> "Settings":
-        """HR_AI_API_KEY 未配置时回落旧命名 HR_DEEPSEEK_API_KEY。
-
-        历史 .env 文件里两种命名并存，且部分环境只填了旧命名——
-        空 key 会让 DeepSeek 调用 401，AI 评估/出题/报告全 500。
-        """
-        if not self.HR_AI_API_KEY and self.HR_DEEPSEEK_API_KEY:
-            self.HR_AI_API_KEY = self.HR_DEEPSEEK_API_KEY
-        return self
-    HR_AI_SYSTEM_PROMPT: str = ""
     # 绩效飞书通知开关（自评/领导评分提交后通知，默认关闭）
     HR_PERFORMANCE_NOTIFY: bool = False
 
-    # Feishu 安全模块机器人（独立应用凭证）
-    SAFETY_FEISHU_APP_ID: str = ""
-    SAFETY_FEISHU_APP_SECRET: str = ""
+    @model_validator(mode="after")
+    def _hr_feishu_creds_fallback(self) -> "Settings":
+        """HR 专属凭证统一配置：专用变量留空时回填 HR_FEISHU_*。
+
+        职称评审与员工档案同步通常共用同一个 HR 飞书应用，.env 里
+        重复写两遍同一对值容易漏改一处处；旧环境（如服务器
+        .env.production）直接配专用变量的继续生效，不受影响。
+        """
+        if self.HR_FEISHU_APP_ID:
+            if not self.HR_TITLE_REVIEW_FEISHU_APP_ID:
+                self.HR_TITLE_REVIEW_FEISHU_APP_ID = self.HR_FEISHU_APP_ID
+                self.HR_TITLE_REVIEW_FEISHU_APP_SECRET = self.HR_FEISHU_APP_SECRET
+            if not self.HR_EMPLOYEE_SYNC_FEISHU_APP_ID:
+                self.HR_EMPLOYEE_SYNC_FEISHU_APP_ID = self.HR_FEISHU_APP_ID
+                self.HR_EMPLOYEE_SYNC_FEISHU_APP_SECRET = self.HR_FEISHU_APP_SECRET
+        return self
 
     # Upload
     UPLOAD_DIR: str = "./uploads"
@@ -118,6 +127,69 @@ class Settings(BaseSettings):
     METER_AI_BASE_URL: str = ""
     METER_AI_API_KEY: str = ""
     METER_AI_MODEL: str = "deepseek-v4-flash-vision-exp"
+
+    # QA AI 文档实体分析（OpenAI-compatible；关闭或无 key 时只保留解析/人工流程）
+    QA_AI_ENABLED: bool = False
+    QA_AI_API_KEY: str = ""
+    QA_AI_BASE_URL: str = "https://api.openai.com/v1"
+    QA_AI_MODEL: str = "gpt-4o-mini"
+    QA_AI_TIMEOUT_SECONDS: int = 120
+    QA_AI_MAX_TOKENS: int = 4096
+    QA_AI_MAX_RETRIES: int = 2
+    QA_AI_PROMPT_VERSION: str = "qa-entity-v1"
+    QA_AI_SCHEMA_VERSION: str = "qa-entity-schema-v1"
+
+    # QA 新上传/重提取统一使用 MinerU v4 异步 API；旧运行记录仍可保留
+    # native provider 值用于历史兼容。API token 只从部署环境注入。
+    QA_MD_EXTRACT_PROVIDER: str = "mineru"
+    QA_MD_EXTRACT_API_TOKEN: str = ""
+
+    # 液相加密计算表服务端兜底密码：前端未填密码且文件加密时使用。
+    # 密码只放部署环境，不出现在前端代码（git 历史泄露过一次，待轮换）。
+    QUALITY_LC_EXCEL_PASSWORD: str = ""
+
+    # JWT
+    JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
+
+    # Permission System
+    ADMIN_EMPLOYEE_NOS: list[str] = []
+
+    # MCP — AI Agent 认证
+    MCP_AGENT_API_KEYS: str = ""
+
+    # API
+    API_V1_PREFIX: str = "/api/v1"
+
+    # Logging
+    LOG_LEVEL: str = "INFO"
+    LOG_ENABLED_MODULES: str = ""  # 逗号分隔，如 "safety,equipment"，空 = 全部启用
+    LOG_DISABLED_MODULES: str = ""  # 逗号分隔，如 "energy,hr"，空 = 不禁用任何模块
+    LOG_THIRD_PARTY_LEVEL: str = "WARNING"  # 三方库统一日志级别
+    LOG_THIRD_PARTY_HANDLER_LEVEL: str = "WARNING"  # 三方库 handler 级过滤阈值
+    LOG_ROOT_LEVEL: str = "WARNING"  # root logger 兜底级别
+    LOG_DIR: str = "logs"  # 生产环境日志文件目录
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV == "production"
+
+    def check(self) -> None:
+        """启动时校验关键配置，避免漏配导致运行时异常。"""
+        missing: list[str] = []
+        if not self.SECRET_KEY:
+            missing.append("SECRET_KEY")
+        if not self.FEISHU_APP_ID:
+            missing.append("FEISHU_APP_ID")
+        if not self.FEISHU_APP_SECRET:
+            missing.append("FEISHU_APP_SECRET")
+        if not self.FEISHU_REDIRECT_URI:
+            missing.append("FEISHU_REDIRECT_URI")
+        if not self.FRONTEND_URL:
+            missing.append("FRONTEND_URL")
+        if missing:
+            raise RuntimeError(
+                "以下 .env 配置项缺失或无效，请检查:\n  " + "\n  ".join(missing),
+            )
 
     # Warehouse — 仓储模块专属飞书应用（仓库管理机器人）与 Agent 模型
     WAREHOUSE_FEISHU_APP_ID: str = ""
@@ -197,71 +269,6 @@ class Settings(BaseSettings):
     # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）
     WAREHOUSE_AGENT_MAX_TURNS: int = 10
     WAREHOUSE_AGENT_SESSION_ROUNDS: int = 12
-
-    # Super-agent 平台底座（一期旁路上线，默认全关；docs/DESIGN-SuperAgent底座）
-    # 总闸：关 = 底座生成器每 tick 空转（表照常可查）
-    SUPERAGENT_ENABLED: bool = False
-    # Source 轮询间隔秒（下限 10；注册时读取，改后需重启）
-    SUPERAGENT_SOURCE_POLL_INTERVAL_SECONDS: int = 30
-    # effects/outbox 消费轮询间隔秒（注册时读取，改后需重启）
-    SUPERAGENT_EFFECTS_POLL_INTERVAL_SECONDS: int = 2
-    # Watchdog 巡检间隔秒（注册时读取）
-    SUPERAGENT_WATCHDOG_INTERVAL_SECONDS: int = 300
-    # Watchdog 阈值：受阻告警小时 / 排队告警小时 / observe 积压告警条数
-    SUPERAGENT_BLOCKED_ALERT_HOURS: int = 24
-    SUPERAGENT_QUEUED_ALERT_HOURS: int = 2
-    SUPERAGENT_OBSERVE_BACKLOG_ALERT: int = 50
-    # Watchdog/健康告警 DM 收件人（逗号分隔 open_id；空=仅留痕不发）
-    SUPERAGENT_ADMIN_OPEN_IDS: str = ""
-
-    # JWT
-    JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
-
-    # Permission System
-    ADMIN_EMPLOYEE_NOS: list[str] = []
-
-    # MCP — AI Agent 认证
-    MCP_AGENT_API_KEYS: str = ""
-
-    # API
-    API_V1_PREFIX: str = "/api/v1"
-
-    # Logging
-    LOG_LEVEL: str = "INFO"
-    LOG_ENABLED_MODULES: str = ""  # 逗号分隔，如 "safety,equipment"，空 = 全部启用
-    LOG_DISABLED_MODULES: str = ""  # 逗号分隔，如 "energy,hr"，空 = 不禁用任何模块
-    LOG_THIRD_PARTY_LEVEL: str = "WARNING"  # 三方库统一日志级别
-    LOG_THIRD_PARTY_HANDLER_LEVEL: str = "WARNING"  # 三方库 handler 级过滤阈值
-    LOG_ROOT_LEVEL: str = "WARNING"  # root logger 兜底级别
-    LOG_DIR: str = "logs"  # 生产环境日志文件目录
-
-    # ── 宣传函 GitHub Pages 发布（飞书对话修改运动会邀请函）──
-    INVITATION_GITHUB_TOKEN: str = ""  # fine-grained token：Contents 读写、仅授权 mid-autumn-invitation 仓库
-    INVITATION_GITHUB_REPO: str = "Cheris0419/mid-autumn-invitation"
-    INVITATION_GITHUB_PATH: str = "index.html"
-    INVITATION_PUBLIC_URL: str = "https://cheris0419.github.io/mid-autumn-invitation/"
-
-    @property
-    def is_production(self) -> bool:
-        return self.APP_ENV == "production"
-
-    def check(self) -> None:
-        """启动时校验关键配置，避免漏配导致运行时异常。"""
-        missing: list[str] = []
-        if not self.SECRET_KEY:
-            missing.append("SECRET_KEY")
-        if not self.FEISHU_APP_ID:
-            missing.append("FEISHU_APP_ID")
-        if not self.FEISHU_APP_SECRET:
-            missing.append("FEISHU_APP_SECRET")
-        if not self.FEISHU_REDIRECT_URI:
-            missing.append("FEISHU_REDIRECT_URI")
-        if not self.FRONTEND_URL:
-            missing.append("FRONTEND_URL")
-        if missing:
-            raise RuntimeError(
-                "以下 .env 配置项缺失或无效，请检查:\n  " + "\n  ".join(missing),
-            )
 
 
 @lru_cache

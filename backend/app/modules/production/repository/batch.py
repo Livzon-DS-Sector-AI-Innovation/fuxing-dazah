@@ -3,18 +3,30 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.production.models import Batch
+from app.modules.production.models import Batch, BatchLink, NodeExecution
 from app.modules.production.repository.trace import trace_links_multi
+
+# 未完工批次 = 非终态。计划下达生成的是 scheduled（不是 pending），
+# 只统计 pending/in_progress 会让"未开工的计划批次"绕过产品删除/路线归档校验。
+UNFINISHED_BATCH_STATUSES = (
+    "draft",
+    "scheduled",
+    "released",
+    "pending",
+    "in_progress",
+)
 
 __all__ = [
     "get_batch",
     "get_batch_by_no",
     "get_batches_by_ids",
     "get_parent_links",
+    "batch_has_history",
     "list_batches",
+    "list_recent_batches_by_routes",
     "list_active_batches_by_route",
     "list_batches_started_within",
     "list_descendant_batch_ids",
@@ -48,6 +60,27 @@ async def get_batch_by_no(db: AsyncSession, batch_no: str) -> Batch | None:
         Batch.batch_no == batch_no, Batch.is_deleted == False  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def batch_has_history(db: AsyncSession, batch_id: uuid.UUID) -> bool:
+    """批次是否附着生产痕迹：任一存活工序执行或任一谱系链接（父子任一方向）。
+
+    无痕迹的批次（从未开工）软删不留任何追溯空洞；有痕迹的必须保持可见。
+    """
+    exec_stmt = select(NodeExecution.id).where(
+        NodeExecution.batch_id == batch_id,
+        NodeExecution.is_deleted == False,  # noqa: E712
+    ).limit(1)
+    if (await db.execute(exec_stmt)).first() is not None:
+        return True
+    link_stmt = select(BatchLink.id).where(
+        or_(
+            BatchLink.parent_batch_id == batch_id,
+            BatchLink.child_batch_id == batch_id,
+        ),
+        BatchLink.is_deleted == False,  # noqa: E712
+    ).limit(1)
+    return (await db.execute(link_stmt)).first() is not None
 
 
 async def list_active_batches_by_route(
@@ -114,13 +147,34 @@ async def list_batches(
     return list((await db.execute(stmt)).scalars()), total
 
 
+async def list_recent_batches_by_routes(
+    db: AsyncSession, route_ids: set[uuid.UUID], *, limit: int = 500,
+) -> list[Batch]:
+    """作用域路线内最新 N 个未删批次：数据汇总默认窗口的候选批次。
+
+    必须限定路线——全系统取最新 N 个时，无关产品的批次会把前身路线的
+    历史批次挤出窗口，血缘合并结果凭空清空。
+    """
+    if not route_ids:
+        return []
+    stmt = (
+        select(Batch)
+        .where(Batch.route_id.in_(route_ids), Batch.is_deleted == False)  # noqa: E712
+        # id 兜底：同一事务批量生成的批次 created_at 相同，没有次级排序时
+        # 500 条窗口的截断边界不稳定，汇总行会在刷新间闪烁
+        .order_by(Batch.created_at.desc(), Batch.id.desc())
+        .limit(limit)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
 async def count_unfinished_batches(db: AsyncSession, product_id: uuid.UUID) -> int:
     stmt = (
         select(func.count())
         .select_from(Batch)
         .where(
             Batch.product_id == product_id,
-            Batch.status.in_(("pending", "in_progress")),
+            Batch.status.in_(UNFINISHED_BATCH_STATUSES),
             Batch.is_deleted == False,  # noqa: E712
         )
     )
@@ -133,7 +187,7 @@ async def count_unfinished_batches_by_route(db: AsyncSession, route_id: uuid.UUI
         .select_from(Batch)
         .where(
             Batch.route_id == route_id,
-            Batch.status.in_(("pending", "in_progress")),
+            Batch.status.in_(UNFINISHED_BATCH_STATUSES),
             Batch.is_deleted == False,  # noqa: E712
         )
     )

@@ -78,4 +78,28 @@ PERMISSIONS: list[PermissionDef] = [
         action="delete",
         description="删除有毒有害可燃探测器记录",
     ),
+    PermissionDef(
+        code="meter:report:upload",
+        name="上传维护检测报告",
+        module="meter",
+        resource="report",
+        action="create",
+        description="上传/批量上传检测报告、AI 识别分析与证书编号修正",
+    ),
+    PermissionDef(
+        code="meter:report:delete",
+        name="删除检测报告",
+        module="meter",
+        resource="report",
+        action="delete",
+        description="删除检测报告记录",
+    ),
+    PermissionDef(
+        code="meter:config:manage",
+        name="维护仪表设置与部门",
+        module="meter",
+        resource="config",
+        action="manage",
+        description="更新提醒时间等全局设置、部门增删改与自动提醒开关",
+    ),
 ]

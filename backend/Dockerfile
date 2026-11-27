@@ -8,13 +8,21 @@ ENV UV_PYTHON_PREFERENCE=only-system
 ENV TZ=Asia/Shanghai
 
 # WeasyPrint 系统依赖（渲染 HTML→PDF）+ CJK 字体在 assets/fonts/ 随代码打包
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+# LibreOffice（nogui：不带图形界面栈）：qa 模块把回填后的 COA docx 转成 PDF 供浏览器打印。
+# 软件源换阿里云（部署服务器在国内，直连 deb.debian.org 很慢）。下载的 deb 留在
+# 缓存挂载里——这一层因基础镜像更新而重装时不用重新下载
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
     apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
-    libffi8 shared-mime-info && \
+    libffi8 shared-mime-info \
+    libreoffice-writer-nogui fonts-liberation && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# 走清华 PyPI 装 uv，不直连 ghcr.io（国内无 CDN，拉这个 19MB 镜像常卡几分钟）
+# 锁定版本：保证不同时间构建出的是同一个 uv（与本地开发环境一致）
+RUN pip install --no-cache-dir "uv==0.11.28" -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY pyproject.toml uv.lock* ./
 # 挂载 uv 下载缓存：依赖清单未变时跳过下载，直接复用

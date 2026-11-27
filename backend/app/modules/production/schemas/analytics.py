@@ -53,7 +53,7 @@ class FieldTrendResponse(BaseModel):
     """字段趋势响应：节点下全部有数据的数值字段。"""
 
     series: list[FieldTrendSeries]
-    # 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空
+    # 实际贡献数据点的前身路线名（旧 → 新）；无合并时为空
     merged_routes: list[str] = []
 
 
@@ -84,5 +84,5 @@ class StageSummaryOut(BaseModel):
 
     columns: list[StageSummaryColumn]
     rows: list[StageSummaryRow]
-    # 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空
+    # 实际合并进结果行的前身路线名（旧 → 新）；无合并时为空
     merged_routes: list[str] = []

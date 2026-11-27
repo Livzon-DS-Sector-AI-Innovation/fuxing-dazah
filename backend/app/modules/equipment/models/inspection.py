@@ -268,3 +268,29 @@ class InspectionPhoto(BaseModel):
         server_default=func.now(),
         comment="上传时间",
     )
+
+
+class InspectionEquipmentNote(BaseModel):
+    """巡检设备现场说明表 — 计划外突发现象的自由文字记录（不属任何检查项）"""
+
+    __tablename__ = "inspection_equipment_notes"
+    __table_args__ = (
+        Index(
+            "ix_inspection_equipment_notes_task_equipment",
+            "task_id",
+            "equipment_id",
+        ),
+        {"schema": "equipment"},
+    )
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("equipment.inspection_tasks.id"),
+        comment="巡检任务ID",
+    )
+    equipment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("equipment.equipments.id"),
+        comment="设备ID",
+    )
+    content: Mapped[str] = mapped_column(
+        Text, comment="现场说明内容"
+    )

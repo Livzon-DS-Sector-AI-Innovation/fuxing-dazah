@@ -41,6 +41,14 @@ def active_app_id() -> str:
     return get_settings().FEISHU_APP_ID or "未配置"
 
 
+async def download_media(file_token: str) -> bytes:
+    """下载申报附件素材（HR 独立凭证优先，回落全局应用）。"""
+    app_id, app_secret = _hr_creds()
+    return await _pb.download_media(
+        _clean(file_token), app_id=app_id, app_secret=app_secret
+    )
+
+
 async def subscribe_bitable(app_token: str) -> None:
     """订阅多维表格变更事件。
 
@@ -123,6 +131,7 @@ async def create_grid_view(
 __all__ = [
     "TitleReviewBitableError",
     "active_app_id",
+    "download_media",
     "subscribe_bitable",
     "batch_create_records",
     "update_record",

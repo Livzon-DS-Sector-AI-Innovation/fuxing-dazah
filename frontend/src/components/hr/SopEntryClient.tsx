@@ -1,17 +1,19 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Tooltip } from 'antd'
-import { DownloadOutlined, FileZipOutlined, ReloadOutlined, TagsOutlined } from '@ant-design/icons'
+import { App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from 'antd'
+import { DownloadOutlined, FileZipOutlined, ReloadOutlined, SendOutlined, TagsOutlined } from '@ant-design/icons'
 
 import {
   fetchSopTrainingEntries, generateSopTrainingMaterials, updateSopTrainingEntry,
   fetchSopClassifications, fetchSopPersonnel, exportSopTrainingEntries,
   fetchSopTrainingRecords, fetchDepartmentsAction,
+  transferSopTrainingEntry, batchTransferSopEntries,
 } from '@/actions/hr'
 import { usePermission } from '@/hooks/usePermission'
 import { downloadBase64File } from '@/lib/hr'
 import type { SopTrainingEntry, SopPersonnelOption } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 export default function SopEntryClient() {
   const { message } = App.useApp()
@@ -29,9 +31,12 @@ export default function SopEntryClient() {
   const [recordOptions, setRecordOptions] = useState<{ label: string; value: string }[]>([])
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
   const [generating, setGenerating] = useState(false)
+  const [transferring, setTransferring] = useState(false)
+  const [batchTransferring, setBatchTransferring] = useState(false)
 
   // 分类人员弹窗
   const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [current, setCurrent] = useState<SopTrainingEntry | null>(null)
   const [form] = Form.useForm()
   const [classOptions, setClassOptions] = useState<{ label: string; value: string }[]>([])
@@ -68,6 +73,31 @@ export default function SopEntryClient() {
       message.success('一套培训材料已生成（按分类人员）')
     } catch (e: any) { message.error(e.message || '生成失败') }
     finally { setGenerating(false) }
+  }
+
+  const handleTransfer = async (e: SopTrainingEntry) => {
+    setTransferring(true)
+    try {
+      const r = await transferSopTrainingEntry(e.id)
+      message.success(`已转培训（培训师：${r.data?.trainer || '未配置'}）`)
+      load()
+    } catch (err: any) { message.error(err.message || '转培训失败') }
+    finally { setTransferring(false) }
+  }
+
+  const handleBatchTransfer = async () => {
+    const ids = data
+      .filter((e) => selectedKeys.includes(e.id) && e.status !== '已转训')
+      .map((e) => e.id)
+    if (!ids.length) { message.warning('请勾选待转训记录'); return }
+    setBatchTransferring(true)
+    try {
+      const r = await batchTransferSopEntries(ids)
+      message.success(`已转培训 ${r.data?.transferred ?? ids.length} 条`)
+      setSelectedKeys([])
+      load()
+    } catch (err: any) { message.error(err.message || '批量转培训失败') }
+    finally { setBatchTransferring(false) }
   }
 
   const handleExport = async () => {
@@ -128,6 +158,7 @@ export default function SopEntryClient() {
       .map((en) => personnelOptions.find((p) => p.employee_number === en))
       .filter(Boolean)
       .map((p) => ({ employee_number: p!.employee_number, name: p!.name }))
+    setSaving(true)
     try {
       await updateSopTrainingEntry(current.id, {
         classification: v.classification,
@@ -137,6 +168,7 @@ export default function SopEntryClient() {
       setModalOpen(false)
       load()
     } catch (e: any) { message.error(e.message || '保存失败') }
+    finally { setSaving(false) }
   }
 
   const columns = useMemo(() => [
@@ -160,10 +192,15 @@ export default function SopEntryClient() {
       ),
     },
     {
-      title: '操作', width: 150, render: (_: any, r: SopTrainingEntry) => (
+      title: '操作', width: 220, render: (_: any, r: SopTrainingEntry) => (
         canManage ? (
           <Space size={4}>
             <Button type="text" size="small" icon={<TagsOutlined />} onClick={() => openPersonnelModal(r)}>分类人员</Button>
+            {r.status !== '已转训' && (
+              <Popconfirm title={`确认转培训？（将自动带出本部门一级培训师）`} onConfirm={() => handleTransfer(r)}>
+                <Button type="text" size="small" icon={<SendOutlined />} loading={transferring}>转培训</Button>
+              </Popconfirm>
+            )}
           </Space>
         ) : '-'
       ),
@@ -172,18 +209,16 @@ export default function SopEntryClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-[22px] font-semibold">SOP培训二级表</h1>
-          <p className="text-[13px] text-[var(--color-steel)]">
-            登记表「转培训」后按涉及部门自动收录；先「分类人员」再勾选生成一套材料（多选合并，内容并列体现）
-          </p>
-        </div>
-        <Space>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出培训清单</Button>
-          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        </Space>
-      </div>
+      <PageHeader
+        title="SOP培训二级表"
+        description="登记表「转培训」后按涉及部门自动收录；先「分类人员」再勾选生成一套材料（多选合并，内容并列体现）"
+        actions={
+          <Space>
+            <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出培训清单</Button>
+            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+          </Space>
+        }
+      />
       <Card>
         <Space className="mb-3" wrap>
           <Select allowClear showSearch style={{ width: 260 }} placeholder="按登记文件筛选"
@@ -194,6 +229,11 @@ export default function SopEntryClient() {
             filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
           <Select allowClear style={{ width: 130 }} placeholder="按状态筛选" value={status} onChange={(v) => setStatus(v)}
             options={[{ label: '待转训', value: '待转训' }, { label: '已转训', value: '已转训' }]} />
+          {canManage && (
+            <Popconfirm title={`确认转培训选中记录？（自动带出各部门一级培训师）`} onConfirm={handleBatchTransfer}>
+              <Button icon={<SendOutlined />} loading={batchTransferring}>批量转培训</Button>
+            </Popconfirm>
+          )}
           {canGenerateDoc && (
             <Button type="primary" icon={<FileZipOutlined />} loading={generating}
               onClick={handleBatchMaterials}>生成一套材料</Button>
@@ -208,7 +248,7 @@ export default function SopEntryClient() {
       </Card>
 
       <Modal title={`分类人员（${current?.department || ''}）`} open={modalOpen}
-        onCancel={() => setModalOpen(false)} onOk={handleSavePersonnel} width={560}
+        onCancel={() => setModalOpen(false)} onOk={handleSavePersonnel} confirmLoading={saving} width={560}
         okText="保存">
         <Form form={form} layout="vertical" className="mt-2">
           <Form.Item name="classification" label="自定义分类（选择后自动拉取该分类下人员）">
@@ -218,6 +258,7 @@ export default function SopEntryClient() {
           </Form.Item>
           <Form.Item name="personnel" label="分类人员（可自由选择）" rules={[{ required: true, message: '请选择人员' }]}>
             <Select mode="multiple" placeholder={current?.classification ? '选择人员' : '请先选择分类'} loading={personnelLoading}
+              maxTagCount="responsive"
               options={personnelOptions.map((p) => ({ label: `${p.name}（${p.employee_number}${p.position ? ` / ${p.position}` : ''}）`, value: p.employee_number }))}
               filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
           </Form.Item>

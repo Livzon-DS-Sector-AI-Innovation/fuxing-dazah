@@ -20,6 +20,7 @@ async def _lookup_open_id(name: str) -> str | None:
     """
     try:
         from sqlalchemy import text
+
         from app.core.database import async_session_factory
         async with async_session_factory() as db:
             r = await db.execute(

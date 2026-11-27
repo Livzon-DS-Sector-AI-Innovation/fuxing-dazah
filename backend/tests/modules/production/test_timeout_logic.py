@@ -731,7 +731,9 @@ def test_timeout_card_marks_deviation_and_rework_without_declaring_abnormal() ->
     assert "第 2 次执行（返工/重做）" in content
     assert "生产异常" not in content
     assert "预计时长（P80）" in content
-    assert "打开执行详情" in content
+    # 飞书提醒不带跳转链接，收件人直接回系统查看。
+    assert "打开执行详情" not in content
+    assert "http" not in content
 
 
 def test_timeout_scheduler_runs_every_ten_minutes() -> None:

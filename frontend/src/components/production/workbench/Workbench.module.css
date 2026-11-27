@@ -9,7 +9,8 @@
 .plannedCard { box-shadow: inset 0 1px 0 #fff, inset 0 -1px 0 rgba(55,53,47,.04), 0 5px 12px -6px rgba(55,53,47,.16); }
 .toolbar { padding: 16px 18px; border: 1px solid #ede9e4; border-radius: 12px; background: linear-gradient(135deg, #fff, #fafaf9); box-shadow: var(--wb-shadow); }
 .workbenchHeading { flex: 0 1 auto; min-width: 170px; margin: 0 !important; padding: 0 12px 0 0 !important; }
-.workbenchHeading::before, .workbenchHeading > div:first-child { display: none; }
+/* 用属性选择器而非 div:first-child —— 后者依赖 DOM 顺序，一旦 PageHeading 内部调整结构会把整个标题块静默隐藏 */
+.workbenchHeading::before, .workbenchHeading > div[aria-hidden="true"] { display: none; }
 .configPanel { padding: 14px; border: 1px solid #ede9e4; border-radius: 12px; background: #fafaf9; box-shadow: inset 0 2px 5px rgba(55,53,47,.045), 0 1px 0 #fff; }
 .cardActions { padding-top: 12px; border-top: 1px solid #f0eeec; box-shadow: inset 0 1px 0 #fff; }
 .cardActions button, .receiveButton,

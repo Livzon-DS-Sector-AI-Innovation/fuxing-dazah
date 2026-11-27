@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, NotFoundException
 from app.modules.equipment.deps import EquipmentAccessContext
+from app.modules.equipment.mcp_tools._helpers import _get_template_item_map
 from app.modules.equipment.models import Equipment, Location, WorkOrder
 from app.modules.equipment.models.inspection import InspectionTask
 from app.modules.equipment.models.inspection_template import (
@@ -23,11 +25,15 @@ from app.modules.equipment.models.inspection_template import (
     InspectionTemplate,
     InspectionTemplateItem,
 )
+from app.modules.equipment.repository.inspection import (
+    get_notes_by_task_and_equipment,
+)
 from app.modules.equipment.repository.work_order import (
     get_pending_work_orders_by_inspection_task,
 )
 from app.modules.equipment.service import inspection as svc
 from app.modules.equipment.service.inspection import (
+    add_equipment_note,
     close_task,
     complete_task,
     create_route,
@@ -737,6 +743,156 @@ async def test_submit_multi_device_not_in_task(
         )
 
 
+# ═══════════ 设备现场说明（计划外现象） ═════════════════════
+
+
+async def test_submit_with_note_persists(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    inspector: User,
+) -> None:
+    """提交检查结果带 note 应落一条现场说明并记录提交人。"""
+    from app.modules.equipment.models.inspection import InspectionEquipmentNote
+
+    items = await _get_template_items(db_session, template_with_items.id)
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [{"template_item_id": items[0].id, "result": "正常"}],
+        note="旁边地面有油渍，疑似法兰渗漏",
+        note_by=inspector.id,
+    )
+    notes = (
+        await db_session.execute(
+            select(InspectionEquipmentNote).where(
+                InspectionEquipmentNote.task_id == inspection_task.id,
+                InspectionEquipmentNote.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).scalars().all()
+    assert len(notes) == 1
+    assert notes[0].content == "旁边地面有油渍，疑似法兰渗漏"
+    assert notes[0].equipment_id == equipment_with_dept.id
+    assert notes[0].created_by == inspector.id
+
+
+async def test_resubmit_same_note_not_duplicated(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    inspector: User,
+) -> None:
+    """同一设备重试提交：相同说明只留一条，内容变了才追加。"""
+    from app.modules.equipment.models.inspection import InspectionEquipmentNote
+
+    items = await _get_template_items(db_session, template_with_items.id)
+    records = [{"template_item_id": items[0].id, "result": "正常"}]
+    for note in ("地面有油渍", "地面有油渍", "已处理油渍"):
+        await submit_equipment_check(
+            db_session,
+            inspection_task.id,
+            equipment_with_dept.id,
+            records,
+            note=note,
+            note_by=inspector.id,
+        )
+    notes = (
+        await db_session.execute(
+            select(InspectionEquipmentNote).where(
+                InspectionEquipmentNote.task_id == inspection_task.id,
+                InspectionEquipmentNote.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).scalars().all()
+    assert [n.content for n in notes] == ["地面有油渍", "已处理油渍"]
+
+
+async def test_add_equipment_note_running_task_appends(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+) -> None:
+    """执行中任务补记现场说明可多次追加。"""
+    from app.modules.equipment.models.inspection import InspectionEquipmentNote
+
+    await svc.add_equipment_note(
+        db_session, inspection_task.id, equipment_with_dept.id, "设备运行声音异常"
+    )
+    await svc.add_equipment_note(
+        db_session, inspection_task.id, equipment_with_dept.id, " 旁边地面有水  "
+    )
+    notes = (
+        await db_session.execute(
+            select(InspectionEquipmentNote).where(
+                InspectionEquipmentNote.task_id == inspection_task.id
+            )
+        )
+    ).scalars().all()
+    assert [n.content for n in notes] == ["设备运行声音异常", "旁边地面有水"]
+
+
+async def test_add_equipment_note_completed_task_rejected(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    inspector: User,
+    make_access_ctx: Callable[[User], EquipmentAccessContext],
+) -> None:
+    """任务完成后不再允许补记现场说明。"""
+    ctx = make_access_ctx(inspector)
+    items = await _get_template_items(db_session, template_with_items.id)
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [{"template_item_id": items[0].id, "result": "正常"}],
+    )
+    await complete_task(db_session, inspection_task.id, ctx)
+    with pytest.raises(AppException, match="不能补记现场说明"):
+        await svc.add_equipment_note(
+            db_session, inspection_task.id, equipment_with_dept.id, "事后补充"
+        )
+
+
+async def test_abnormal_work_order_includes_note(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+) -> None:
+    """异常自动建单时现场说明应拼入工单故障描述。"""
+    items = await _get_template_items(db_session, template_with_items.id)
+    await svc.add_equipment_note(
+        db_session, inspection_task.id, equipment_with_dept.id, "法兰处渗漏"
+    )
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [
+            {
+                "template_item_id": items[0].id,
+                "result": "异常",
+                "actual_value": "32",
+            }
+        ],
+    )
+    wo = (
+        await db_session.execute(
+            select(WorkOrder).where(
+                WorkOrder.inspection_task_id == inspection_task.id
+            )
+        )
+    ).scalar_one()
+    assert "巡检发现异常" in wo.fault_description
+    assert "现场说明：法兰处渗漏" in wo.fault_description
+
+
 async def test_submit_route_device_not_on_route(
     db_session: AsyncSession,
     inspector: User,
@@ -1022,6 +1178,96 @@ async def test_submit_all_normal_no_work_order(
         db_session, inspection_task.id
     )
     assert len(pending) == 0
+
+
+async def test_submit_anomaly_auto_assigns_maintainer(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    department: Department,
+) -> None:
+    """存在同部门 repair 角色候选人时，异常工单自动指派首位维修人。"""
+    from sqlalchemy import select as sa_select
+
+    from app.modules.equipment.models import (
+        EquipmentPersonnel,
+        EquipmentPersonnelRole,
+        EquipmentRole,
+    )
+    from app.modules.equipment.service.personnel import REPAIR_ROLE_CODE
+
+    # repair 角色是自动指派功能的预置配置（code 有唯一索引），已配置过的库
+    # （含开发库）里已存在，直接 INSERT 会撞唯一键
+    role = (
+        await db_session.execute(
+            sa_select(EquipmentRole).where(
+                EquipmentRole.code == REPAIR_ROLE_CODE,
+                EquipmentRole.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).scalars().first()
+    if role is None:
+        role = EquipmentRole(name="维修工", code=REPAIR_ROLE_CODE)
+        db_session.add(role)
+        await db_session.flush()
+
+    maintainer = User(
+        name="自动指派维修工", employee_no=f"EMP-AS-{uuid.uuid4().hex[:8]}"
+    )
+    db_session.add(maintainer)
+    await db_session.flush()
+
+    person = EquipmentPersonnel(
+        name=maintainer.name,
+        user_id=maintainer.id,
+        department=department.name,
+    )
+    db_session.add(person)
+    await db_session.flush()
+    db_session.add(
+        EquipmentPersonnelRole(personnel_id=person.id, role_id=role.id)
+    )
+    await db_session.flush()
+
+    items = await _get_template_items(db_session, template_with_items.id)
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [{"template_item_id": items[0].id, "result": "异常", "remark": "温度超标"}],
+    )
+
+    pending = await get_pending_work_orders_by_inspection_task(
+        db_session, inspection_task.id
+    )
+    assert len(pending) == 1
+    wo = pending[0]
+    assert wo.assignee_id == maintainer.id
+    assert wo.assigned_at is not None
+
+
+async def test_submit_anomaly_without_candidate_leaves_unassigned(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+) -> None:
+    """无 repair 角色候选人时工单照常创建，维修人留空待人工指派。"""
+    items = await _get_template_items(db_session, template_with_items.id)
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [{"template_item_id": items[0].id, "result": "异常", "remark": "温度超标"}],
+    )
+
+    pending = await get_pending_work_orders_by_inspection_task(
+        db_session, inspection_task.id
+    )
+    assert len(pending) == 1
+    assert pending[0].assignee_id is None
+    assert pending[0].assigned_at is None
 
 
 async def test_duplicate_work_order_not_created(
@@ -1411,3 +1657,217 @@ async def test_photo_magic_bytes_extension(
         )
 
     assert str(captured["file_name"]).endswith(f".{expected_ext}")
+
+
+# ═══════════ 现场说明与建单健壮性 ═══════════════════════════════
+
+
+async def test_work_order_no_collision_retry_keeps_submission(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    inspector: User,
+) -> None:
+    """工单号撞号重试只回滚工单插入，不应丢巡检记录和现场说明。"""
+    dup_no = "WO-29990101-0001"
+    db_session.add(
+        WorkOrder(
+            work_order_no=dup_no,
+            equipment_id=equipment_with_dept.id,
+            order_type="异常处理",
+            priority="中",
+            status="待处理",
+            fault_description="占位工单",
+        )
+    )
+    await db_session.flush()
+
+    items = await _get_template_items(db_session, template_with_items.id)
+    fresh_no = "WO-29990101-0002"
+    with patch(
+        "app.modules.equipment.service.inspection.generate_work_order_no",
+        new=AsyncMock(side_effect=[dup_no, fresh_no]),
+    ):
+        created = await submit_equipment_check(
+            db_session,
+            inspection_task.id,
+            equipment_with_dept.id,
+            [
+                {
+                    "template_item_id": items[0].id,
+                    "result": "异常",
+                    "remark": "温度超标",
+                }
+            ],
+            note="现场有异味",
+            note_by=inspector.id,
+        )
+
+    assert len(created) == 1
+    records = (
+        await db_session.execute(
+            select(InspectionRecord).where(
+                InspectionRecord.task_id == inspection_task.id,
+                InspectionRecord.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).scalars().all()
+    assert len(records) == 1
+    notes = await get_notes_by_task_and_equipment(
+        db_session, inspection_task.id, equipment_with_dept.id
+    )
+    assert [n.content for n in notes] == ["现场有异味"]
+    pending = await get_pending_work_orders_by_inspection_task(
+        db_session, inspection_task.id
+    )
+    assert len(pending) == 1
+    assert pending[0].work_order_no == fresh_no
+
+
+async def test_note_after_anomaly_submission_reaches_work_order(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    inspector: User,
+) -> None:
+    """异常工单生成后再补记的现场说明，应追加到工单故障描述。"""
+    items = await _get_template_items(db_session, template_with_items.id)
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [
+            {
+                "template_item_id": items[0].id,
+                "result": "异常",
+                "remark": "温度超标",
+            }
+        ],
+    )
+    pending = await get_pending_work_orders_by_inspection_task(
+        db_session, inspection_task.id
+    )
+    assert len(pending) == 1
+    wo_id = pending[0].id
+    assert "地面有油渍" not in (pending[0].fault_description or "")
+
+    await add_equipment_note(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        "补充：地面有油渍，疑似法兰渗漏",
+        created_by=inspector.id,
+    )
+
+    wo = await db_session.get(WorkOrder, wo_id)
+    assert wo is not None
+    assert "地面有油渍" in (wo.fault_description or "")
+
+
+async def test_add_note_rejects_overlong_content(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+) -> None:
+    """现场说明超过 2000 字应拒绝（与 HTTP 接口上限一致）。"""
+    with pytest.raises(AppException):
+        await add_equipment_note(
+            db_session,
+            inspection_task.id,
+            equipment_with_dept.id,
+            "油" * 2001,
+        )
+
+
+async def test_submit_rejects_overlong_note(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+) -> None:
+    """提交时携带的现场说明超过 2000 字也应拒绝。"""
+    items = await _get_template_items(db_session, template_with_items.id)
+    with pytest.raises(AppException):
+        await submit_equipment_check(
+            db_session,
+            inspection_task.id,
+            equipment_with_dept.id,
+            [{"template_item_id": items[0].id, "result": "正常"}],
+            note="油" * 2001,
+        )
+
+
+async def test_template_item_map_filters_by_equipment(
+    db_session: AsyncSession,
+    equipment_with_dept: Equipment,
+    other_equipment: Equipment,
+    template_with_items: InspectionTemplate,
+) -> None:
+    """设备巡检多设备任务：每台设备只能看到自己绑定的模板项。"""
+    tpl2 = InspectionTemplate(name=f"设备二模板-{uuid.uuid4().hex[:6]}")
+    db_session.add(tpl2)
+    await db_session.flush()
+    db_session.add(
+        InspectionTemplateItem(
+            template_id=tpl2.id,
+            item_name="设备二专属项",
+            sort_order=1,
+        )
+    )
+    await db_session.flush()
+
+    task_like = SimpleNamespace(
+        route_id=None,
+        equipment_templates={
+            str(equipment_with_dept.id): [str(template_with_items.id)],
+            str(other_equipment.id): [str(tpl2.id)],
+        },
+        template_ids=None,
+    )
+    mapping = await _get_template_item_map(
+        db_session, task_like, other_equipment.id
+    )
+    assert "设备二专属项" in mapping
+    assert "温度检查" not in mapping
+
+
+async def test_submit_note_retry_not_duplicated_after_other_note(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    inspector: User,
+) -> None:
+    """提交说明 X、补记 Y 后重试提交 X：X 不应重复追加。"""
+    items = await _get_template_items(db_session, template_with_items.id)
+    records = [{"template_item_id": items[0].id, "result": "正常"}]
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        records,
+        note="地面有油渍",
+        note_by=inspector.id,
+    )
+    await add_equipment_note(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        "运行声音异常",
+        created_by=inspector.id,
+    )
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        records,
+        note="地面有油渍",
+        note_by=inspector.id,
+    )
+
+    notes = await get_notes_by_task_and_equipment(
+        db_session, inspection_task.id, equipment_with_dept.id
+    )
+    assert [n.content for n in notes] == ["地面有油渍", "运行声音异常"]

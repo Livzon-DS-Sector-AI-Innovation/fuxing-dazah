@@ -12,6 +12,7 @@ import {
 } from '@/actions/meter'
 import { reportDownloadUrl, reportPreviewUrl, analyzeReportFilesClient, batchUploadReportsClient } from '@/lib/api/meter'
 import { ReportMatchTable, ReportMatchRow, isCalibrationDateValid } from '@/components/meter/ReportMatchTable'
+import { usePermission } from '@/hooks/usePermission'
 import dayjs from 'dayjs'
 import dynamic from 'next/dynamic'
 
@@ -32,6 +33,13 @@ interface Props {
 
 export function ReportDialog({ open, record, source, onClose }: Props) {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canUpload = hasPermission('meter:report:upload')
+  const canDelete = hasPermission('meter:report:delete')
+  // AI 提取日期会回写台账检定日期，按弹窗来源对应台账的 update 权限（与后端 ledger_date_write 对齐）
+  const canExtractDate = hasPermission(
+    source === 'instrument' ? 'meter:instrument:update' : 'meter:gas-detector:update'
+  )
   const router = useRouter()
   const [reports, setReports] = useState<ReportResponse[]>([])
   const [loading, setLoading] = useState(false)
@@ -99,6 +107,10 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
     setCertEdit(null)
     setPreviewImage(null)
     setActiveTab('history')
+    // seq 递增后 finally 里的条件复位不会再执行，这里必须显式复位，
+    // 否则识别/上传中关闭弹窗，重开后 matching/uploading 永久卡 true
+    setMatching(false)
+    setUploading(false)
     onClose()
   }
 
@@ -302,12 +314,14 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
       render: (v: string | null, r: ReportResponse) => (
         <Space size="small">
           <span>{v || '-'}</span>
-          <Button
-            size="small"
-            type="text"
-            icon={<EditOutlined />}
-            onClick={() => { setCertEdit(r); setCertValue(v ?? '') }}
-          />
+          {canUpload && (
+            <Button
+              size="small"
+              type="text"
+              icon={<EditOutlined />}
+              onClick={() => { setCertEdit(r); setCertValue(v ?? '') }}
+            />
+          )}
         </Space>
       ),
     },
@@ -338,14 +352,16 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
             <a href={reportDownloadUrl(r.id)} target="_blank" rel="noreferrer">
               <Button size="small" icon={<DownloadOutlined />}>下载</Button>
             </a>
-            {isPdf(r.content_type) && (
+            {isPdf(r.content_type) && canExtractDate && (
               <Tooltip title="用 AI 识别校准日期并自动更新仪表">
                 <Button size="small" icon={<CalendarOutlined />} onClick={() => handleExtractDate(r)}>提取日期</Button>
               </Tooltip>
             )}
-            <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}>
-              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-            </Popconfirm>
+            {canDelete && (
+              <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            )}
           </Space>
         </div>
         )
@@ -381,7 +397,7 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
               />
             ),
           },
-          {
+          ...(canUpload ? [{
             key: 'upload',
             label: '上传报告',
             children: (
@@ -430,7 +446,7 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
                 )}
               </div>
             ),
-          },
+          }] : [])
         ]}
       />
 

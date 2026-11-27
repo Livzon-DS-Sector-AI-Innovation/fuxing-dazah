@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -117,7 +118,13 @@ class TestBatchRequests:
     def test_export_report_max_200(self) -> None:
         """批量导出报告单次最多 200 份。"""
         with pytest.raises(ValidationError):
-            ExportReportRequest.model_validate({"ids": [str(i) for i in range(201)]})
+            ExportReportRequest.model_validate({"ids": [str(uuid4()) for _ in range(201)]})
+
+    def test_batch_ids_must_be_uuid(self) -> None:
+        """批量请求的 ID 必须是合法 UUID，非法值直接拒绝。"""
+        with pytest.raises(ValidationError):
+            BatchDeleteRequest.model_validate({"ids": ["not-a-uuid"]})
+        assert BatchDeleteRequest.model_validate({"ids": [str(uuid4())]}).ids
 
     def test_file_match_no_limit(self) -> None:
         """文件名批量匹配已取消单次 200 上限。"""

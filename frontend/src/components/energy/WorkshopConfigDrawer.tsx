@@ -1,7 +1,8 @@
 'use client'
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Drawer, Form, Input, Select, Button, Space, Switch, TimePicker } from 'antd'
+import { App, Drawer, Form, Select, Button, Space, Switch, TimePicker } from 'antd'
 import dayjs from 'dayjs'
 import { useEnergyStore } from '@/stores/energy'
 import {
@@ -172,13 +173,13 @@ export function WorkshopConfigDrawer({ onRefresh }: WorkshopConfigDrawerProps) {
   return (
       <Drawer
         title={isEdit ? '编辑车间预警配置' : '新建车间预警配置'}
-        size={520}
+        size={560}
         open={workshopConfigDrawerOpen}
         onClose={closeWorkshopConfigDrawer}
         destroyOnHidden
         styles={{
-          header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px' },
-          body: { padding: '24px' },
+          header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px', background: 'linear-gradient(110deg, #ffffff 0%, #f8f6ff 100%)' },
+          body: { padding: '24px', background: '#fafaf9' },
         }}
         extra={
           <Space>
@@ -228,10 +229,10 @@ export function WorkshopConfigDrawer({ onRefresh }: WorkshopConfigDrawerProps) {
                 value: w.workshop,
                 key: `${w.device_name}__${w.workshop}`,
               }))}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
               style={{ width: '100%' }}
               size="large"
               notFoundContent={filterEnergyType ? '该能源类型下暂无已启用的设备配置' : '暂无已启用的设备配置'}
@@ -243,10 +244,10 @@ export function WorkshopConfigDrawer({ onRefresh }: WorkshopConfigDrawerProps) {
               mode="multiple"
               placeholder="选择预警负责人"
               options={personnelOptions}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
               style={{ width: '100%' }}
             />
           </Form.Item>

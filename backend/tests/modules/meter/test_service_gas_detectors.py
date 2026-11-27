@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DuplicateException, NotFoundException
+from app.modules.meter import repository as repo
 from app.modules.meter import service
 from app.modules.meter.schemas import (
     GasDetectorCreate,
@@ -137,6 +139,40 @@ class TestBatchCreateGasDetectors:
         assert result["total"] == 2
         assert result["created"] == 1
         assert result["skipped"] == 1
+
+    async def test_batch_create_isolates_row_failure(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """单行插入抛异常只跳过该行，前后行仍落库（SAVEPOINT 隔离）。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        real_create = repo.create_gas_detector
+        state = {"calls": 0}
+
+        async def flaky_create(db: Any, data: dict[str, Any]) -> Any:
+            state["calls"] += 1
+            if state["calls"] == 2:
+                # SAVEPOINT 内制造真实数据库错误（除零），验证只回滚该行
+                await db.execute(text("SELECT 1/0"))
+            return await real_create(db, data)
+
+        monkeypatch.setattr(repo, "create_gas_detector", flaky_create)
+        suffix = uuid4().hex[:8]
+        result = await service.batch_create_gas_detectors(
+            db_session,
+            [
+                {"instrument_name": "第一行", "product_number": f"ISO-A-{suffix}"},
+                {"instrument_name": "第二行", "product_number": f"ISO-B-{suffix}"},
+                {"instrument_name": "第三行", "product_number": f"ISO-C-{suffix}"},
+            ],
+        )
+        assert result["created"] == 2
+        assert result["skipped"] == 1
+        statuses = {r["index"]: r["status"] for r in result["results"]}
+        assert statuses == {0: "created", 1: "skipped", 2: "created"}
+        created = await repo.get_gas_detector_by_id(
+            db_session, UUID(result["results"][2]["id"])
+        )
+        assert created is not None
 
 
 class TestGetAllIdsAndDepartments:

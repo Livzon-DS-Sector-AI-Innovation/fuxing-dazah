@@ -23,6 +23,7 @@ from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.equipment import Equipment
 from app.modules.equipment.models.inspection import (
+    InspectionEquipmentNote,
     InspectionPhoto,
     InspectionRoute,
     InspectionRouteSchedule,
@@ -43,6 +44,7 @@ from app.modules.equipment.schemas.inspection import (
     InspectionScheduleResponse,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
+from app.modules.equipment.service.personnel import derive_maintainer_for_equipment
 from app.modules.equipment.service.work_order import (
     _MAX_RETRIES,
     generate_work_order_no,
@@ -60,6 +62,9 @@ _VALID_TRANSITIONS: dict[str, list[str]] = {
     "已完成": ["已关闭"],
     "已关闭": [],
 }
+
+# 与 HTTP schema（EquipmentCheckResult.note.max_length）保持一致
+_MAX_NOTE_LENGTH = 2000
 
 
 def _parse_numeric_value(s: str | None) -> Decimal | None:
@@ -484,7 +489,7 @@ async def _create_anomaly_work_order(
     task: InspectionTask,
     equipment_id: uuid.UUID,
     abnormal_records: list[InspectionRecord],
-    template_item_map: dict[uuid.UUID, str],
+    template_item_map: dict[str, str],
 ) -> WorkOrder | None:
     """为巡检异常自动创建工单。
 
@@ -494,7 +499,8 @@ async def _create_anomaly_work_order(
     from app.modules.equipment.models.work_order import WorkOrder as WOModel
 
     # 获取设备信息
-    equipment = await repo.get_equipment_by_id(db, equipment_id)
+    # 无范围读取：巡检任务本身已通过归属校验，此处只是按其记录联动建单。
+    equipment = await repo.get_equipment_unscoped(db, equipment_id)
     if not equipment:
         return None
 
@@ -509,15 +515,40 @@ async def _create_anomaly_work_order(
         if dept_info:
             responsible_user_id = dept_info.get("leader_id")
 
+    # 自动指派维修人：按设备分类从同部门人员池（repair 角色）推导首位候选。
+    # 非关键路径：推导失败只记日志、不阻塞建单（SAVEPOINT 隔离，避免失败的语句
+    # 让本事务进入 aborted 状态）。责任人确定不了时不指派——start_work_order
+    # 要求责任人与维修人都非空，派了也开不了工，留给超时监控提醒主管。
+    assignee_user_id: uuid.UUID | None = None
+    if responsible_user_id is not None:
+        try:
+            async with db.begin_nested():
+                assignee_user_id = await derive_maintainer_for_equipment(db, equipment)
+        except Exception:
+            logger.exception(
+                "自动指派维修人失败，转人工指派: equipment_id=%s", equipment_id,
+            )
+            assignee_user_id = None
+
     # 构建异常描述
     desc_parts: list[str] = []
     for r in abnormal_records:
-        item_name = template_item_map.get(r.template_item_id, "未知检查项")
+        # MCP 路径传入的是 str id，ORM 属性 flush 后仍是 str（未 re-fetch），
+        # 统一按 str 查表，避免 UUID/str 键不匹配导致全部「未知检查项」
+        item_name = template_item_map.get(str(r.template_item_id), "未知检查项")
         remark = r.remark or ""
         desc_parts.append(f"{item_name}—{remark}" if remark else item_name)
     fault_description = "巡检发现异常：" + "；".join(desc_parts)
 
-    # 生成工单号 + 创建工单（含并发重试）
+    # 附设备现场说明（计划外现象），让维修人一并看到
+    notes = await repo.get_notes_by_task_and_equipment(db, task.id, equipment_id)
+    note_texts = [n.content.strip() for n in notes if n.content and n.content.strip()]
+    if note_texts:
+        fault_description += "。现场说明：" + "；".join(note_texts)
+
+    # 生成工单号 + 创建工单（含并发重试）。
+    # 撞号只回滚工单插入的 SAVEPOINT：调用方已 flush 了巡检记录和现场说明，
+    # 整事务 rollback 会一并丢数据，重试时访问过期 ORM 对象还会 MissingGreenlet。
     wo: WOModel | None = None
     for attempt in range(_MAX_RETRIES):
         new_wo_no = await generate_work_order_no(db)
@@ -529,23 +560,25 @@ async def _create_anomaly_work_order(
             priority=equipment.importance,
             status="待处理",
             responsible_person_id=responsible_user_id,
+            assignee_id=assignee_user_id,
+            assigned_at=app_time.now() if assignee_user_id else None,
             reporter_id=task.assigned_to,
             fault_description=fault_description,
             inspection_task_id=task.id,
             original_equipment_status=equipment.status,
         )
-        db.add(wo)
         # 异常处理工单不自动改设备状态（问题可能只是仪表偏差，设备仍在运行）
         try:
-            await db.flush()
+            async with db.begin_nested():
+                db.add(wo)
+                await db.flush()
             break
         except IntegrityError:
             if attempt < _MAX_RETRIES - 1:
                 logger.debug(
                     "异常工单号冲突重试: attempt=%d/%d wo_no=%s",
-                    attempt + 1, _MAX_RETRIES, wo.work_order_no,
+                    attempt + 1, _MAX_RETRIES, new_wo_no,
                 )
-                await db.rollback()
                 continue
             raise
 
@@ -568,25 +601,84 @@ async def _create_anomaly_work_order(
         wo, equipment, task, responsible_user_id_str,
     )
 
+    # 维修人通知（非关键路径，fire-and-forget；通知协程自建 session，
+    # 仅查被指派人飞书账号，不依赖本事务未提交的工单行）
+    if assignee_user_id:
+        from app.modules.equipment.service.work_order import (
+            notify_assignment_in_background,
+        )
+
+        notify_assignment_in_background(
+            assignee_id=assignee_user_id,
+            work_order_no=wo.work_order_no,
+            equipment_name=equipment.name,
+            order_type=wo.order_type,
+            priority=wo.priority,
+        )
+
     return wo
 
 
-async def submit_equipment_check(
+def _build_note_data(
+    task_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    text: str,
+    created_by: uuid.UUID | None,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "task_id": str(task_id),
+        "equipment_id": str(equipment_id),
+        "content": text,
+    }
+    if created_by:
+        data["created_by"] = str(created_by)
+    return data
+
+
+async def _find_duplicate_note(
     db: AsyncSession,
     task_id: uuid.UUID,
     equipment_id: uuid.UUID,
-    records: list[dict[str, Any]],
-    ctx: EquipmentAccessContext | None = None,
-) -> list[InspectionRecord]:
-    task = await _get_task(db, task_id)
-    if ctx:
-        await verify_write_ownership(ctx, task, "created_by", "user_id")
-    if task.status != "执行中":
-        raise AppException(
-            message="任务未在'执行中'状态，不能提交检查结果"
-        )
+    text: str,
+    created_by: uuid.UUID | None,
+) -> InspectionEquipmentNote | None:
+    """重试去重：同任务 + 设备 + 作者 + 内容的说明视为重复提交。
 
-    # 校验设备是否存在且属于此任务
+    shortcut: 全量内容比对、无幂等键，工人重复陈述同一句话会被合并；
+    需要逐条留痕时改为由调用方传幂等键 + 唯一索引。
+    """
+    notes = await repo.get_notes_by_task_and_equipment(
+        db, task_id, equipment_id
+    )
+    for n in notes:
+        if not n.content or n.content.strip() != text:
+            continue
+        if created_by is None or n.created_by == created_by:
+            return n
+    return None
+
+
+async def _append_note_to_open_work_order(
+    db: AsyncSession,
+    task_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    text: str,
+) -> None:
+    """异常工单已生成后再补的说明，追加到工单故障描述（不重复通知）。"""
+    wo = await repo.get_unclosed_work_order(db, task_id, equipment_id)
+    if not wo:
+        return
+    base = (wo.fault_description or "").rstrip("。")
+    wo.fault_description = (
+        f"{base}；现场补充：{text}" if base else f"现场补充：{text}"
+    )
+    await db.flush()
+
+
+async def _validate_task_equipment(
+    db: AsyncSession, task: InspectionTask, equipment_id: uuid.UUID
+) -> None:
+    """校验设备存在且属于该巡检任务（三种任务模式各自判定）。"""
     eq_result = await db.execute(
         select(Equipment).where(
             Equipment.id == equipment_id, Equipment.is_deleted == False  # noqa: E712
@@ -618,6 +710,27 @@ async def submit_equipment_check(
         raise AppException(
             message=f"设备 {equipment_id} 不匹配此巡检任务的设备"
         )
+
+
+async def submit_equipment_check(
+    db: AsyncSession,
+    task_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    records: list[dict[str, Any]],
+    ctx: EquipmentAccessContext | None = None,
+    note: str | None = None,
+    note_by: uuid.UUID | None = None,
+) -> list[InspectionRecord]:
+    task = await _get_task(db, task_id)
+    if ctx:
+        await verify_write_ownership(ctx, task, "created_by", "user_id")
+    if task.status != "执行中":
+        raise AppException(
+            message="任务未在'执行中'状态，不能提交检查结果"
+        )
+
+    # 校验设备是否存在且属于此任务
+    await _validate_task_equipment(db, task, equipment_id)
 
     for r in records:
         r["task_id"] = str(task_id)
@@ -686,6 +799,25 @@ async def submit_equipment_check(
     await repo.soft_delete_records_by_task_equipment(db, task_id, equipment_id)
     created_records = await repo.create_inspection_records(db, records)
 
+    # 设备现场说明（计划外现象，不属任何检查项）——追加式记录。
+    # 同一设备重试提交（照片上传失败/Agent 超时）时说明不重复追加。
+    if note and note.strip():
+        text = note.strip()
+        if len(text) > _MAX_NOTE_LENGTH:
+            raise AppException(
+                message=f"现场说明不能超过 {_MAX_NOTE_LENGTH} 字"
+            )
+        existing = await _find_duplicate_note(
+            db, task_id, equipment_id, text, note_by
+        )
+        if existing is None:
+            await repo.create_equipment_note(
+                db, _build_note_data(task_id, equipment_id, text, note_by)
+            )
+            await _append_note_to_open_work_order(
+                db, task_id, equipment_id, text
+            )
+
     # 筛选异常记录
     abnormal = [r for r in created_records if r.result == "异常"]
 
@@ -702,7 +834,10 @@ async def submit_equipment_check(
                 InspectionTemplateItem.item_name,
             ).where(InspectionTemplateItem.id.in_(item_ids))
         )
-        template_item_map = {row.id: row.item_name for row in item_result.all()}
+        # 键统一为 str：MCP 路径的 records 里 template_item_id 是 str
+        template_item_map = {
+            str(row.id): row.item_name for row in item_result.all()
+        }
 
         # 重新获取 task（含 assignee 关系，用于工单 reporter_id）
         refreshed_task = await _refetch_task(db, task_id)
@@ -712,6 +847,46 @@ async def submit_equipment_check(
         )
 
     return created_records
+
+
+async def add_equipment_note(
+    db: AsyncSession,
+    task_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    content: str,
+    created_by: uuid.UUID | None = None,
+) -> InspectionEquipmentNote:
+    """为执行中的巡检任务追加一条设备现场说明（计划外突发现象）。
+
+    与提交检查结果解耦：机器人对话中工人随口提到的现场情况可立即记录，
+    不必等提交时机；同设备允许多条追加。
+    """
+    task = await _get_task(db, task_id)
+    if task.status != "执行中":
+        raise AppException(
+            message="任务未在'执行中'状态，不能补记现场说明"
+        )
+
+    await _validate_task_equipment(db, task, equipment_id)
+
+    text = (content or "").strip()
+    if not text:
+        raise AppException(message="现场说明内容不能为空")
+    if len(text) > _MAX_NOTE_LENGTH:
+        raise AppException(message=f"现场说明不能超过 {_MAX_NOTE_LENGTH} 字")
+
+    # 工具调用超时后的原样重试：返回已存在的那条，不再追加
+    existing = await _find_duplicate_note(
+        db, task_id, equipment_id, text, created_by
+    )
+    if existing is not None:
+        return existing
+
+    note = await repo.create_equipment_note(
+        db, _build_note_data(task_id, equipment_id, text, created_by)
+    )
+    await _append_note_to_open_work_order(db, task_id, equipment_id, text)
+    return note
 
 
 async def skip_equipment_check(
@@ -1045,7 +1220,8 @@ async def get_task_detail(
     task = await _get_task(db, task_id)
     records = await repo.get_records_by_task(db, task_id)
     photos = await repo.get_photos_by_task(db, task_id)
-    return {"task": task, "records": records, "photos": photos}
+    notes = await repo.get_notes_by_task(db, task_id)
+    return {"task": task, "records": records, "photos": photos, "notes": notes}
 
 
 # ═══════════ 定时任务 ═══════════
@@ -1078,7 +1254,7 @@ def _validate_cron(expression: str) -> None:
         ) from e
 
 
-async def _batch_fetch_user_names(
+async def batch_fetch_user_names(
     db: AsyncSession, user_ids: set[uuid.UUID],
 ) -> dict[uuid.UUID, str]:
     """Batch-fetch user names for a set of user IDs."""
@@ -1116,7 +1292,7 @@ async def get_schedules_by_route(
         for s in schedules
         if s.assigned_to is not None
     }
-    name_map = await _batch_fetch_user_names(db, user_ids)
+    name_map = await batch_fetch_user_names(db, user_ids)
 
     result: list[InspectionScheduleResponse] = []
     for s in schedules:
@@ -1181,9 +1357,9 @@ async def get_trend(
     ctx: EquipmentAccessContext,
 ) -> TrendResponse:
     """参数趋势分析"""
-    from app.modules.equipment.repository.equipment import get_equipment_by_id
+    from app.modules.equipment.repository.equipment import get_equipment_unscoped
 
-    eq = await get_equipment_by_id(db, equipment_id)
+    eq = await get_equipment_unscoped(db, equipment_id)
     # 单设备:按数据范围校验设备归属部门,越权直接 403(与列表过滤口径一致)
     if not ctx.is_unrestricted and (
         eq is None or eq.department_id not in ctx.visible_department_ids

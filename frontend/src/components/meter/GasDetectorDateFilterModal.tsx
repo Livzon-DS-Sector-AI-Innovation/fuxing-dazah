@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Button, Input, Modal, Select, Space, Tree } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import type { TreeDataNode } from 'antd'
@@ -96,6 +96,11 @@ function buildStatsFilters(keyword: string, columnFilters: Record<string, string
   if (keyword) filters.keyword = keyword
   for (const [field, value] of Object.entries(columnFilters)) {
     if (!value) continue
+    // 「报告」列筛选存的是 report_count（'true'/'false'），统计/导出接口要的是 has_report 布尔
+    if (field === 'report_count') {
+      filters.has_report = value === 'true'
+      continue
+    }
     const key = TEXT_LIKE_FIELDS.has(field) ? `${field}_like` : field
     ;(filters as Record<string, unknown>)[key] = value
   }
@@ -111,6 +116,18 @@ export function GasDetectorDateFilterModal({ open, initialField, columnFilters, 
   const [searchText, setSearchText] = useState('')
   const [sortMode, setSortMode] = useState<'name_asc' | 'count_desc'>('count_desc')
   const [exporting, setExporting] = useState(false)
+  // 请求序号：快速切换日期字段时旧响应后到不得覆盖新字段的结果
+  const reqSeqRef = useRef(0)
+
+  const loadStats = useCallback((field: 'calibration_date' | 'next_calibration_date') => {
+    const seq = ++reqSeqRef.current
+    setLoading(true)
+    const filters = buildStatsFilters(keyword, columnFilters)
+    fetchGasDetectorDateStats(field, filters)
+      .then((res) => { if (seq === reqSeqRef.current) setStats(res) })
+      .catch(() => { if (seq === reqSeqRef.current) message.error('获取日期统计失败') })
+      .finally(() => { if (seq === reqSeqRef.current) setLoading(false) })
+  }, [columnFilters, keyword, message])
 
   useEffect(() => {
     if (!open) return
@@ -119,28 +136,18 @@ export function GasDetectorDateFilterModal({ open, initialField, columnFilters, 
       setDateField(initialField)
       setCheckedKeys([])
       setSearchText('')
-      setLoading(true)
-    const filters = buildStatsFilters(keyword, columnFilters)
-    fetchGasDetectorDateStats(initialField, filters)
-      .then((res) => setStats(res))
-      .catch(() => message.error('获取日期统计失败'))
-      .finally(() => setLoading(false))
+      loadStats(initialField)
     }, 0)
     return () => clearTimeout(timer)
-  }, [open, initialField, columnFilters, keyword, message])
+  }, [open, initialField, loadStats])
 
   const handleFieldChange = useCallback(
     (val: 'calibration_date' | 'next_calibration_date') => {
       setDateField(val)
       setCheckedKeys([])
-      setLoading(true)
-      const filters = buildStatsFilters(keyword, columnFilters)
-      fetchGasDetectorDateStats(val, filters)
-        .then((res) => setStats(res))
-        .catch(() => message.error('获取日期统计失败'))
-        .finally(() => setLoading(false))
+      loadStats(val)
     },
-    [columnFilters, keyword, message],
+    [loadStats],
   )
 
   const treeData = useMemo(

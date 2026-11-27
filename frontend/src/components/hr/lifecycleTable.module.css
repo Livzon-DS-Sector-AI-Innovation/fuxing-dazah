@@ -1,0 +1,9 @@
+/* 人员全周期台账大字号（用户拍板 14px，2026-11-17）
+   仅 HR 人员全周期五页使用（编制/档案/入职/离职/工伤台账），CSS Modules 隔离类名。
+   antd 的类名必须包 :global()——否则会被当成本模块的类名一起哈希，选择器永远匹配不到
+   （此前即因此失效，表格一直显示 antd 默认 13px）。 */
+.tableLg :global(.ant-table-thead) > tr > th,
+.tableLg :global(.ant-table-thead) > tr > td,
+.tableLg :global(.ant-table-tbody) > tr > td {
+  font-size: 14px;
+}

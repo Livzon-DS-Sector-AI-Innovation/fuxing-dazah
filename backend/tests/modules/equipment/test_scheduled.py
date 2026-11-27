@@ -1,8 +1,10 @@
-"""equipment.scheduled 统一调度任务测试 — 工单超时扫描。
+"""equipment.scheduled 统一调度任务测试 — 派单超时扫描。
 
-验证从平台 feishu/sync 迁入的超时扫描：
+验证从平台 feishu/sync 迁入的派单超时扫描：
 - TIMEOUT_SCAN_TASK 为 60 秒间隔的统一调度任务定义
-- 超时未接单的工单触发主管通知
+- 待处理工单未指派超时 → 通知主管及时指派（分支 a）
+- 待处理工单已指派但未开工超时 → 通知主管催办（分支 b）
+- 同一工单 60 分钟冷却内不重复提醒
 - 未配置部门 ID 时安全跳过
 """
 
@@ -75,7 +77,7 @@ async def test_scan_notifies_leader_for_timeout_work_order(
     make_access_ctx: Callable[[User], EquipmentAccessContext],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """超时未接单的工单 → 通知设备主管。"""
+    """未指派超时的待处理工单 → 通知主管及时指派。"""
     ctx = make_access_ctx(reporter)
     wo = await create_work_order(
         db_session,
@@ -88,6 +90,97 @@ async def test_scan_notifies_leader_for_timeout_work_order(
     wo.reported_at = datetime.now(UTC) - timedelta(hours=2)
     await db_session.flush()
 
+    notify_mock = _prepare_scan_mocks(monkeypatch, db_session)
+    monkeypatch.setattr(scheduled_mod, "_last_reminded_at", {})
+
+    await scheduled_mod.scan_timeout_work_orders()
+
+    # 共享测试库可能残留其他测试的历史待处理工单，
+    # 因此只断言本测试的工单号出现在通知中。
+    notified = {
+        call.args[0]: call.kwargs.get("reason")
+        for call in notify_mock.await_args_list
+    }
+    assert wo.work_order_no in notified
+    assert notified[wo.work_order_no] == "超时未指派维修人"
+
+
+async def test_scan_notifies_assigned_not_started_timeout(
+    db_session: AsyncSession,
+    reporter: User,
+    equipment: Equipment,
+    make_access_ctx: Callable[[User], EquipmentAccessContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """已指派但超时未开工的工单 → 通知主管催办（分支 b）。"""
+    ctx = make_access_ctx(reporter)
+    wo = await create_work_order(
+        db_session,
+        WorkOrderCreate(
+            equipment_id=equipment.id,
+            responsible_person_id=reporter.id,
+        ),
+        ctx,
+    )
+    wo.assignee_id = reporter.id
+    wo.assigned_at = datetime.now(UTC) - timedelta(hours=2)
+    # 报单时间不超时，确保只有"指派后未开工"分支命中
+    wo.reported_at = datetime.now(UTC)
+    await db_session.flush()
+
+    notify_mock = _prepare_scan_mocks(monkeypatch, db_session)
+    monkeypatch.setattr(scheduled_mod, "_last_reminded_at", {})
+
+    await scheduled_mod.scan_timeout_work_orders()
+
+    notified = {
+        call.args[0]: call.kwargs.get("reason")
+        for call in notify_mock.await_args_list
+    }
+    assert notified.get(wo.work_order_no) == "已指派超时未开工"
+
+
+async def test_scan_cooldown_suppresses_repeat_reminder(
+    db_session: AsyncSession,
+    reporter: User,
+    equipment: Equipment,
+    make_access_ctx: Callable[[User], EquipmentAccessContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一工单在冷却窗口内只提醒一次。"""
+    ctx = make_access_ctx(reporter)
+    wo = await create_work_order(
+        db_session,
+        WorkOrderCreate(
+            equipment_id=equipment.id,
+            responsible_person_id=reporter.id,
+        ),
+        ctx,
+    )
+    wo.reported_at = datetime.now(UTC) - timedelta(hours=2)
+    await db_session.flush()
+
+    notify_mock = _prepare_scan_mocks(monkeypatch, db_session)
+    monkeypatch.setattr(scheduled_mod, "_last_reminded_at", {})
+
+    await scheduled_mod.scan_timeout_work_orders()
+    first = [
+        call.args[0] for call in notify_mock.await_args_list
+    ].count(wo.work_order_no)
+    assert first == 1
+
+    # 冷却窗口内第二次扫描不应重复提醒同一工单
+    await scheduled_mod.scan_timeout_work_orders()
+    second = [
+        call.args[0] for call in notify_mock.await_args_list
+    ].count(wo.work_order_no)
+    assert second == 1
+
+
+def _prepare_scan_mocks(
+    monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
+) -> AsyncMock:
+    """统一准备派单超时扫描的外部依赖 mock，返回通知 mock。"""
     monkeypatch.setattr(
         scheduled_mod, "settings",
         SimpleNamespace(FEISHU_EQUIPMENT_DEPT_ID="dept-1"),
@@ -112,15 +205,7 @@ async def test_scan_notifies_leader_for_timeout_work_order(
         yield db_session
 
     monkeypatch.setattr(scheduled_mod, "async_session_factory", _fake_factory)
-
-    await scheduled_mod.scan_timeout_work_orders()
-
-    # 共享测试库可能残留其他测试的历史待处理工单，
-    # 因此只断言本测试的工单号出现在通知中。
-    notified_nos = [
-        call.args[0] for call in notify_mock.await_args_list
-    ]
-    assert wo.work_order_no in notified_nos
+    return notify_mock
 
 
 async def test_scan_skips_when_dept_not_configured(

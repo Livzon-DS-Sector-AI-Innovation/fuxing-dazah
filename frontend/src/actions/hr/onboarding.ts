@@ -3,8 +3,9 @@
 import { revalidatePath } from 'next/cache'
 import {
   OnboardingRecordListResponse,
+  OnboardingFilterOptions,
   DepartureRecordListResponse,
-  OnboardingEvaluationData,
+  DepartureFilterOptions,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload, fetchHrText } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -17,7 +18,10 @@ export async function fetchOnboardingRecords(
     department?: string
     position?: string
     is_employed?: string
+    year?: number
     keyword?: string
+    sort_by?: string
+    sort_order?: string
     page?: number
     page_size?: number
   }
@@ -26,11 +30,13 @@ export async function fetchOnboardingRecords(
   return fetchHrApi<OnboardingRecordListResponse>(`/hr/onboarding-records${qs}`, { errorMessage: '获取入职记录失败' })
 }
 
-export async function deleteOnboardingRecord(id: string) {
-  return fetchHrApi(`/hr/onboarding-records/${id}`, {
-    method: 'DELETE',
-    errorMessage: '删除失败',
-  })
+/** 入职台账筛选下拉选项：入职年份现有取值聚合 */
+export async function fetchOnboardingFilterOptionsAction(): Promise<OnboardingFilterOptions> {
+  const res = await fetchHrApi<{ code: number; message: string; data: OnboardingFilterOptions }>(
+    '/hr/onboarding-records/filter-options',
+    { errorMessage: '获取筛选选项失败' },
+  )
+  return res.data || {}
 }
 
 // ─── 离职记录 ───
@@ -48,6 +54,15 @@ export async function fetchDepartureRecords(
 ): Promise<DepartureRecordListResponse> {
   const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 20 })
   return fetchHrApi<DepartureRecordListResponse>(`/hr/departure-records${qs}`, { errorMessage: '获取离职台账记录失败' })
+}
+
+/** 离职台账筛选下拉选项：部门/离职类型现有取值聚合（跟随飞书源表变化） */
+export async function fetchDepartureFilterOptionsAction(): Promise<DepartureFilterOptions> {
+  const res = await fetchHrApi<{ code: number; message: string; data: DepartureFilterOptions }>(
+    '/hr/departure-records/filter-options',
+    { errorMessage: '获取筛选选项失败' },
+  )
+  return res.data || {}
 }
 
 export async function createDepartureRecord(data: {
@@ -91,24 +106,6 @@ export async function sendDepartureCertificate(id: string, formData: FormData) {
   })
 }
 
-// ─── 入职/离职审批 ───
-
-export async function fetchOnboardingApplications(): Promise<{ data: unknown[] }> {
-  return fetchHrApi('/hr/onboarding-applications', { errorMessage: '获取入职申请失败' })
-}
-
-export async function fetchOffboardingApplications(): Promise<{ data: unknown[] }> {
-  return fetchHrApi('/hr/offboarding-applications', { errorMessage: '获取离职申请失败' })
-}
-
-export async function approveApplication(type: 'onboarding' | 'offboarding', appId: string, status: string) {
-  return fetchHrApi(`/hr/${type}-applications/${appId}/approve`, {
-    method: 'PUT',
-    body: JSON.stringify({ status }),
-    errorMessage: '操作失败',
-  })
-}
-
 // ─── 入职台账导出（下载类，返回 base64 由客户端落地） ───
 
 /** 7.3 新员工入职培训记录（docx） */
@@ -131,19 +128,6 @@ export async function fetchPrejobTrainingPlan(
     errorMessage: '生成岗前培训计划失败',
   })
   return { base64, filename: filename || `7.4岗前培训计划_${employeeName}.xlsx` }
-}
-
-/** 7.12 员工上岗评估表（xlsx） */
-export async function generateOnboardingEvaluation(
-  data: OnboardingEvaluationData
-): Promise<{ base64: string; filename: string }> {
-  const { base64, filename } = await fetchHrDownload('/hr/onboarding-evaluation', {
-    method: 'POST',
-    body: JSON.stringify(data),
-    errorMessage: '生成员工上岗评估表失败',
-  })
-  const safeDate = data.approval_date || 'nodate'
-  return { base64, filename: filename || `7.12员工上岗评估表_${safeDate}.xlsx` }
 }
 
 // ─── 岗前培训文档（POST 带培训明细，返回 docx） ───
@@ -211,4 +195,31 @@ export async function downloadTrainingRegistration(department?: string): Promise
   const qs = buildQueryString({ department })
   const { base64, filename } = await fetchHrDownload(`/hr/training-registration${qs}`)
   return { base64, filename: filename || `个人培训登记表_${department || '全部'}.docx` }
+}
+
+// ─── 台账导出（Excel，与列表筛选同口径） ───
+
+export async function exportOnboardingRecords(params?: {
+  department?: string
+  is_employed?: string
+  year?: number
+  keyword?: string
+}): Promise<{ base64: string; filename: string }> {
+  const qs = buildQueryString(params || {})
+  const { base64, filename } = await fetchHrDownload(`/hr/onboarding-records/export${qs}`, {
+    errorMessage: '导出入职台账失败',
+  })
+  return { base64, filename: filename || `入职台账_${new Date().toISOString().slice(0, 10)}.xlsx` }
+}
+
+export async function exportDepartureRecords(params?: {
+  department?: string
+  offboarding_type?: string
+  keyword?: string
+}): Promise<{ base64: string; filename: string }> {
+  const qs = buildQueryString(params || {})
+  const { base64, filename } = await fetchHrDownload(`/hr/departure-records/export${qs}`, {
+    errorMessage: '导出离职台账失败',
+  })
+  return { base64, filename: filename || `离职台账_${new Date().toISOString().slice(0, 10)}.xlsx` }
 }

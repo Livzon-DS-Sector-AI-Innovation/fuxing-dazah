@@ -1,0 +1,47 @@
+"""Quality 数据模型包（models.py 494 行拆分）。对外 import 路径不变。"""
+
+from app.modules.quality.models._env import (  # noqa: F401
+    QualityBatchRelease,
+    QualityEnvPlan,
+    QualityEnvPoint,
+    QualityEnvRecord,
+    QualityShiftConfig,
+    QualityShiftTeam,
+)
+from app.modules.quality.models._inspection import (  # noqa: F401
+    InspectionImpurity,
+    InspectionRecord,
+)
+from app.modules.quality.models._materials import (  # noqa: F401
+    QualityContainerMovement,
+    QualityInspectionPlan,
+    QualityLabItem,
+    QualityMaterial,
+    QualityMaterialContainer,
+    QualityMaterialRequest,
+    QualityMaterialStandard,
+    QualityMaterialStandardItem,
+    QualityMicroRecord,
+    QualityRetainedSample,
+    QualityStocktakeItem,
+    QualityStocktakeSheet,
+    QualitySupplier,
+)
+from app.modules.quality.models._reports import (  # noqa: F401
+    ReportRecord,
+)
+from app.modules.quality.models._standards import (  # noqa: F401
+    CoaTemplateBinding,
+    LcTemplateConfig,
+    QualityStandardDocument,
+    QualityStandardItem,
+)
+from app.modules.quality.models._tasks import (  # noqa: F401
+    QualityTaskAssignment,
+    QualityTaskAttachment,
+    QualityTaskReview,
+    QualityTestResult,
+    QualityTestTask,
+)
+
+__all__ = ['InspectionRecord', 'InspectionImpurity', 'ReportRecord', 'QualityStandardDocument', 'QualityStandardItem', 'CoaTemplateBinding', 'LcTemplateConfig', 'QualityTestTask', 'QualityTaskAttachment', 'QualityTaskReview', 'QualityTestResult', 'QualityTaskAssignment', 'QualityMaterial', 'QualityMaterialContainer', 'QualityContainerMovement', 'QualitySupplier', 'QualityStocktakeSheet', 'QualityStocktakeItem', 'QualityMaterialRequest', 'QualityMaterialStandard', 'QualityMaterialStandardItem', 'QualityLabItem', 'QualityInspectionPlan', 'QualityMicroRecord', 'QualityRetainedSample', 'QualityEnvPlan', 'QualityEnvPoint', 'QualityEnvRecord', 'QualityBatchRelease', 'QualityShiftTeam', 'QualityShiftConfig']

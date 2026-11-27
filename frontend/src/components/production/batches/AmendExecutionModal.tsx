@@ -174,7 +174,7 @@ export function AmendExecutionModal({ execution, routeId, onClose }: Props) {
             type="warning"
             showIcon
             style={{ marginBottom: 16 }}
-            title="修改将记录审计日志（修改人、修改前后值）；工序时间变化会同步重算批次首末时间。"
+            title="修改将记录审计日志（修改人、修改前后值）；工序时间变化会同步重算批次首末时间。必填字段已有值不可清空，需要更正请直接填写正确值。"
           />
 
           <Form.Item
@@ -208,7 +208,11 @@ export function AmendExecutionModal({ execution, routeId, onClose }: Props) {
               <Divider titlePlacement="start" style={{ fontSize: 13 }}>
                 开始阶段字段
               </Divider>
-              <DynamicFieldFormItems defs={startDefs} enforceRequired={false} />
+              <DynamicFieldFormItems
+                defs={startDefs}
+                enforceRequired={false}
+                requiredHint="必填 · 不可清空"
+              />
             </>
           )}
 
@@ -217,7 +221,11 @@ export function AmendExecutionModal({ execution, routeId, onClose }: Props) {
               <Divider titlePlacement="start" style={{ fontSize: 13 }}>
                 结束阶段字段
               </Divider>
-              <DynamicFieldFormItems defs={endDefs} enforceRequired={false} />
+              <DynamicFieldFormItems
+                defs={endDefs}
+                enforceRequired={false}
+                requiredHint="必填 · 不可清空"
+              />
             </>
           )}
 

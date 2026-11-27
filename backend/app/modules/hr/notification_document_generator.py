@@ -27,6 +27,8 @@ class TrainingNotificationInput(BaseModel):
     assessment_method: str | None = None
     content: str | None = None
     trainee_names: list[str] = []
+    sick_count: int | None = None
+    maternity_count: int | None = None
     issuer_department: str | None = None
     issue_date: date | None = None
 
@@ -178,9 +180,9 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
         dept_name = data.issuer_department or data.department or ""
         doc.paragraphs[0].runs[0].text = f"部门/Dept：{dept_name}          签发人/ Issued by："
     if len(doc.paragraphs) > 1:
-        # 优先从 time_slots 取首个日期，否则使用 training_date
-        issue_d = data.training_date
-        if data.time_slots:
+        # 落款日期优先使用显式 issue_date；否则取首个 time_slot / 培训日期
+        issue_d = data.issue_date or data.training_date
+        if data.issue_date is None and data.time_slots:
             first_slot_date = data.time_slots[0].get("date", "")
             if first_slot_date:
                 try:

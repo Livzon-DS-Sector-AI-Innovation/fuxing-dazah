@@ -53,7 +53,7 @@ export default function AssessmentFlow({
   subject, department, trainingDate, trainingMethod, trainer,
   employeeNames, employeeNumberMap,
 }: AssessmentFlowProps) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
 
   // 题库
   const [bankItems, setBankItems] = useState<QuestionBankItem[]>([])
@@ -246,6 +246,23 @@ export default function AssessmentFlow({
     finally { setRandomizing(false) }
   }
 
+  // 重新选题：已标记过错题/成绩时先确认，避免误点直接丢弃
+  const handleRepick = () => {
+    const reset = () => { setAssessmentId(null); setAssessment(null) }
+    if (!scoreRows.some((r) => r.wrong.size > 0)) {
+      reset()
+      return
+    }
+    modal.confirm({
+      title: '确认重新选题',
+      content: '重新选题会清空已标记的错题和已录成绩，确定？',
+      okText: '确定',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: reset,
+    })
+  }
+
   const questionCount = assessment?.question_count || pickedQuestions.length || 0
   const scoreColumns = useMemo(() => {
     const cols: any[] = [
@@ -268,7 +285,8 @@ export default function AssessmentFlow({
       { title: '等级', width: 72, align: 'center' as const, fixed: 'right' as const,
         render: (_: any, row: ScoreRow) => {
           const g = computeRow(row).grade
-          return <Tag color={g === '优' ? 'green' : g === '合格' ? 'blue' : 'red'}>{g}</Tag>
+          // grade 的取值是「优秀/合格/不合格」（此前判断的是 '优'，优秀永远落到红色）
+          return <Tag color={g === '优秀' ? 'green' : g === '合格' ? 'blue' : 'red'}>{g}</Tag>
         }},
     ]
     return cols
@@ -290,7 +308,7 @@ export default function AssessmentFlow({
       <div className="border rounded-lg p-4 bg-blue-50">
         <h3 className="font-semibold mb-2">考核材料</h3>
         {!assessmentId ? (
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             <div className="text-sm text-gray-600">
               培训内容：<b>{subject}</b> · 部门：{department} · 方式：{trainingMethod}
               {trainer ? ` · 培训师：${trainer}` : ''} · 受训 {employeeNames.length} 人
@@ -346,7 +364,7 @@ export default function AssessmentFlow({
                 <Button size="small" icon={<DatabaseOutlined />} type="primary"
                   loading={saving}
                   onClick={handleSyncLedger}>同步到台账</Button>
-                <Button size="small" onClick={() => { setAssessmentId(null); setAssessment(null) }}>重新选题</Button>
+                <Button size="small" onClick={handleRepick}>重新选题</Button>
               </Space>
             </div>
             <p className="text-xs text-gray-500">默认全对（绿✓），点击格子标记错题（红✗），点击「同步到台账」保存并写入台账</p>
@@ -358,7 +376,9 @@ export default function AssessmentFlow({
         )}
       </div>
 
+      {/* 有勾选的题目时点遮罩不应直接关闭（会丢掉本次勾选） */}
       <Modal title="从题库选题" open={pickerOpen} onCancel={() => setPickerOpen(false)} width={900}
+        mask={{ closable: false }}
         onOk={() => {
           const map = new Map(bankItems.map(i => [i.id, i]))
           const already = new Map(pickedQuestions.map(q => [q.id, q]))

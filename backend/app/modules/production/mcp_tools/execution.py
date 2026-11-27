@@ -6,15 +6,19 @@ import logging
 from typing import Any
 
 from fastmcp.tools.base import ToolResult
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
 from app.modules.production.mcp_tools._helpers import (
     _BATCH_STATUS_CN,
     _SHANGHAI_TZ,
     _field_dict_to_in,
+    _get_configured_step_executors,
     _get_latest_execution,
+    _match_users_by_name,
     _resolve_batch_and_node,
 )
+from app.modules.production.models import RouteNode
 from app.modules.production.schemas import ExecutionCompleteIn, ExecutionStartIn
 from app.modules.production.service.execution_service import (
     backfill_execution_fields,
@@ -23,11 +27,73 @@ from app.modules.production.service.execution_service import (
     start_execution,
 )
 from app.platform.identity.mcp_tools import resolve_user
+from app.platform.identity.models import User
 from app.platform.mcp.deps import get_db
 from app.platform.mcp.server import get_module_mcp
 
 logger = logging.getLogger(__name__)
 mcp = get_module_mcp("production")
+
+
+def _format_executor_candidates(candidates: list[User]) -> str:
+    if not candidates:
+        return ""
+    return "、".join(
+        f"{u.name}（工号 {u.employee_no}）" if u.employee_no else u.name
+        for u in candidates
+    )
+
+
+async def _resolve_step_executor(
+    db: AsyncSession, user: User, node: RouteNode, owner: str,
+) -> tuple[User, str | None]:
+    """解析开始工序时指定的执行人。返回 (执行人, 拒绝文案)；文案非 None 即拒绝。
+
+    候选 = 操作人自己为该工序配置的默认执行人（NodeAssignment）。
+    匹配顺序：操作人本人全等 → 候选内姓名精确 → 候选内姓名包含 →
+    飞书 user_id / UUID 精确解析（解析成功仍须在候选内）。
+    本人判定必须排在候选匹配之前：否则操作人「王强」传 owner="王强" 时
+    会被候选里的「王强军」按包含式静默顶替。全部校验在写操作之前完成。
+    """
+    # ponytail: 包含式匹配下「半截名字」仍可能命中同名前缀的他人（如输入
+    # 「王强」指王强军）；agent 反馈误绑时改为只认全等
+    if owner == user.name:
+        return user, None
+
+    candidates = await _get_configured_step_executors(db, user.id, node.id)
+    cand_str = _format_executor_candidates(candidates)
+
+    matches = _match_users_by_name(candidates, owner)
+    if len(matches) > 1:
+        return user, (
+            f"「{owner}」匹配到多位可选执行人：{_format_executor_candidates(matches)}。"
+            "请提供飞书 user_id 以精确指定。"
+        )
+    if matches:
+        return matches[0], None
+
+    # 候选内姓名无全等命中：再按精确标识（飞书 user_id / UUID）解析
+    resolve_error: str | None = None
+    try:
+        target = await resolve_user(db, owner)
+    except ValueError as e:
+        target, resolve_error = None, str(e)
+    if target is not None and target.id == user.id:
+        # 指定操作人本人等同默认行为
+        return user, None
+    if target is None or target.id not in {u.id for u in candidates}:
+        if not candidates:
+            return user, (
+                f"您尚未为工序「{node.name}」配置默认执行人，无法指定他人；"
+                "不指定 owner 则默认由您本人执行。"
+            )
+        detail = f"（{resolve_error}）" if resolve_error else ""
+        return user, (
+            f"无法指定工序执行人「{owner}」{detail}：不在您为该工序配置的"
+            f"默认执行人内。可选执行人：{cand_str}。"
+            "不指定 owner 则默认由您本人执行。"
+        )
+    return target, None
 
 
 @mcp.tool()
@@ -37,6 +103,7 @@ async def change_batch_step_status(
     step_name: str,
     action: str,
     field_values: list[dict[str, Any]] | None = None,
+    owner: str | None = None,
 ) -> ToolResult:
     """变更指定批次在指定工序上的开始/结束状态。
 
@@ -54,10 +121,21 @@ async def change_batch_step_status(
         action: "start" 开始工序 / "end" 结束工序
         field_values: 可选，字段值列表 [{"field_key": "温度", "value": 25.3}, ...]。
             未填的数据可在工序结束后通过 backfill_step_fields 补录。
+        owner: 可选，工序执行人，仅 action="start" 时有效。支持姓名（在您为
+            该工序配置的默认执行人内匹配）或飞书 user_id / UUID 精确标识；
+            候选名单可用 query_step_fields（phase="start"）查看。不指定默认
+            为您本人。指定后，这次执行的结束与补录由该执行人负责。
     """
     if action not in ("start", "end"):
         return ToolResult(
             content=f"无效操作 `{action}`，仅支持 `start` 或 `end`。",
+            is_error=True,
+        )
+
+    owner = (owner or "").strip() or None
+    if action == "end" and owner:
+        return ToolResult(
+            content="执行人仅可在开始工序（action=\"start\"）时指定。",
             is_error=True,
         )
 
@@ -73,10 +151,15 @@ async def change_batch_step_status(
     fvs = [_field_dict_to_in(f) for f in (field_values or [])]
 
     if action == "start":
+        owner_user = user
+        if owner:
+            owner_user, deny = await _resolve_step_executor(db, user, node, owner)
+            if deny:
+                return ToolResult(content=deny, is_error=True)
         payload = ExecutionStartIn(
             node_id=node.id,
-            owner_id=user.id,
-            owner_name=user.name,
+            owner_id=owner_user.id,
+            owner_name=owner_user.name,
             field_values=fvs,
         )
         try:
@@ -96,9 +179,11 @@ async def change_batch_step_status(
             f"|------|----|\n"
             f"| 执行序号 | 第 {execution.execution_seq} 次 |\n"
             f"| 开始时间 | {started_str} |\n"
-            f"| 负责人 | {user.name} |\n"
+            f"| 负责人 | {owner_user.name} |\n"
             f"| 批次状态 | {_BATCH_STATUS_CN.get(batch.status, batch.status)} |"
         )
+        if owner_user.id != user.id:
+            msg += f"\n\n由 {user.name} 代为开始；该工序的结束与补录由 {owner_user.name} 负责。"
         return ToolResult(content=msg)
 
     # action == "end"
@@ -139,8 +224,10 @@ async def change_batch_step_status(
         f"| 执行序号 | 第 {completed_ex.execution_seq} 次 |\n"
         f"| 开始时间 | {started_str} |\n"
         f"| 结束时间 | {finished} |\n"
-        f"| 负责人 | {user.name} |"
+        f"| 负责人 | {completed_ex.owner_name or user.name} |"
     )
+    if completed_ex.owner_id != user.id:
+        msg += f"\n\n由 {user.name} 代为结束。"
     if missing_fields:
         names = "、".join(m.field_label for m in missing_fields)
         msg += (

@@ -1,6 +1,6 @@
 'use client'
 
-import { Table, Tag, Space, Button, Popconfirm, Switch } from 'antd'
+import { Table, Tag, Space, Button, Popconfirm } from 'antd'
 import { EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { WorkshopConfig } from '@/types/energy'
@@ -43,7 +43,7 @@ export function WorkshopConfigTable({
       width: 180,
       render: (name: string | null) => {
         if (!name) return <span style={{ color: '#a4a097' }}>未关联</span>
-        return <Tag color="purple">{name}</Tag>
+        return <Tag color="purple" style={{ borderRadius: 999, paddingInline: 10 }}>{name}</Tag>
       },
     },
     {
@@ -56,7 +56,7 @@ export function WorkshopConfigTable({
         return (
           <Space wrap size={[4, 4]}>
             {heads.map((h, i) => (
-              <Tag key={i} color="blue">{h.name}</Tag>
+              <Tag key={i} color="blue" style={{ borderRadius: 999 }}>{h.name}</Tag>
             ))}
           </Space>
         )
@@ -68,7 +68,7 @@ export function WorkshopConfigTable({
       key: 'auto_notify_enabled',
       width: 100,
       render: (enabled: boolean) => (
-        <Tag color={enabled ? 'success' : 'default'}>
+        <Tag color={enabled ? 'success' : 'default'} style={{ borderRadius: 999 }}>
           {enabled ? '已开启' : '已关闭'}
         </Tag>
       ),
@@ -79,7 +79,7 @@ export function WorkshopConfigTable({
       key: 'is_enabled',
       width: 80,
       render: (enabled: boolean) => (
-        <Tag color={enabled ? 'success' : 'default'}>
+        <Tag color={enabled ? 'success' : 'default'} style={{ borderRadius: 999 }}>
           {enabled ? '启用' : '禁用'}
         </Tag>
       ),
@@ -101,6 +101,7 @@ export function WorkshopConfigTable({
       title: '操作',
       key: 'action',
       width: 120,
+      fixed: 'right',
       render: (_, record) => (
         <Space>
           {hasPermission('energy:workshop_config:update') && (
@@ -131,10 +132,13 @@ export function WorkshopConfigTable({
 
   return (
     <Table
+      className="energy-workshop-config-table"
       columns={columns}
       dataSource={data}
       loading={loading}
       rowKey="id"
+      scroll={{ x: 1080 }}
+      style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', border: '1px solid #ede9e4' }}
       pagination={{
         current: page,
         pageSize,

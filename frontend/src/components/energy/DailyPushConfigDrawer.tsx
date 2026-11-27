@@ -1,4 +1,5 @@
 'use client'
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useState } from 'react'
 import { App, Drawer, Form, Input, Select, Button, Space, Switch, TimePicker } from 'antd'
@@ -177,13 +178,13 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
   return (
     <Drawer
       title={isEdit ? '编辑能源总耗推送配置' : '新建能源总耗推送配置'}
-      size={520}
+      size={620}
       open={dailyPushConfigDrawerOpen}
       onClose={closeDailyPushConfigDrawer}
       destroyOnHidden
       styles={{
-        header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px' },
-        body: { padding: '24px' },
+        header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px', background: 'linear-gradient(110deg, #fff 0%, #f8f6ff 100%)' },
+        body: { padding: '24px', background: '#fafaf9' },
       }}
       extra={
         <Space>
@@ -214,10 +215,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
             mode="multiple"
             placeholder="选择推送接收人"
             options={personnelOptions}
-            showSearch
-            filterOption={(input, option) =>
-              (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-            }
+            showSearch={{
+              filterOption: (input, option) =>
+                (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+            }}
             style={{ width: '100%' }}
           />
         </Form.Item>
@@ -239,10 +240,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
               allowClear
               placeholder="选择光伏发电设备"
               options={deviceOptions}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
             />
           </Form.Item>
           <Form.Item name="pressure_device_id" label="蒸汽差压发电设备" help="选择蒸汽差压发电对应的数据源设备">
@@ -250,10 +251,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
               allowClear
               placeholder="选择蒸汽差压发电设备"
               options={deviceOptions}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
             />
           </Form.Item>
         </div>
@@ -267,10 +268,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
                 allowClear
                 placeholder={`选择${DEVICE_LABELS[fieldKey]}`}
                 options={deviceOptions}
-                showSearch
-                filterOption={(input, option) =>
-                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-                }
+                showSearch={{
+                  filterOption: (input, option) =>
+                    (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+                }}
               />
             </Form.Item>
           ))}

@@ -875,18 +875,15 @@ class TitleReviewService:
     # ═══ 部门评审组 ═══
 
     async def list_departments(self) -> list[str]:
-        """员工档案中去重的实际部门（缺省回落体现部门；与申报落库、自动分配口径一致）。"""
+        """员工档案中去重的部门（与申报落库、自动分配口径一致）。"""
         from sqlalchemy import select as sa_select
 
         result = await self.session.execute(
-            sa_select(Employee.actual_department, Employee.department)
+            sa_select(Employee.department)
             .where(Employee.is_deleted == False)  # noqa: E712
             .distinct()
         )
-        departments = {
-            actual or dept for actual, dept in result.all() if actual or dept
-        }
-        return sorted(str(d) for d in departments if d)
+        return sorted(str(d) for d in result.scalars().all() if d)
 
 
 
@@ -1002,7 +999,7 @@ class TitleReviewService:
             employee_id=employee.id if employee else None,
             employee_no=parsed["employee_no"],
             name=parsed["name"],
-            department=employee.actual_department or employee.department if employee else None,
+            department=employee.department if employee else None,
             sequence=parsed["sequence"],
             tech_domain=parsed["tech_domain"],
             apply_level=parsed["apply_level"],
@@ -1046,7 +1043,7 @@ class TitleReviewService:
                 existing.feishu_record_id = record_id
                 if existing.status == m.APPLICATION_INVALID and employee:
                     existing.employee_id = employee.id
-                    existing.department = employee.actual_department or employee.department
+                    existing.department = employee.department
                     existing.status = m.APPLICATION_SUBMITTED
                     await self._promote_and_assign_if_reviewing(activity, existing)
                 await self.application_repo.update(existing)
@@ -1113,7 +1110,7 @@ class TitleReviewService:
         application.employee_id = employee.id if employee else application.employee_id
         if employee and not application.department:
             # INVALID 期间部门为空，员工匹配成功后补上，否则自动分配匹配不到评审组
-            application.department = employee.actual_department or employee.department
+            application.department = employee.department
         if application.status == m.APPLICATION_INVALID and employee:
             application.status = m.APPLICATION_SUBMITTED
             await self.application_repo.update(application)
@@ -1687,6 +1684,63 @@ class TitleReviewService:
             raise HTTPException(403, "数据范围限制：无权访问该申报")
         judges = await self.judge_repo.list_by_application(application.id)
         return application, judges
+
+    async def download_attachment(
+        self, application_id: UUID, file_token: str, *, employee_no: str | None = None
+    ) -> tuple[bytes, str]:
+        """下载申报附件（飞书 Base 附件素材）。返回 (内容, 文件名)。
+
+        file_token 必须属于该申报的附件元数据——既拿文件名，也防止
+        拿任意 token 越权下载其他表的附件。
+        可见性：scope 范围内可下载；否则允许该申报的评委下载
+        （与 my-judge-tasks 一致——评委审材料需要看附件）。
+        """
+        from app.modules.hr.title_review import bitable_client as bc
+
+        application = await self.application_repo.get_by_id(application_id)
+        if not application:
+            raise HTTPException(404, "申报记录不存在")
+        if not self._scope_applications([application]) and not await self._is_judge_of(
+            application_id, employee_no
+        ):
+            raise HTTPException(403, "数据范围限制：无权访问该申报")
+
+        filename = ""
+        for files in (application.attachments or {}).values():
+            for item in files or []:
+                if isinstance(item, dict) and item.get("file_token") == file_token:
+                    filename = str(item.get("name") or file_token)
+                    break
+            if filename:
+                break
+        if not filename:
+            raise HTTPException(404, "附件不存在或不属于该申报")
+
+        try:
+            content = await bc.download_media(file_token)
+        except bc.TitleReviewBitableError as exc:
+            logger.warning("申报附件下载失败 application=%s token=%s: %s",
+                           application_id, file_token, exc)
+            raise HTTPException(502, "附件下载失败（飞书素材接口），请稍后重试") from exc
+        return content, filename
+
+    async def _is_judge_of(self, application_id: UUID, employee_no: str | None) -> bool:
+        """当前用户是否为该申报的评委（my-judge-tasks 同口径：按工号定位）。"""
+        if not employee_no:
+            return False
+        from sqlalchemy import select as sa_select
+
+        result = await self.session.execute(
+            sa_select(m.TitleReviewJudge.id)
+            .join(Employee, m.TitleReviewJudge.judge_employee_id == Employee.id)
+            .where(
+                m.TitleReviewJudge.application_id == application_id,
+                Employee.employee_number == employee_no,
+                m.TitleReviewJudge.is_deleted == False,  # noqa: E712
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def get_results(self, activity_id: UUID) -> list[dict[str, Any]]:
         """活动评审结果（票数、各评委投票明细）——hr:title:scores:read 数据。"""
@@ -2368,9 +2422,7 @@ class TitleReviewService:
                 if employee:
                     existing.employee_id = employee.id
                     if not existing.department:
-                        existing.department = (
-                            employee.actual_department or employee.department
-                        )
+                        existing.department = employee.department
                     if existing.status == m.APPLICATION_INVALID:
                         existing.status = m.APPLICATION_SUBMITTED
                         await self._promote_and_assign_if_reviewing(activity, existing)

@@ -179,3 +179,79 @@ async def test_api_delete_annual_training_plan(client):
     await client.delete(f"/api/v1/hr/annual-training-plans/{plan_id}")
     resp2 = await client.get(f"/api/v1/hr/annual-training-plans/{plan_id}")
     assert resp2.status_code == 404
+
+# ═══════════════════════════════════════════════════════════════
+# Excel 上传：行级数据范围过滤
+# ═══════════════════════════════════════════════════════════════
+
+
+def _plan_xlsx(rows: list[tuple[str, str, str]]) -> bytes:
+    """构造上传用年度计划 Excel：表头（年度/部门/培训内容及使用教材）+ 数据行。"""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["年度", "部门", "培训内容及使用教材"])
+    for row in rows:
+        ws.append(list(row))
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_upload_annual_plan_imports_all_when_unrestricted(db_session: AsyncSession):
+    """不受限（allowed_departments=None）导入全部部门行。"""
+    from sqlalchemy import func, select
+
+    from app.modules.hr.models import AnnualTrainingPlan
+    from app.modules.hr.service import EmployeeService
+
+    dept_a, dept_b = _rand("计划甲"), _rand("计划乙")
+    result = await EmployeeService(db_session).upload_annual_plan(_plan_xlsx([
+        ("2026", dept_a, "GMP基础培训"),
+        ("2026", dept_b, "安全培训"),
+    ]))
+    assert result["created"] == 2
+    assert result["errors"] == []
+    count = (await db_session.execute(
+        select(func.count()).select_from(AnnualTrainingPlan).where(
+            AnnualTrainingPlan.department.in_([dept_a, dept_b]),
+        )
+    )).scalar()
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_annual_plan_filters_unauthorized_departments(db_session: AsyncSession):
+    """受限用户：授权部门 + 厂级行导入，越权部门行计入 errors 跳过。"""
+    from sqlalchemy import func, select
+
+    from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
+    from app.modules.hr.service import EmployeeService
+
+    dept_ok, dept_bad = _rand("授权部"), _rand("越权部")
+    result = await EmployeeService(db_session).upload_annual_plan(
+        _plan_xlsx([
+            ("2026", dept_ok, "GMP基础培训"),
+            ("2026", dept_bad, "安全培训"),
+            ("2026", "厂级", "全员安全月"),
+        ]),
+        allowed_departments={dept_ok},
+    )
+    assert result["created"] == 2  # 授权部门 + 厂级
+    assert len(result["errors"]) == 1
+    assert dept_bad in result["errors"][0]
+    # 越权部门的计划与明细确实未落库
+    bad_plan_ids = (await db_session.execute(
+        select(AnnualTrainingPlan.id).where(AnnualTrainingPlan.department == dept_bad)
+    )).scalars().all()
+    assert bad_plan_ids == []
+    bad_items = (await db_session.execute(
+        select(func.count()).select_from(AnnualTrainingPlanItem).where(
+            AnnualTrainingPlanItem.content_and_textbook == "安全培训",
+        )
+    )).scalar()
+    assert bad_items == 0

@@ -1,15 +1,17 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { App, Button, Card, Form, Select, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { fetchDepartmentsAction, fetchEmployeesAction, createTrainingLedgerPage } from '@/actions/hr'
+import { fetchDepartmentsAction, createTrainingLedgerPage, fetchAllTrainingRoster, type TrainingRosterRow } from '@/actions/hr'
 
 export default function TrainingLedgerNewClient() {
   const { message } = App.useApp()
+  const router = useRouter()
   const [form] = Form.useForm()
   const [departments, setDepartments] = useState<string[]>([])
-  const [employees, setEmployees] = useState<any[]>([])
+  const [employees, setEmployees] = useState<TrainingRosterRow[]>([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedDept, setSelectedDept] = useState<string | null>(null)
@@ -30,7 +32,8 @@ export default function TrainingLedgerNewClient() {
     form.setFieldValue('employee_number', undefined)
     setEmployees([])
     if (!dept) return
-    fetchEmployeesAction({ department: dept, page_size: 100 })
+    // 用自动翻页的取全量接口，超过 100 人的部门也能选到人
+    fetchAllTrainingRoster({ department: dept })
       .then((res) => {
         setEmployees(res.data || [])
       })
@@ -49,11 +52,11 @@ export default function TrainingLedgerNewClient() {
         employee_number: emp.employee_number,
         employee_name: emp.name })
       message.success('培训台账创建成功')
-      window.location.href = `/hr/training/ledger?employee_number=${emp.employee_number}`
+      router.push(`/hr/training/ledger?employee_number=${emp.employee_number}`)
     } catch (err: any) {
       if (err.message?.includes('Duplicate') || err.message?.includes('已存在')) {
         message.warning('该员工的培训台账已存在')
-        window.location.href = `/hr/training/ledger?employee_number=${emp.employee_number}`
+        router.push(`/hr/training/ledger?employee_number=${emp.employee_number}`)
       } else {
         message.error(err.message || '创建失败')
       }

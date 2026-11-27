@@ -15,6 +15,7 @@ async def _read_smtp_config(session) -> dict[str, str]:
     """从数据库 system_settings 表读取 SMTP 配置。"""
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession
+
     from app.modules.hr.models import SystemSetting
 
     db_config: dict[str, str] = {}

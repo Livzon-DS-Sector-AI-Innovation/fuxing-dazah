@@ -89,7 +89,7 @@ export function InspectionTemplateDrawer({ categories, onRefresh }: Props) {
               <span style={{ fontSize: 11, color: C.stone }}>（选填）</span>
             </div>
             <Form.Item name="equipment_category_id" noStyle>
-              <Select placeholder="选择设备分类" allowClear showSearch optionFilterProp="label"
+              <Select placeholder="选择设备分类" allowClear showSearch={{ optionFilterProp: 'label' }}
                 options={categories.map(c => ({ label: c.name, value: c.id }))} style={{ borderRadius: 8 }} />
             </Form.Item>
           </div>

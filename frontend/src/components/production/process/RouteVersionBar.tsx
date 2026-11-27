@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Button, Input, Modal, Popconfirm, Space, Tag, Typography } from 'antd'
+import { App, Button, Checkbox, Input, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd'
+import type { SelectProps } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import {
   archiveRoute,
@@ -12,6 +13,7 @@ import {
   renameRoute,
 } from '@/actions/production'
 import type { ProcessRoute } from '@/types/production'
+import styles from './RouteVersionBar.module.css'
 
 const { Text } = Typography
 
@@ -20,6 +22,9 @@ export const STATUS_META: Record<string, { color: string; label: string }> = {
   published: { color: 'green', label: '已发布' },
   archived: { color: 'default', label: '已归档' },
 }
+
+// 下拉分组顺序：在用的在前，历史归档置底
+const STATUS_GROUP_ORDER = ['published', 'draft', 'archived'] as const
 
 interface Props {
   productId: string
@@ -34,6 +39,18 @@ interface Props {
 
 type NameModalAction = 'create' | 'copy' | 'rename'
 
+interface CopyOptions {
+  copy_assignments: boolean
+  copy_suffixes: boolean
+  copy_computed_fields: boolean
+}
+
+const DEFAULT_COPY_OPTIONS: CopyOptions = {
+  copy_assignments: true,
+  copy_suffixes: true,
+  copy_computed_fields: true,
+}
+
 export function RouteVersionBar({
   productId,
   routes,
@@ -46,8 +63,22 @@ export function RouteVersionBar({
 }: Props) {
   const { message } = App.useApp()
   const current = routes.find(r => r.id === currentRouteId) ?? null
+  const routeOptions: SelectProps['options'] = STATUS_GROUP_ORDER.map(status => ({
+    status,
+    list: routes.filter(r => r.status === status),
+  }))
+    .filter(g => g.list.length > 0)
+    .map(g => ({
+      label: STATUS_META[g.status]?.label,
+      title: STATUS_META[g.status]?.label,
+      options: g.list.map(r => ({
+        value: r.id,
+        label: r.route_name,
+      })),
+    }))
   const [nameModal, setNameModal] = useState<NameModalAction | null>(null)
   const [nameValue, setNameValue] = useState('')
+  const [copyOptions, setCopyOptions] = useState<CopyOptions>(DEFAULT_COPY_OPTIONS)
 
   const run = async (fn: () => Promise<{ success: boolean; error?: string }>, ok: string) => {
     const result = await fn()
@@ -62,6 +93,7 @@ export function RouteVersionBar({
   const openNameModal = (action: NameModalAction) => {
     // create/copy 需输入新产品内唯一名称，预填源名称会在确认时必然撞重名
     setNameValue(action === 'rename' ? current?.route_name ?? '' : '')
+    if (action === 'copy') setCopyOptions(DEFAULT_COPY_OPTIONS)
     setNameModal(action)
   }
 
@@ -74,7 +106,7 @@ export function RouteVersionBar({
     if (nameModal === 'create') {
       run(() => createRoute({ product_id: productId, route_name: name }), '已创建 draft 路线')
     } else if (nameModal === 'copy') {
-      run(() => copyRoute(current!.id, name), '已复制新路线')
+      run(() => copyRoute(current!.id, name, copyOptions), '已复制新路线')
     } else if (nameModal === 'rename') {
       run(() => renameRoute(current!.id, name), '已重命名')
     }
@@ -89,32 +121,36 @@ export function RouteVersionBar({
         : '重命名路线'
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: 8,
-      }}
-    >
-      <Space size={4} wrap>
-        {routes.map(r => (
-          <Tag.CheckableTag
-            key={r.id}
-            checked={r.id === currentRouteId}
-            onChange={() => onSelect(r.id)}
-          >
-            {r.route_name}
-            <Tag
-              color={STATUS_META[r.status]?.color}
-              style={{ marginLeft: 4, marginRight: 0 }}
-            >
-              {STATUS_META[r.status]?.label}
-            </Tag>
-          </Tag.CheckableTag>
-        ))}
-      </Space>
+    <div className={styles.bar}>
+      {routes.length > 0 && (
+        <Select
+          value={currentRouteId ?? undefined}
+          onChange={id => onSelect(id)}
+          style={{ width: 300, maxWidth: '100%' }}
+          showSearch={{
+            filterOption: (input, option) => {
+              const r = routes.find(x => x.id === option?.value)
+              return !!r && r.route_name.toLowerCase().includes(input.toLowerCase())
+            },
+          }}
+          popupMatchSelectWidth={false}
+          labelRender={({ value }) => {
+            const r = routes.find(x => x.id === value)
+            if (!r) return null
+            return (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {r.route_name}
+                </span>
+                <Tag color={STATUS_META[r.status]?.color} style={{ marginRight: 0 }}>
+                  {STATUS_META[r.status]?.label}
+                </Tag>
+              </span>
+            )
+          }}
+          options={routeOptions}
+        />
+      )}
       {canManage && (
         <Space size={8}>
           <Button size="small" icon={<PlusOutlined />} onClick={() => openNameModal('create')}>
@@ -181,12 +217,39 @@ export function RouteVersionBar({
           autoFocus
         />
         {nameModal === 'copy' && (
-          <Text
-            type="secondary"
-            style={{ display: 'block', marginTop: 8, fontSize: 12, lineHeight: 1.8 }}
-          >
-            将完整复制本路线的工序、连线与字段定义（计算字段、负责人配置不随带）。新路线视为本路线的后续版本：发布后，数据汇总会自动合并本路线及其历代前身的历史批次数据，不会出现数据断层。发布前编辑时请保持工序编码不变，否则该工序会被视为新增工序、无法对应历史数据。
-          </Text>
+          <>
+            <Space orientation="vertical" size={4} style={{ display: 'flex', marginTop: 12 }}>
+              <Checkbox
+                checked={copyOptions.copy_computed_fields}
+                onChange={e =>
+                  setCopyOptions(o => ({ ...o, copy_computed_fields: e.target.checked }))
+                }
+              >
+                复制路线计算字段
+              </Checkbox>
+              <Checkbox
+                checked={copyOptions.copy_assignments}
+                onChange={e => setCopyOptions(o => ({ ...o, copy_assignments: e.target.checked }))}
+              >
+                复制工段 / 工序负责人
+              </Checkbox>
+              <Checkbox
+                checked={copyOptions.copy_suffixes}
+                onChange={e => setCopyOptions(o => ({ ...o, copy_suffixes: e.target.checked }))}
+              >
+                复制工段批次尾缀
+              </Checkbox>
+            </Space>
+            <Text
+              type="secondary"
+              style={{ display: 'block', marginTop: 8, fontSize: 12, lineHeight: 1.8 }}
+            >
+              将完整复制本路线的工序、连线与字段定义（中间体配置固定随带）。新路线视为本路线的后续版本：
+              发布后，数据汇总会自动合并本路线及其历代前身的历史批次数据，不会出现数据断层。
+              发布前编辑时请保持工序编码不变，否则该工序会被视为新增工序、无法对应历史数据。
+              已完成计划单/批次仍锁定在原路线执行，新版本只影响后续新建的计划与批次。
+            </Text>
+          </>
         )}
       </Modal>
     </div>

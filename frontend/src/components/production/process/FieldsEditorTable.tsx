@@ -10,6 +10,11 @@ import type { FieldDefIn } from '@/types/production'
 const PHASE_BAR: Record<string, string> = { start: '#1aae39', end: '#0075de' }
 const PHASE_BG: Record<string, string> = { start: '#f0faf2', end: '#f0f5fc' }
 const PHASE_LABEL: Record<string, string> = { start: '开始', end: '结束' }
+/** 阶段可选项：新增字段默认 end（与历史数据一致），由配置人按需改为 start */
+const PHASE_OPTIONS = (['start', 'end'] as const).map(p => ({
+  value: p,
+  label: PHASE_LABEL[p],
+}))
 const TYPE_LABEL: Record<string, string> = {
   numeric: '数值',
   text: '文本',
@@ -72,18 +77,22 @@ export function FieldsEditorTable({ value, onChange }: Props) {
           {/* ── 第一行：阶段 + 显示名 + 必填 + 删除 ── */}
           <div style={{ ...rowStyle, marginBottom: gutter, alignItems: 'center' }}>
             <span
+              aria-hidden
               style={{
-                background: PHASE_BG[f.phase],
-                color: PHASE_BAR[f.phase],
-                fontWeight: 600,
-                fontSize: 13,
-                padding: '2px 10px',
-                borderRadius: 6,
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: PHASE_BAR[f.phase],
                 flexShrink: 0,
               }}
-            >
-              {PHASE_LABEL[f.phase]}
-            </span>
+            />
+            <Select
+              value={f.phase}
+              onChange={v => update(i, { phase: v })}
+              options={PHASE_OPTIONS}
+              style={{ width: 84, flexShrink: 0 }}
+              popupMatchSelectWidth={false}
+            />
             <Input
               placeholder="显示名 *"
               value={f.field_label}
@@ -184,6 +193,27 @@ export function FieldsEditorTable({ value, onChange }: Props) {
               />
             )}
           </div>
+
+          {/* 开始阶段语义护栏：start 字段是开工先决条件，事后没有一线补录通道 */}
+          {f.phase === 'start' && (
+            <div
+              style={{
+                marginTop: gutter,
+                padding: '6px 10px',
+                borderRadius: 6,
+                background: PHASE_BG.start,
+                color: '#37352f',
+                fontSize: 12,
+                lineHeight: 1.6,
+              }}
+            >
+              开工先决条件：数据须在开工前取得，开始工序时一并填报；
+              <strong style={{ color: PHASE_BAR.start }}>
+                开始阶段字段事后无法由一线补录
+              </strong>
+              ，需要修正须由有「修改批次填报数据」权限的人员处理。
+            </div>
+          )}
         </div>
       ))}
       <Button

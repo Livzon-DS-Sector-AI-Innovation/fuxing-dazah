@@ -20,7 +20,7 @@ export default function AssetsErrorPage({
       <Alert
         type="error"
         showIcon
-        message="设备台账加载失败"
+        title="设备台账加载失败"
         description={
           <div>
             <p style={{ margin: '4px 0' }}>{error.message}</p>

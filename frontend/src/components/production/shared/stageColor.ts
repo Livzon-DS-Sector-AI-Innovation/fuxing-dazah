@@ -9,3 +9,8 @@ export function stageColor(name: string) {
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0
   return STAGE_COLORS[Math.abs(h) % STAGE_COLORS.length]
 }
+
+/** 工段淡色底：由 stageColor 同源推导，保证标签色与底色永远一致 */
+export function stageTint(name: string, pct = 14) {
+  return `color-mix(in srgb, ${stageColor(name)} ${pct}%, #ffffff)`
+}

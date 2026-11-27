@@ -29,6 +29,7 @@ import {
   fetchEnabledTypeConfigsClient,
   fetchEquipmentOptionsClient,
 } from '@/lib/api/energy'
+import type { EquipmentOption } from '@/types/energy'
 
 const { TextArea } = Input
 
@@ -54,6 +55,15 @@ const DEFAULT_VALUES = {
 /** 判断平台是否已接入（非 "待接入" 即视为已接入） */
 function isPlatformReady(name: string): boolean {
   return !name.includes('待接入')
+}
+
+function formatEquipmentOptionLabel(item: EquipmentOption): string {
+  const sourceLabel = item.source === 'shared'
+    ? ' · 已共享'
+    : item.source === 'own_scope'
+      ? ' · 我的设备'
+      : ''
+  return `${item.name} (${item.equipment_no})${sourceLabel}`
 }
 
 /** 分组标题组件 */
@@ -152,7 +162,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
       try {
         const items = await fetchEquipmentOptionsClient({ keyword })
         const opts = items.map((item) => {
-          const label = `${item.name} (${item.equipment_no})`
+          const label = formatEquipmentOptionLabel(item)
           equipmentNameMap.current.set(item.id, item.name)
           return { label, value: item.id }
         })
@@ -176,7 +186,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     try {
       const items = await fetchEquipmentOptionsClient({})
       const opts = items.map((item) => {
-        const label = `${item.name} (${item.equipment_no})`
+        const label = formatEquipmentOptionLabel(item)
         equipmentNameMap.current.set(item.id, item.name)
         return { label, value: item.id }
       })
@@ -199,7 +209,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     try {
       const items = await fetchEquipmentOptionsClient({ ids: equipmentIds.join(',') })
       const opts = items.map((item) => {
-        const label = `${item.name} (${item.equipment_no})`
+        const label = formatEquipmentOptionLabel(item)
         equipmentNameMap.current.set(item.id, item.name)
         return { label, value: item.id }
       })
@@ -226,6 +236,21 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     }
   }
 
+  const loadDeviceData = async (id: string) => {
+    try {
+      const device = await getEnergyDeviceById(id)
+      form.setFieldsValue({ ...device })
+      // 编辑时，如果有已关联设备，预加载下拉选项
+      if (device.equipment_ids?.length) {
+        loadEquipmentOptions(device.equipment_ids, device.equipment_names ?? undefined)
+      }
+    } catch {
+      message.error('获取数据源信息失败')
+    }
+  }
+
+  // 打开抽屉时并行加载表单依赖数据。
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (deviceDrawerOpen) {
       loadPlatforms()
@@ -241,20 +266,10 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
         equipmentNameMap.current.clear()
       }
     }
+  // loadDeviceData is defined in this component and only reads the current form helpers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceDrawerOpen, deviceDrawerId, isEdit, form])
-
-  const loadDeviceData = async (id: string) => {
-    try {
-      const device = await getEnergyDeviceById(id)
-      form.setFieldsValue({ ...device })
-      // 编辑时，如果有已关联设备，预加载下拉选项
-      if (device.equipment_ids?.length) {
-        loadEquipmentOptions(device.equipment_ids, device.equipment_names ?? undefined)
-      }
-    } catch {
-      message.error('获取数据源信息失败')
-    }
-  }
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleSubmit = async () => {
     try {
@@ -298,8 +313,9 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
         header: {
           borderBottom: '1px solid #e5e3df',
           padding: '16px 24px',
+          background: 'linear-gradient(110deg, #ffffff 0%, #f8f6ff 100%)',
         },
-        body: { padding: '24px' },
+        body: { padding: '24px', background: '#fafaf9' },
       }}
       extra={
         <Space>
@@ -434,10 +450,8 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               <Select
                 mode="multiple"
                 placeholder="搜索并选择设备台账中的设备"
-                showSearch
+                showSearch={{ filterOption: false, onSearch: handleEquipmentSearch }}
                 allowClear
-                filterOption={false}
-                onSearch={handleEquipmentSearch}
                 onOpenChange={handleEquipmentDropdownOpen}
                 options={equipmentOptions}
                 loading={equipmentLoading}

@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, Field
 
 StrUUID = Annotated[str, BeforeValidator(str)]
 
 
+def _validate_uuid_str(value: object) -> str:
+    """请求体中的 ID 字符串必须是合法 UUID，否则由 Pydantic 返回 422。"""
+    text = str(value)
+    UUID(text)
+    return text
 
+
+UUIDStr = Annotated[str, BeforeValidator(_validate_uuid_str)]
 
 
 def _normalize_department(value: str | None) -> str | None:
@@ -34,7 +42,7 @@ NormalizedDepartment = Annotated[str | None, BeforeValidator(_normalize_departme
 
 class BatchDeleteRequest(BaseModel):
     """批量删除请求。"""
-    ids: list[str] = Field(default_factory=list, min_length=1, description="仪表 ID 列表")
+    ids: list[UUIDStr] = Field(default_factory=list, min_length=1, description="仪表 ID 列表")
 
 
 
@@ -42,7 +50,7 @@ class BatchDeleteRequest(BaseModel):
 
 class ExportReportRequest(BaseModel):
     """批量导出报告请求。"""
-    ids: list[str] = Field(default_factory=list, max_length=200, description="仪表 ID 列表")
+    ids: list[UUIDStr] = Field(default_factory=list, max_length=200, description="仪表 ID 列表")
 
 
 # ═══════════════════════════════════════════

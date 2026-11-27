@@ -196,7 +196,7 @@ export async function generateQaQuestions(formData: FormData): Promise<{
   return res.json()
 }
 
-/** 问答题目同步到题库大全 */
+/** 问答题目同步到题库 */
 export async function syncQaToBank(payload: {
   file_no?: string; subject?: string; questions: { question: string; answer: string; score?: number }[]
 }): Promise<{ data: { inserted: number }; message?: string }> {

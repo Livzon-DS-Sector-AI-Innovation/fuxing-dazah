@@ -1,0 +1,382 @@
+"""液相计算表模板配置驱动的通用解析器。
+
+模板识别键 = 表号（EX-xx-xxxx-vvv，标题单元格内）。取值位置由 quality_lc_template_configs
+的 config JSON 描述，支持两种区块：
+- paired_rows：组分名标签列（如 A 列「Vancomycin B％」）+ 每组分固定行距（第一份/第二份），
+  结果列（报告值，TEXT 百分比文本或数值），可按配置取两份平均或回落列；
+- fixed_cell：固定单元格（如妥布霉素含量 L12）。
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from io import BytesIO
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from openpyxl import Workbook
+    from openpyxl.worksheet.worksheet import Worksheet
+
+EX_RE = re.compile(r"EX-[A-Z]+-\d+-\d+")
+PCT_TEXT_RE = re.compile(r"^\(?([\d.]+)\)?\s*%$")
+
+# 取值闭包签名：get(行, 列) → 单元格值（xlsx 走 openpyxl，xls 走 xlrd，返回值动态）
+CellGetter = Callable[[int, int], Any]
+
+
+def active_sheet(wb: Workbook) -> Worksheet:
+    """工作簿的活动工作表。
+
+    openpyxl 将 Workbook.active 标注为可空（工作表为空时才可能为 None；xlsx 至少一张表），
+    cast 为纯静态断言、不产生任何运行时检查或转换。
+    """
+    return cast("Worksheet", wb.active)
+
+
+@dataclass
+class ParsedComponent:
+    name: str
+    first: float | None = None
+    second: float | None = None
+    report_value: float | None = None  # 最终报告值（百分数数值，如 96.3）
+    limit: float | None = None  # 计算表自带的合格限度（百分数数值，如 93.0）
+
+
+@dataclass
+class GenericLcParse:
+    product_name: str = ""
+    batch_number: str = ""
+    form_id: str = ""
+    components: list[ParsedComponent] = field(default_factory=list)
+
+
+def _col_letter(c: int) -> str:
+    letters = ""
+    while c > 0:
+        c, rem = divmod(c - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def _cell_coord(cell: str) -> tuple[int, int]:
+    """'L12' → (12, 12)。"""
+    m = re.match(r"([A-Z]+)(\d+)", cell.upper())
+    if not m:
+        raise ValueError(f"非法单元格坐标: {cell}")
+    col = 0
+    for ch in m.group(1):
+        col = col * 26 + ord(ch) - 64
+    return int(m.group(2)), col
+
+
+def _parse_value(v: Any) -> float | None:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip()
+    if s in ("", "-", "未检出"):
+        return None
+    m = PCT_TEXT_RE.match(s)
+    if m:
+        return float(m.group(1))
+    try:
+        return float(s.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _open_xls(file_bytes: bytes) -> tuple[CellGetter, int, int]:
+    """旧版 .xls：xlrd 读取（无 py.typed，导入点局部 ignore）。"""
+    import xlrd  # type: ignore[import-untyped]
+
+    book = xlrd.open_workbook(file_contents=file_bytes)
+    sh = book.sheet_by_index(0)
+
+    def get_xls(r: int, c: int) -> Any:
+        if r < 1 or c < 1 or r > sh.nrows or c > sh.ncols:
+            return None
+        return sh.cell_value(r - 1, c - 1)
+
+    return get_xls, sh.nrows, sh.ncols
+
+
+def decrypt_office_file(file_bytes: bytes, password: str) -> bytes:
+    """解密 Excel 密码保护文件（CDFV2/OLE 容器，openpyxl 无法直接读取）。
+
+    密码仅内存使用、不落库；解密后字节仅用于本次解析，原件仍按加密态归档留痕。
+    失败抛 ValueError（端点转 422 友好提示）。
+    """
+    import msoffcrypto  # type: ignore[import-untyped]
+
+    try:
+        office = msoffcrypto.OfficeFile(BytesIO(file_bytes))
+        office.load_key(password=password)
+        decrypted = BytesIO()
+        office.decrypt(decrypted)
+        return decrypted.getvalue()
+    except Exception:
+        raise ValueError("文件解密失败：密码不正确或文件已损坏") from None
+
+
+def is_office_encrypted(file_bytes: bytes) -> bool:
+    """是否为「密码打开」加密的 Office 文件（OLE 容器内含 EncryptedPackage 流）。
+
+    zip 容器的 xlsx 一定未加密；普通旧版 xls 同为 OLE 容器但无该流。
+    供服务端兜底密码使用：仅加密文件才消耗密码，未加密文件不碰。
+    """
+    if file_bytes[:4] != b"\xd0\xcf\x11\xe0":  # 非 OLE 容器（xlsx/zip 或其他）
+        return False
+    import olefile  # type: ignore[import-untyped]  # msoffcrypto-tool 依赖，随装随用
+
+    try:
+        with olefile.OleFileIO(BytesIO(file_bytes)) as ole:
+            return bool(ole.exists("EncryptedPackage"))
+    except Exception:
+        return False
+
+
+def open_sheet(
+    file_bytes: bytes, filename: str
+) -> tuple[CellGetter, int, int]:
+    """返回 (getter(r, c), max_row, max_col)。xlsx 用 openpyxl（缓存值），xls 用 xlrd。
+
+    xlsx 扩展名但内容不是 zip（旧版 xls 改扩展名/损坏）时先尝试 xlrd 兜底，
+    仍失败则抛 ValueError（端点转为 422 友好提示，而非 500）。
+    """
+    if filename.lower().endswith(".xls"):
+        return _open_xls(file_bytes)
+
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    except Exception:
+        try:
+            return _open_xls(file_bytes)
+        except Exception:
+            raise ValueError(
+                "无法读取该文件：文件可能已加密（请在解析时填写文件密码）或格式损坏；"
+                "旧版 .xls 请用 Excel 另存为 .xlsx 后重试"
+            ) from None
+    ws = active_sheet(wb)
+    # 合并单元格映射：非锚点格读锚点值（报告值常一格跨多行，如 M22:M25）
+    merge_anchor: dict[tuple[int, int], tuple[int, int]] = {}
+    for mr in ws.merged_cells.ranges:
+        anchor = (mr.min_row, mr.min_col)
+        for rr in range(mr.min_row, mr.max_row + 1):
+            for cc in range(mr.min_col, mr.max_col + 1):
+                merge_anchor[(rr, cc)] = anchor
+
+    def get_xlsx(r: int, c: int) -> Any:
+        if r < 1 or c < 1 or r > ws.max_row or c > ws.max_column:
+            return None
+        ar, ac = merge_anchor.get((r, c), (r, c))
+        return ws.cell(ar, ac).value
+
+    return get_xlsx, ws.max_row, ws.max_column
+
+
+def open_sheet_cached(
+    file_bytes: bytes, filename: str, max_row: int = 1000, max_col: int = 100
+) -> tuple[CellGetter, int, int]:
+    """版式搜索专用：取值区域一次性读入内存（list 索引 + 合并格锚点映射）。
+
+    部分文件带万级行列格式（如 66 行 × 16372 列），openpyxl 逐格访问每次 parse 秒级；
+    缓存后为 list 下标毫秒级。xls（xlrd）本身是数组读取，直接透传。
+    """
+    if filename.lower().endswith(".xls"):
+        return open_sheet(file_bytes, filename)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    ws = active_sheet(wb)
+    mr = min(ws.max_row or 1, max_row)
+    mc = min(ws.max_column or 1, max_col)
+    grid = [
+        list(row)
+        for row in ws.iter_rows(min_row=1, max_row=mr, max_col=mc, values_only=True)
+    ]
+    anchors: dict[tuple[int, int], tuple[int, int]] = {}
+    for rng in ws.merged_cells.ranges:
+        anchor = (rng.min_row, rng.min_col)
+        for rr in range(rng.min_row, min(rng.max_row, mr) + 1):
+            for cc in range(rng.min_col, min(rng.max_col, mc) + 1):
+                anchors[(rr, cc)] = anchor
+
+    def get(r: int, c: int) -> Any:
+        if r < 1 or c < 1 or r > mr or c > mc:
+            return None
+        ar, ac = anchors.get((r, c), (r, c))
+        row = grid[ar - 1] if ar - 1 < len(grid) else []
+        return row[ac - 1] if ac - 1 < len(row) else None
+
+    return get, mr, mc
+
+
+def detect_table_no(get: CellGetter, max_row: int, max_col: int) -> str | None:
+    """标题单元格（前 5 行）中提取表号 EX-xx-xxxx-vvv。"""
+    for r in range(1, min(6, max_row + 1)):
+        for c in range(1, min(12, max_col + 1)):
+            v = get(r, c)
+            if v and isinstance(v, str):
+                m = EX_RE.search(v)
+                if m:
+                    return m.group(0)
+    return None
+
+
+def find_batch(get: CellGetter, max_row: int, max_col: int, label: str = "批号") -> str:
+    """定位「批号」标签：值在同格冒号后、标签右侧一格，或标签与值分列较远（同行扫首个非标签值）。"""
+    for r in range(1, min(15, max_row + 1)):
+        for c in range(1, max_col + 1):
+            v = get(r, c)
+            if v and isinstance(v, str) and label in v:
+                rest = v.replace(label, "").strip().lstrip("：:").strip()
+                if rest:
+                    return rest
+                nxt = get(r, c + 1)
+                if nxt is not None and str(nxt).strip() and label not in str(nxt):
+                    return str(nxt).strip()
+                for cc in range(1, max_col + 1):
+                    if cc == c:
+                        continue
+                    w = get(r, cc)
+                    if w is not None and str(w).strip() and label not in str(w):
+                        return str(w).strip()
+    return ""
+
+
+def _apply_merges(
+    components: list[ParsedComponent], merge_rules: list[dict[str, Any]]
+) -> list[ParsedComponent]:
+    """组分合并规则：如 杂质B = 杂质B1 + 杂质B2（取二者之和）。
+
+    规则形如 {"into": "杂质B(B1+B2)", "from": ["杂质B1", "杂质B2"], "op": "sum"}。
+    按名称包含关系收集 from 组分，op=sum 时报告值/份值分别求和，合并为一个组分。
+    """
+    for rule in merge_rules:
+        into = rule.get("into", "")
+        parts = rule.get("from", [])
+        op = rule.get("op", "sum")
+        if not into or not parts:
+            continue
+        matched = [c for c in components if any(p in c.name for p in parts)]
+        if not matched:
+            continue
+        if op == "sum":
+            # 0.0 是合法和值，不能用 `or None` 判缺失（会丢掉真实为 0 的结果）
+            first_vals = [c.first for c in matched if c.first is not None]
+            second_vals = [c.second for c in matched if c.second is not None]
+            first = sum(first_vals) if first_vals else None
+            second = sum(second_vals) if second_vals else None
+            vals = [c.report_value for c in matched if c.report_value is not None]
+            report = round(sum(vals), 4) if vals else None
+        else:
+            continue
+        merged = ParsedComponent(name=into, first=first, second=second, report_value=report)
+        components = [c for c in components if c not in matched] + [merged]
+    return components
+
+
+def parse_with_config(
+    file_bytes: bytes,
+    filename: str,
+    config: dict[str, Any],
+    form_id: str,
+    get: CellGetter | None = None,
+    max_row: int | None = None,
+    max_col: int | None = None,
+) -> GenericLcParse:
+    """get/max_row/max_col 提供时跳过文件重开（批量版式搜索场景）。"""
+    if get is None or max_row is None or max_col is None:
+        get, max_row, max_col = open_sheet(file_bytes, filename)
+    # 防御：部分文件带巨量空行/空列格式（行撑到百万级、列撑到 1.6 万列），
+    # 真实计算表 ≤ 500 行 × 30 列，超出的直接截断（不影响取值位置）
+    max_row = min(max_row, 1000)
+    max_col = min(max_col, 100)
+    result = GenericLcParse(
+        product_name=config.get("product_name", ""),
+        batch_number=find_batch(get, max_row, max_col, config.get("batch_label", "批号")),
+        form_id=form_id,
+    )
+    for block in config.get("blocks", []):
+        kind = block.get("kind")
+        if kind == "fixed_cell":
+            r, c = _cell_coord(block["cell"])
+            result.components.append(ParsedComponent(
+                name=block.get("name", ""), report_value=_parse_value(get(r, c)),
+            ))
+        elif kind == "paired_rows":
+            _, name_col = _cell_coord(block["name_col"] + "1")
+            _, val_col = _cell_coord((block.get("value_col") or "A") + "1")
+            fallback_col = block.get("fallback_col")
+            _, fb_col = _cell_coord((fallback_col or block.get("value_col") or "A") + "1")
+            step = int(block.get("step", 4))
+            avg = bool(block.get("avg", False))
+            r = int(block.get("start_row", 1))
+            while r <= max_row:
+                label = get(r, name_col)
+                # 组分标签带百分比号（模板里全角 ％ 与半角 % 均有）
+                matched = label and isinstance(label, str) and (
+                    "%" in label or "％" in label
+                )
+                if not matched:
+                    r += 1
+                    continue
+                name = label.strip()
+                half = step // 2
+
+                def pick(row: int) -> float | None:
+                    v = _parse_value(get(row, val_col))
+                    if v is None and fb_col != val_col:
+                        v = _parse_value(get(row, fb_col))
+                    return v
+
+                first = pick(r)
+                second = pick(r + half)
+                if avg:
+                    vals = [x for x in (first, second) if x is not None]
+                    report = round(sum(vals) / len(vals), 4) if vals else None
+                else:
+                    report = first if first is not None else second
+                result.components.append(ParsedComponent(
+                    name=name, first=first, second=second, report_value=report,
+                ))
+                r += step
+    result.components = _apply_merges(result.components, config.get("merge", []))
+    _apply_limits(get, max_row, max_col, result.components, config.get("limits"))
+    return result
+
+
+def _apply_limits(
+    get: CellGetter, max_row: int, max_col: int,
+    components: list[ParsedComponent], limits_cfg: dict[str, Any] | None,
+) -> None:
+    """计算表自带限度列（如 O 列组分名 + P 列限度，小数形式 ×100 → 百分数）。
+
+    limits_cfg = {"name_col": "O", "value_col": "P", "scale": 100}。
+    按名称包含关系把限度挂到对应组分（未匹配到标准库的组分靠它自动追加任务行）。
+    """
+    if not limits_cfg:
+        return
+    _, name_col = _cell_coord(limits_cfg.get("name_col", "O") + "1")
+    _, value_col = _cell_coord(limits_cfg.get("value_col", "P") + "1")
+    scale = float(limits_cfg.get("scale", 100))
+    limits: dict[str, float] = {}
+    for r in range(1, max_row + 1):
+        name = get(r, name_col)
+        if not name or not isinstance(name, str):
+            continue
+        if "注意" in name or "组分" in name or "超趋势" in name:
+            continue
+        v = _parse_value(get(r, value_col))
+        if v is not None:
+            limits[name.strip()] = round(v * scale, 6)
+    for c in components:
+        for name, val in limits.items():
+            if name in c.name or c.name.replace("％", "").replace("%", "") in name:
+                c.limit = val
+                break

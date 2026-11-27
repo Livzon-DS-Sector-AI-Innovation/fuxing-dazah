@@ -78,6 +78,9 @@ export interface EquipmentOption {
   id: string
   equipment_no: string
   name: string
+  status?: string | null
+  is_active?: boolean
+  source?: 'own_scope' | 'shared' | string
 }
 
 // 能耗数据

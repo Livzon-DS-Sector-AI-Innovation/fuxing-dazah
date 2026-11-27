@@ -1,8 +1,15 @@
-"""简历 PDF 解析器 - 基于 pdfplumber 提取文本后用规则匹配字段。"""
+"""简历 PDF 解析器 - 基于 pdfplumber 提取文本后用规则匹配字段。
 
+规则为快路径（姓名/电话/邮箱等格式固定字段）；学校/专业等嵌在自由文本里的
+开放字段规则覆盖不全，低置信或缺失时由 enhance_parsed_with_llm 交 LLM 复核。
+"""
+
+import logging
 import re
 from datetime import date
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 
 
 def _clean(text: str) -> str:
@@ -25,18 +32,41 @@ def parse_resume_pdf(file_bytes: bytes) -> dict:
     # 工作经历信息（用原始文本解析，保留换行）
     company_info = _extract_company_info(raw_text)
 
+    school = _extract_school(text)
+    major = _extract_major(text)  # 标签提取（高置信）
+    major_from_keywords = False
+    if not major:
+        major = _extract_major_keywords(text)
+        major_from_keywords = True
+
+    name = _extract_name(text)
+    # 姓名规则覆盖标签/字距/开头窗口三种形态，仍提取不到（如「求职自荐书」
+    # 封面页全是水印噪声、姓名无标签深藏正文段中）→ 交 LLM
+    # 学校规则兜底（xx大学/学院）误命中率低，缺失才需要 LLM；
+    # 专业无标签 = 规则没把握（关键词猜测/空），交 LLM 复核
+    llm_fields: list[str] = []
+    if not name:
+        llm_fields.append("name")
+    if not school:
+        llm_fields.append("school")
+    if not major or major_from_keywords:
+        llm_fields.append("major")
+
     return {
-        "name": _extract_name(text),
+        "name": name,
         "phone": _extract_phone(text),
         "email": _extract_email(text),
-        "school": _extract_school(text),
-        "education": _extract_education(raw_text),
-        "major": _extract_major(text),
+        "school": school,
+        "education": _extract_education(text),
+        "major": major,
         "gender": _extract_gender(text),
         "current_company": company_info["current_company"],
         "work_years": company_info["work_years"],
         "expected_salary": _extract_expected_salary(text),
         "source": _extract_source(text),
+        # 内部提示键：enhance_parsed_with_llm 消费后在返回 API 前移除
+        "_llm_fields": llm_fields,
+        "_llm_text_head": text[:4000],
     }
 
 
@@ -44,21 +74,50 @@ def parse_resume_pdf(file_bytes: bytes) -> dict:
 _NAME_BLOCKLIST = {
     "个人简历", "个人简介", "基本信息", "个人资料", "求职意向", "求职简历",
     "应聘登记", "简历模板", "联系电话", "教育背景", "工作经历",
+    # 平台导出模板的基本信息区标签（兜底窗口会扫到）
+    "姓名", "性别", "出生年月", "籍贯", "现居", "民族", "婚姻状况",
+    "政治面貌", "身高", "体重", "手机", "电话", "电子邮箱", "邮箱",
+    "自荐书", "求职信", "推荐信", "个人总结", "自我评价",
 }
 
 
 def _extract_name(text: str) -> str:
+    # 常规简历：标签与姓名均无空格
     m = re.search(r"姓名[：:]\s*([一-鿿]{2,4})", text)
     if m:
         return m.group(1)
-    # 清洗后的文本无换行结构：不要只取首行（那会是整个文档）。
-    # 取文档开头的前 30 个字符内首个 2-4 字中文串，并排除常见标题词。
-    head = text[:30]
-    for m in re.finditer(r"([一-鿿]{2,4})", head):
-        candidate = m.group(1)
-        if candidate in _NAME_BLOCKLIST:
+    # 招聘平台导出的 PDF 常因字距排版插入空格：「姓 名： 练 珊 出生年月：…」
+    # 键容忍空格；值捕获 2-4 个中文（字间可有空格），以「非中文非空格字符 /
+    # 下一个中文标签带冒号 / 行尾」为界，防止把后续标签吞进姓名
+    m = re.search(
+        r"姓\s*名\s*[：:]\s*((?:[一-鿿]\s*){2,4}?)"
+        r"(?=\s*[^\s一-鿿]|\s+(?:[一-鿿]\s*){2,}[：:]|\s*$)",
+        text,
+    )
+    if m:
+        return re.sub(r"\s+", "", m.group(1))
+    # 兜底：文档开头无姓名标签时，取前 60 字符窗口内的首个姓名候选。
+    # （窗口 30→60：平台导出 PDF 开头常有一段水印/单字竖排噪声先占十几个字符）
+    # 按空白切 token 扫描，支持两种形态：
+    # - 连续 2-4 字中文 token（常规简历：首行就是名字）
+    # - 相邻单字中文 token 游程拼接（字距排版把姓名拆成「翁 甜」）
+    tokens = text[:60].split()
+    run: list[str] = []  # 当前相邻单字中文游程
+    for tok in tokens:
+        if len(tok) == 1 and "一" <= tok <= "鿿":
+            run.append(tok)
+            if len(run) > 4:  # 超长游程不是姓名（如竖排水印整列）
+                run = run[-4:]
             continue
-        return candidate
+        # 游程结束：2-4 个单字拼成候选
+        if 2 <= len(run) <= 4:
+            return "".join(run)
+        run = []
+        # 连续 2-4 字纯中文 token
+        if 2 <= len(tok) <= 4 and all("一" <= ch <= "鿿" for ch in tok) and tok not in _NAME_BLOCKLIST:
+            return tok
+    if 2 <= len(run) <= 4:
+        return "".join(run)
     return ""
 
 
@@ -72,18 +131,50 @@ def _extract_email(text: str) -> str:
     return m.group(0) if m else ""
 
 
+# 校名前的叙述性介词/动词：教育经历行常见「…2018.09-2022.06 于某某大学…」
+# 「就读于/毕业于/考入…」，兜底正则捕获会把它们一并吞进校名（如「于某某大学」）
+_SCHOOL_PREFIXES = ("就读于", "毕业于", "考入于", "任职于", "考入", "考取", "就读", "进入", "获得", "于", "在")
+
+
+def _strip_school_prefix(name: str) -> str:
+    """剥离校名前的介词/动词前缀，剥完仍需以大学/学院结尾且长度合理。"""
+    changed = True
+    while changed:
+        changed = False
+        for p in _SCHOOL_PREFIXES:
+            if name.startswith(p) and len(name) - len(p) >= 2:
+                name = name[len(p):]
+                changed = True
+    if re.search(r"(?:大学|学院)$", name) and len(name) >= 4:
+        return name
+    return ""
+
+
 def _extract_school(text: str) -> str:
-    for pat in [r"毕业院校[：:]\s*(\S+)", r"学校[：:]\s*(\S+)"]:
+    for pat in [r"毕\s*业\s*院\s*校\s*[：:]\s*(\S+)", r"学\s*校\s*[：:]\s*(\S+)"]:
         m = re.search(pat, text)
         if m:
-            return m.group(1)
+            stripped = _strip_school_prefix(m.group(1))
+            if stripped:
+                return stripped
+    # 优先在教育经历/教育背景段落内找校名（叙述句「…于某某大学…」只出现在这里，
+    # 避免正文其他位置的「xx大学附属医院」类公司名误命中），无段落则全文兜底
+    for sec_pat in (r"教育经历(.*?)(?:工作经历|项目经历|相关技能|荣誉证书|$)",
+                    r"教育背景(.*?)(?:工作经历|项目经历|相关技能|荣誉证书|$)"):
+        m_sec = re.search(sec_pat, text, re.DOTALL)
+        if m_sec:
+            m = re.search(r"([一-鿿]{2,}(?:大学|学院))", m_sec.group(1))
+            if m:
+                stripped = _strip_school_prefix(m.group(1))
+                if stripped:
+                    return stripped
     m = re.search(r"([一-鿿]{2,}(?:大学|学院))", text)
-    return m.group(1) if m else ""
+    return _strip_school_prefix(m.group(1)) if m else ""
 
 
 def _extract_education(text: str) -> str:
     """解析学历，优先返回已毕业的最高学历（"至今"标记的视为在读）。"""
-    m = re.search(r"学历[：:]\s*(\S+)", text)
+    m = re.search(r"学\s*历\s*[：:]\s*(\S+)", text)
     if m:
         return m.group(1)
 
@@ -134,11 +225,34 @@ def _extract_education(text: str) -> str:
 
 
 def _extract_major(text: str) -> str:
-    m = re.search(r"专业[：:]\s*([^\n]{1,20})", text)
+    # 标签后贪婪取中文段（容忍字间空格），以首个非中文非空白字符为界——
+    # 直聘 PDF 值后紧跟的水印噪声（「专业：生物制药 9 1 1f 1f c c b」中的
+    # 数字/字母碎片）与「药学类（方向）」的括号说明都会自然截断
+    m = re.search(r"专\s*业\s*[：:]\s*([一-鿿](?:[\s]?[一-鿿]){1,19})", text)
     if m:
-        return m.group(1).strip()
-    for major in ["药学", "化学", "生物工程", "计算机科学", "软件工程", "机械工程", "会计", "人力资源",
-                  "制药工程", "生物技术", "药物分析", "分析化学", "临床医学"]:
+        # 先合并字间空格，再截掉粘连的下一栏标签词（如「学 历：」→「学历」）
+        val = re.sub(r"\s+", "", m.group(1))
+        for tail in ("毕业院校", "求职意向", "求职方向", "工作经历", "教育经历", "专业技能",
+                     "专业证书", "学历", "学校", "电话", "手机", "邮箱", "性别", "出生年月", "政治面貌"):
+            idx = val.find(tail)
+            if idx > 0:
+                val = val[:idx]
+                break
+        return val
+    return ""
+
+
+# 关键词兜底列表：无「专业：」标签时的低置信猜测——专业嵌在教育经历行
+# （如「华中农业大学 农艺与种业（硕士）」）时无法用规则可靠取出，且子串
+# 误命中率高（主修课程里的「生物化学」会被「化学」命中），标记低置信交 LLM 复核
+_MAJOR_KEYWORDS = [
+    "药学", "化学", "生物工程", "计算机科学", "软件工程", "机械工程", "会计", "人力资源",
+    "制药工程", "生物技术", "药物分析", "分析化学", "临床医学",
+]
+
+
+def _extract_major_keywords(text: str) -> str:
+    for major in _MAJOR_KEYWORDS:
         if major in text:
             return major
     return ""
@@ -148,14 +262,19 @@ def _extract_gender(text: str) -> str:
     m = re.search(r"性别[：:]\s*(\S+)", text)
     if m:
         return m.group(1)
+    # 字距空格版：「性 别： 女 籍 贯：…」——键容忍空格，值限定 1-2 字中文
+    # （后随空格/非中文即止，防止吞掉下一标签）
+    m = re.search(r"性\s*别\s*[：:]\s*([一-鿿]{1,2})(?=[^\s一-鿿]|\s|$)", text)
+    if m:
+        return m.group(1)
     return ""
 
 
 def _extract_expected_salary(text: str) -> str:
     """提取期望薪资，如 8k-10k、8000-10000、8-10K 等。"""
     for pat in [
-        r"期望薪资[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
-        r"薪资要求[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
+        r"期\s*望\s*薪\s*资\s*[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
+        r"薪\s*资\s*要\s*求\s*[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
     ]:
         m = re.search(pat, text)
         if m:
@@ -269,3 +388,49 @@ def _is_school(name: str) -> bool:
         if kw in name:
             return True
     return False
+
+
+async def enhance_parsed_with_llm(parsed: dict) -> dict:
+    """LLM 复核规则解析的开放字段（school/major），并清理内部提示键。
+
+    - 规则高置信值（标签提取/学校正则命中）不参与、不被覆盖
+    - 仅当 parse_resume_pdf 标记了低置信/缺失字段时才调用 LLM（控制成本）
+    - LLM 失败静默保留规则值（关键词猜测总比空值好），不阻断建档
+    """
+    text_head = parsed.pop("_llm_text_head", "")
+    fields = parsed.pop("_llm_fields", [])
+    if not fields or not text_head.strip():
+        return parsed
+
+    from app.modules.hr.ai_service import AiChatService
+
+    prompt = (
+        "从以下简历正文中提取一个 JSON 对象，包含三个字段：\n"
+        '- "name": 求职者中文姓名（2-4 个汉字；正文未出现姓名则取 null，不要用机构名/标题词充当）\n'
+        '- "school": 最高学历对应的毕业院校全称\n'
+        '- "major": 所学专业名称（去掉括号内的方向补充，如「农艺与种业（生物学与技术）」取「农艺与种业」）\n'
+        "提取不到的字段值为 null，只依据正文不要臆造。只输出 JSON。\n\n"
+        f"简历正文：\n{text_head}"
+    )
+    try:
+        result = await AiChatService.call_json(prompt)
+    except Exception as e:
+        logger.warning("简历开放字段 LLM 复核失败（保留规则值）: %s", e)
+        return parsed
+    for f in fields:
+        v = result.get(f)
+        if not isinstance(v, str):
+            continue
+        v = v.strip()
+        # name 严格限中文姓名形态：常规 2-4 字，或带·的少数民族全名；
+        # 再过 blocklist，防止「求职自荐书」这类标题词冒充。
+        # 其余字段限短字符串防长段落污染
+        if f == "name":
+            if not re.fullmatch(r"[一-鿿]{2,4}(·[一-鿿]{2,6})?", v):
+                continue
+            if v in _NAME_BLOCKLIST:
+                continue
+        if f != "name" and not (2 <= len(v) <= 40):
+            continue
+        parsed[f] = v
+    return parsed

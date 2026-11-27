@@ -36,6 +36,10 @@ function buildColumns(totalHours: number): ColumnsType<StepCycleStat> {
     {
       title: '工序',
       dataIndex: 'node_name',
+      // ellipsis 不只是截断：rc-table 只有见到 fixed 列 / scroll.y / ellipsis 才把整表切成
+      // table-layout:fixed，否则仍是 auto——中文的 min-content 只有一个汉字宽，
+      // 容器一窄「一级种子罐培养」就会被压成一字一行。长工序名由 title 悬浮显示。
+      ellipsis: true,
       render: (v: string) => <Text strong>{v}</Text>,
     },
     {
@@ -129,7 +133,7 @@ export default function StepCyclePanel({ products }: Props) {
   const [error, setError] = useState<string | null>(null)
   // 用户手动选择的覆盖值，undefined = 自动选第一个
   const [productOverride, setProductOverride] = useState<string | undefined>()
-  const [days, setDays] = useState(30)
+  const [days, setDays] = useState(90)
 
   // 渲染期间派生实际值：用户选了什么就用什么，没选就取第一个
   const selectedProduct = useMemo(
@@ -218,9 +222,9 @@ export default function StepCyclePanel({ products }: Props) {
             value={days}
             onChange={setDays}
             options={[
-              { label: '最近 7 天', value: 7 },
-              { label: '最近 30 天', value: 30 },
               { label: '最近 90 天', value: 90 },
+              { label: '最近 180 天', value: 180 },
+              { label: '最近 1 年', value: 365 },
             ]}
           />
         </div>
@@ -241,7 +245,7 @@ export default function StepCyclePanel({ products }: Props) {
 
       {selectedProduct && error && (
         <Alert
-          message={error}
+          title={error}
           type="error"
           showIcon
           closable
@@ -296,6 +300,9 @@ export default function StepCyclePanel({ products }: Props) {
                 loading={loading}
                 size="middle"
                 pagination={false}
+                // 列宽合计 866 + 工序列 144。容器窄于此就不再压缩列，改为横向滚动，
+                // 行高因此恒定（配合上面的 table-layout:fixed）。
+                scroll={{ x: 1010 }}
                 summary={() => (
                   <Table.Summary.Row>
                     <Table.Summary.Cell index={0} colSpan={3}>

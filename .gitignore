@@ -1,4 +1,5 @@
 .claude
+.agents
 .mcp.json
 .DS_Store
 .pnpm-store
@@ -6,47 +7,8 @@ CLAUDE.local.md
 dazah-agent
 prompt.md
 docs/superpowers
+.superpowers
 .zcode
 # 飞书授权二维码（临时凭证，勿入库）
 lark-auth-qrcode.png
-
-# safety 模块合并期的临时分析产物（勿入库）
-.ai_fields_result.txt
-base_scan/
-tbl_list.json
-wf_list.json
-wf_sample.json
-wf_summary.txt
-parse_workflows.py
-scan_ai_fields.py
-
-# 备份目录 / 编辑器备份文件
-backend/app/modules/safety.bak.*/
-*.bak
-
-# 本地工作产物（不入库）：会话探针/日志/规格草稿、DSH 技能、运行时上传目录
-.scratch/
-.dsh/
-frontend/.logs/
-gui-test-screenshots/
-uploads/
-loki_search.json
-
-# 本地运行时库（不入库）
-backend/app.db
-backend/scripts/tmp/
-
-# 独立工程（不入本仓库）：运动会插件有独立 git 仓库、宣传函归属同一运动会项目
-/sports-invitation/
-/sports-meet-plugin/
-
-# 临时诊断探针 / 本地数据档案（不入库，2026-11-11 大扫除收口）
-tmp/
-tmp-daily/
-frontend/scripts-tmp/
-frontend/scripts-tmp-geo-diag.js
-/五金库编码补全/
-backend/scripts-tmp/
-draft_*/
-frontend/.build-ci/
-
+temp

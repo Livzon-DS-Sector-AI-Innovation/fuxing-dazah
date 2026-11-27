@@ -18,13 +18,16 @@ from typing import Any
 import lark_oapi as lark
 from lark_oapi.api.drive.v1 import P2DriveFileBitableRecordChangedV1
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
-from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTrigger
+from lark_oapi.event.callback.model.p2_card_action_trigger import (
+    P2CardActionTrigger,
+    P2CardActionTriggerResponse,
+)
 
 logger = logging.getLogger(__name__)
 
 _main_loop: asyncio.AbstractEventLoop | None = None
 
-CardActionHandler = Callable[[dict[str, Any], str], Awaitable[None]]
+CardActionHandler = Callable[[dict[str, Any], str], Awaitable[dict[str, Any] | None]]
 BitableRecordHandler = Callable[
     [str, str, list[dict[str, Any]]], Awaitable[None],
 ]
@@ -128,56 +131,84 @@ def register_card_action_handler(
     _CARD_ACTION_HANDLERS[action] = handler
 
 
-def _on_card_action(data: P2CardActionTrigger) -> None:
-    """卡片按钮点击事件（同步入口，在 WS 线程中调用）。"""
+def _on_card_action(data: P2CardActionTrigger) -> P2CardActionTriggerResponse | None:
+    """卡片按钮/表单提交事件（同步入口，在 WS 线程中调用）。
+
+    handler 返回 dict（如 {"toast": ...} / {"card": {...}}）时构造
+    P2CardActionTriggerResponse 回传飞书（toast 提示 / 卡片原地更新）。
+    """
     event = data.event
     if not event:
-        return
+        return None
 
-    # 新版 SDK: action.value 已经是 dict，无需手动解析 JSON
+    # 新版 SDK: action.value / action.form_value 已经是 dict，无需手动解析 JSON
     action_value = (event.action.value if event.action else {}) or {}
+    form_value = (event.action.form_value if event.action else {}) or {}
     user_id = ""
+    open_id = ""
     if event.operator:
         user_id = event.operator.user_id or ""
+        open_id = event.operator.open_id or ""
 
-    logger.info("卡片按钮点击: user_id=%s, value=%s", user_id, action_value)
+    # 日志只打 action 名，不打 value/form_value（业务表单可能含身份证号等敏感值）
+    logger.info(
+        "卡片按钮点击: user_id=%s, open_id=%s, action=%s, form_keys=%s",
+        user_id, open_id, action_value.get("action"), list(form_value.keys()),
+    )
 
     if _main_loop is None:
         logger.error("主 event loop 未设置，无法处理卡片回调")
-        return
+        return None
 
     future = asyncio.run_coroutine_threadsafe(
-        _handle_card_action_async(action_value=action_value, user_id=user_id),
+        _handle_card_action_async(
+            action_value=action_value, user_id=user_id,
+            form_value=form_value, open_id=open_id,
+        ),
         _main_loop,
     )
     try:
-        future.result(timeout=30)
+        result = future.result(timeout=30)
     except Exception:
         logger.exception("异步处理卡片回调超时或异常")
+        return None
+    if isinstance(result, dict) and result:
+        return P2CardActionTriggerResponse(result)
+    return None
 
 
 async def _handle_card_action_async(
     *,
     action_value: dict[str, Any],
     user_id: str,
-) -> None:
-    """按注册表分发卡片按钮点击给业务模块。"""
+    form_value: dict[str, Any] | None = None,
+    open_id: str = "",
+) -> dict[str, Any] | None:
+    """按注册表分发卡片按钮点击给业务模块。
+
+    payload 附加 _form_value（表单容器提交值）与 _open_id（提交人 open_id），
+    需要 Table 单元格回调识别提交人身份的业务方从 payload 取用；
+    纯按钮场景（如 equipment）不受影响。
+    """
     if _main_loop is None:
         set_main_loop(asyncio.get_running_loop())
 
     # 新版 SDK 已预解析 action value 为 dict
-    payload = action_value or {}
+    payload = dict(action_value or {})
     action = payload.get("action")
     if not action:
-        logger.error("卡片回调缺少 action: %s", payload)
-        return
+        logger.error("卡片回调缺少 action: %s", action_value)
+        return None
 
     handler = _CARD_ACTION_HANDLERS.get(action)
     if handler is None:
-        logger.error("未注册的卡片 action: %s", payload)
-        return
+        logger.error("未注册的卡片 action: %s", action)
+        return None
 
-    await handler(payload, user_id)
+    payload["_form_value"] = form_value or {}
+    payload["_open_id"] = open_id
+    result = await handler(payload, user_id)
+    return result if isinstance(result, dict) else None
 
 
 # ═══════════════════════════════════════════════════════════════

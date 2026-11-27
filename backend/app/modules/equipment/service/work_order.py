@@ -82,8 +82,11 @@ async def _update_equipment_status(
     *,
     operator_id: uuid.UUID | None = None,
 ) -> None:
-    """直接更新设备状态（模块内使用）"""
-    equipment = await repo.get_equipment_by_id(db, equipment_id)
+    """直接更新设备状态（模块内使用）
+
+    无范围读取：调用方已在工单层面完成归属校验，这里只是按其结果同步设备状态。
+    """
+    equipment = await repo.get_equipment_unscoped(db, equipment_id)
     if equipment and equipment.status != status:
         old_status = equipment.status
         equipment.status = status
@@ -102,7 +105,7 @@ async def _try_restore_equipment_status(
     """检查设备是否所有故障维修工单已关闭，是则恢复设备为完好"""
     open_count = await repo.count_open_fault_work_orders(db, equipment_id)
     if open_count == 0:
-        equipment = await repo.get_equipment_by_id(db, equipment_id)
+        equipment = await repo.get_equipment_unscoped(db, equipment_id)
         # 覆盖"建单后未开始维修就关单"的场景（设备停在故障待检）
         if equipment and equipment.status in ("故障待检", "维修中"):
             old_status = equipment.status
@@ -119,7 +122,9 @@ async def create_work_order(
     ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """创建维修工单"""
-    equipment = await repo.get_equipment_by_id(db, data.equipment_id)
+    # 范围读：跨部门（或归属部门为空的）设备一律视为不存在，避免凭 UUID
+    # 给别的部门设备报修并顺带改其状态、发通知。
+    equipment = await repo.get_equipment_by_id(db, data.equipment_id, ctx)
     if not equipment:
         raise NotFoundException("设备", str(data.equipment_id))
 
@@ -211,13 +216,13 @@ async def assign_work_order(
 
     # 飞书通知被指派人
     equipment = wo.equipment
-    asyncio.ensure_future(_notify_assignment(
+    notify_assignment_in_background(
         assignee_id=assignee_id,
         work_order_no=wo.work_order_no,
         equipment_name=equipment.name if equipment else "",
         order_type=wo.order_type,
         priority=wo.priority,
-    ))
+    )
 
     return wo
 
@@ -272,12 +277,18 @@ async def complete_work_order(
             get_spare_part_by_id,
             get_stock_by_spare_part_id,
         )
+        # 同一备件可能被登记成多行，必须先按备件汇总再校验：
+        # 逐行比较会让每行都单独通过，直到验收扣减第二行才失败，工单卡在待验收
+        needed: dict[uuid.UUID, int] = {}
         for p in data.consumed_parts:
-            sp = await get_spare_part_by_id(db, uuid.UUID(p.spare_part_id))
-            stock = await get_stock_by_spare_part_id(db, uuid.UUID(p.spare_part_id))
-            if not stock or stock.current_qty < p.quantity:
+            pid = uuid.UUID(p.spare_part_id)
+            needed[pid] = needed.get(pid, 0) + p.quantity
+        for pid, qty in needed.items():
+            sp = await get_spare_part_by_id(db, pid)
+            stock = await get_stock_by_spare_part_id(db, pid)
+            if not stock or stock.current_qty < qty:
                 raise AppException(
-                    message=f"备件 '{sp.name}' 库存不足（当前 {stock.current_qty if stock else 0}，需要 {p.quantity}）"
+                    message=f"备件 '{sp.name}' 库存不足（当前 {stock.current_qty if stock else 0}，需要 {qty}）"
                 )
 
         wo.consumed_parts_data = json.dumps(
@@ -472,16 +483,17 @@ async def _notify_new_work_order(
         )
 
 
-async def _notify_assignment(
+async def notify_assignment(
     assignee_id: uuid.UUID,
     work_order_no: str,
     equipment_name: str,
     order_type: str,
     priority: str,
 ) -> None:
-    """指派维修人后飞书通知被指派人。
+    """指派维修人后飞书通知被指派人（手动指派与自动指派共用）。
 
     非关键路径：发送失败只记日志，不影响主流程。
+    自建 session、纯标量参数，可在请求上下文与后台任务中直接调用。
     """
     try:
         from sqlalchemy import select as sa_select
@@ -514,6 +526,7 @@ async def _notify_assignment(
             f"**优先级：**{priority}",
             "",
             "你已被指派为该工单的维修人，请及时处理。",
+            "可在飞书机器人对话中说「我的工单」开始处理。",
         ]
         content = "\n".join(lines)
 
@@ -536,6 +549,30 @@ async def _notify_assignment(
         logger.exception(
             "指派通知异常: %s", work_order_no,
         )
+
+
+# asyncio 只对运行中的任务持弱引用，不自己持引用会被 GC 提前取消
+# （日志只有 "Task was destroyed but it is pending"，协程内的 try/except 捕获不到）
+_assignment_notify_tasks: set[asyncio.Task[None]] = set()
+
+
+def notify_assignment_in_background(
+    assignee_id: uuid.UUID,
+    work_order_no: str,
+    equipment_name: str,
+    order_type: str,
+    priority: str,
+) -> None:
+    """后台发送指派通知（fire-and-forget，调用方不等待）。"""
+    task = asyncio.create_task(notify_assignment(
+        assignee_id=assignee_id,
+        work_order_no=work_order_no,
+        equipment_name=equipment_name,
+        order_type=order_type,
+        priority=priority,
+    ))
+    _assignment_notify_tasks.add(task)
+    task.add_done_callback(_assignment_notify_tasks.discard)
 
 
 async def _notify_rejection(
@@ -690,10 +727,11 @@ async def get_work_orders(
     priority: str | None = None,
     order_type: str | None = None,
     exclude_status: str | None = None,
+    perspective: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[WorkOrder], int]:
-    """获取工单列表"""
+    """获取工单列表（perspective 为用户视角过滤，见 repo.WORK_ORDER_PERSPECTIVE_COLUMNS）"""
     return await repo.get_work_orders(
         db, ctx,
         status=status,
@@ -701,6 +739,7 @@ async def get_work_orders(
         priority=priority,
         order_type=order_type,
         exclude_status=exclude_status,
+        perspective=perspective,
         page=page,
         page_size=page_size,
     )
@@ -743,12 +782,19 @@ async def consume_materials(
         get_stock_by_spare_part_id,
     )
 
+    # 固定加锁顺序：并发验收两张消耗备件顺序相反的工单时，
+    # 按 JSON 顺序逐行 FOR UPDATE 会形成交叉等待（PostgreSQL 死锁，一方被中止）
+    items = sorted(items, key=lambda item: str(item["spare_part_id"]))
+
     total_cost = Decimal('0.00')
     transactions = []
 
     for item in items:
         spare_part = await get_spare_part_by_id(db, item["spare_part_id"])
-        stock = await get_stock_by_spare_part_id(db, item["spare_part_id"])
+        # 加锁读取：校验与扣减需在同一行锁内，否则并发领料会双双通过校验后互相覆盖
+        stock = await get_stock_by_spare_part_id(
+            db, item["spare_part_id"], for_update=True
+        )
 
         if not stock or stock.current_qty < item["quantity"]:
             raise AppException(
@@ -767,6 +813,7 @@ async def consume_materials(
                 "transaction_type": "出库",
                 "quantity": -item["quantity"],
                 "remark": f"工单 {wo.work_order_no} 领料",
+                "created_by": ctx.user.id,
             },
         )
         transactions.append(transaction)

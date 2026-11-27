@@ -64,6 +64,19 @@ export async function updateSystemSettings(data: Record<string, unknown>): Promi
   })
 }
 
+/** 发送测试提醒（会真实发飞书卡片）：返回可送达 / 无法解析 / 发送失败三类结果 */
+export async function sendReminderTest(payload: { kind: 'probation' | 'contract'; receivers: string[] }): Promise<{
+  code: number
+  message: string
+  data: { sent: number; failed: { receiver: string; error: string }[]; unresolved: string[] }
+}> {
+  return fetchHrApi('/hr/reminder-settings/test', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    errorMessage: '发送测试消息失败',
+  })
+}
+
 // ─── 通知记录 ───
 
 export async function fetchNotificationLogs(params?: { page_size?: number }): Promise<{ data: unknown[] }> {

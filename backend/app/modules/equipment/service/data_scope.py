@@ -89,7 +89,11 @@ async def verify_write_ownership(
 
     resource_value = getattr(resource, field, None)
     if resource_value is None:
-        return  # 资源没有归属字段，放行
+        if mode == "department_id":
+            # 无归属资源（历史无主数据）不再对普通用户放行，
+            # 否则任何人都能改这些「无主」行
+            raise ForbiddenException("该资源未设置归属部门，请联系管理员处理")
+        return  # user_id 模式下资源没有归属字段，放行
 
     if mode == "department_id":
         # 设备台账：检查 department_id 是否在可见部门列表中

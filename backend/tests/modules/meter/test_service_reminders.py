@@ -21,6 +21,7 @@ from tests.modules.meter.conftest import (
     create_department,
     create_gas_detector,
     create_instrument,
+    create_report,
 )
 
 
@@ -181,6 +182,54 @@ class TestDateStats:
         assert years[0]["months"][0]["month"] == 2
         assert years[0]["count"] == 1
 
+    async def test_instrument_date_stats_honors_has_report(
+        self, db_session: AsyncSession
+    ) -> None:
+        """「报告」筛选应参与日期统计（与列表口径一致）。"""
+        from app.modules.meter.schemas import InstrumentFilter
+
+        dept = f"TEST-DSH-{uuid4().hex[:8]}"
+        with_report = await create_instrument(
+            db_session, department=dept, calibration_date=date(2026, 4, 1)
+        )
+        await create_instrument(
+            db_session, department=dept, calibration_date=date(2026, 4, 2)
+        )
+        await create_report(db_session, instrument_id=with_report.id)
+
+        has = await service.get_instrument_date_stats(
+            db_session, InstrumentFilter(department=dept, has_report=True), "calibration_date"
+        )
+        assert [d["day"] for d in has["years"][0]["months"][0]["days"]] == [1]
+        none = await service.get_instrument_date_stats(
+            db_session, InstrumentFilter(department=dept, has_report=False), "calibration_date"
+        )
+        assert [d["day"] for d in none["years"][0]["months"][0]["days"]] == [2]
+
+    async def test_gas_detector_date_stats_honors_has_report(
+        self, db_session: AsyncSession
+    ) -> None:
+        """探测器日期统计同样遵循「报告」筛选。"""
+        from app.modules.meter.schemas import GasDetectorFilter
+
+        dept = f"TEST-DSHG-{uuid4().hex[:8]}"
+        with_report = await create_gas_detector(
+            db_session, department=dept, calibration_date=date(2026, 4, 1)
+        )
+        await create_gas_detector(
+            db_session, department=dept, calibration_date=date(2026, 4, 2)
+        )
+        await create_report(db_session, gas_detector_id=with_report.id)
+
+        has = await service.get_gas_detector_date_stats(
+            db_session, GasDetectorFilter(department=dept, has_report=True), "calibration_date"
+        )
+        assert [d["day"] for d in has["years"][0]["months"][0]["days"]] == [1]
+        none = await service.get_gas_detector_date_stats(
+            db_session, GasDetectorFilter(department=dept, has_report=False), "calibration_date"
+        )
+        assert [d["day"] for d in none["years"][0]["months"][0]["days"]] == [2]
+
 
 class TestBuildDateStatsTree:
     def test_empty_rows(self) -> None:
@@ -227,7 +276,7 @@ class TestSendCalibrationReminders:
         """没有可通知部门时直接返回全 0。"""
         send_mock = self._patch(monkeypatch, enabled=True, depts=[])
         result = await service.send_calibration_reminders(db_session)
-        assert result == {"sent": 0, "skipped": 0, "errors": 0}
+        assert result == {"sent": 0, "skipped": 0, "errors": 0, "delivered": 0}
         send_mock.assert_not_awaited()
 
     async def test_global_switch_off_skips(
@@ -236,7 +285,7 @@ class TestSendCalibrationReminders:
         """全局开关关闭时跳过发送。"""
         send_mock = self._patch(monkeypatch, enabled=False)
         result = await service.send_calibration_reminders(db_session)
-        assert result == {"sent": 0, "skipped": 0, "errors": 0}
+        assert result == {"sent": 0, "skipped": 0, "errors": 0, "delivered": 0}
         send_mock.assert_not_awaited()
 
     async def test_sends_card_per_head(
@@ -348,6 +397,47 @@ class TestSendCalibrationReminders:
         result = await service.send_calibration_reminders(db_session)
         assert result["sent"] == 0
         assert result["errors"] == 1
+
+    async def test_partial_head_failure_records_delivered(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """部门内一人成功一人失败：sent=0，但 delivered=1，调度器据此不再重发。"""
+        dept_name = f"TEST-NOTIFY-{uuid4().hex[:8]}"
+        dept = await create_department(
+            db_session,
+            auto_notify_enabled=True,
+            name=dept_name,
+            heads=[
+                {"name": "张三", "feishu_open_id": "ou_1"},
+                {"name": "李四", "feishu_open_id": "ou_2"},
+            ],
+        )
+        send_mock = self._patch(monkeypatch, enabled=True, depts=[dept])
+        send_mock.side_effect = [True, False]
+        await create_instrument(
+            db_session, department=dept_name, next_calibration_date=date.today() + timedelta(days=3)
+        )
+        result = await service.send_calibration_reminders(db_session)
+        assert result == {"sent": 0, "skipped": 0, "errors": 1, "delivered": 1}
+
+    async def test_malformed_heads_do_not_abort_send(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """脏 heads 数据（非 dict 条目 / open_id 为 None）不应中断整轮发送。"""
+        dept_name = f"TEST-NOTIFY-{uuid4().hex[:8]}"
+        heads: Any = [{"name": "张三", "feishu_open_id": None}, "脏数据"]
+        dept = await create_department(
+            db_session, auto_notify_enabled=True, name=dept_name, heads=heads
+        )
+        send_mock = self._patch(monkeypatch, enabled=True, depts=[dept])
+        await create_instrument(
+            db_session, department=dept_name, next_calibration_date=date.today() + timedelta(days=3)
+        )
+        result = await service.send_calibration_reminders(db_session)
+        # 张三没有可用飞书 ID、脏条目被过滤 → 部门计错误，但不抛异常
+        assert result["sent"] == 0
+        assert result["errors"] == 1
+        send_mock.assert_not_awaited()
 
     async def test_prefers_user_id_over_open_id(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch

@@ -156,9 +156,12 @@ export function PersonnelDrawer({ open, onClose, roles: _roles }: Props) {
           mode="multiple"
           value={selectedIds}
           onChange={(v) => setSelectedIds(v)}
-          onSearch={(v) => setKeyword(v)}
+          // 原来是裸 onSearch + filterOption；多条模式本就默认开启搜索，显式写成对象形式
+          showSearch={{
+            onSearch: (v) => setKeyword(v),
+            filterOption: false,
+          }}
           onClear={() => setKeyword('')}
-          filterOption={false}
           notFoundContent={
             isLoading ? '搜索中...' : keyword ? '无匹配人员' : '请输入姓名搜索'
           }

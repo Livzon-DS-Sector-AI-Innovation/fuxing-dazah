@@ -42,6 +42,13 @@ def build_user_prompt(items, target_lang: str, doc_type: str, glossary_lines: li
         parts.append("术语表（必须严格执行）：\n" + "\n".join(glossary_lines))
     if prev_context:
         parts.append(f"（上一段原文，仅供上下文参考，无需翻译：{prev_context}）")
+    if any("\ufffd" in text for _, text in items):
+        # 源 PDF 字体映射缺陷（ToUnicode 破损）导致抽取文本丢字母，抽取层以 � 占位
+        parts.append(
+            "注意：原文中的 �（U+FFFD）是源文件字体缺陷丢失的字母，常见为 fi/fl/ffi/ffl 连字"
+            "（如 \"O�cial\" 实为 Official）。请按上下文还原为正确单词后翻译，"
+            "还原字母不属于增删内容；译文中不得保留 �。"
+        )
     parts.append(
         '请翻译以下段落，返回 JSON：{"t": [{"i": 段落编号, "s": "译文"}]}。'
         "必须覆盖全部输入编号，不得遗漏、不得增删段落。\n"

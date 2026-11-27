@@ -14,6 +14,7 @@ from app.modules.equipment.mcp_tools._helpers import (
     _get_template_item_map,
     _it_to_dict,
     _resolve_equipment,
+    _task_equipment_count,
 )
 from app.modules.equipment.models.inspection_route_location import (
     RouteLocation,
@@ -26,6 +27,11 @@ from app.modules.equipment.repository.inspection import (
     get_task_equipment_completed_ids,
 )
 from app.modules.equipment.service.inspection import (
+    add_equipment_note,
+    save_photo_from_base64,
+    submit_equipment_check,
+)
+from app.modules.equipment.service.inspection import (
     close_task as close_inspection_task,
 )
 from app.modules.equipment.service.inspection import (
@@ -36,10 +42,6 @@ from app.modules.equipment.service.inspection import (
 )
 from app.modules.equipment.service.inspection import (
     get_tasks as get_inspection_tasks,
-)
-from app.modules.equipment.service.inspection import (
-    save_photo_from_base64,
-    submit_equipment_check,
 )
 from app.modules.equipment.service.inspection import (
     start_task as start_inspection_task,
@@ -61,15 +63,18 @@ async def submit_inspection(
     equipment: str,
     operator_id: str,
     check_items: list[dict[str, Any]],
+    equipment_note: str | None = None,
 ) -> ToolResult:
     """
     提交设备巡检表单，逐项记录检查结果。
 
     支持线路巡检和设备巡检两种模式：
-    - 设备巡检：直接使用 task 上绑定的 template_ids 查找检查项
+    - 设备巡检：按 task.equipment_templates 查该设备绑定的检查项
+      （旧任务数据回退 task.template_ids 扁平列表）
     - 线路巡检：从路线 → 地点 → 设备的模板绑定中查找检查项（自动合并多模板）
 
-    如果所有设备都已提交，自动完成该巡检任务。
+    提交只记录当前设备的检查结果，不会自动完成任务——全部设备提交后
+    需调用 update_inspection_task(action="complete") 显式完成。
 
     如需上传巡检照片，请使用 submit_inspection_photos 工具。
 
@@ -83,12 +88,17 @@ async def submit_inspection(
             - actual_value: 实测值（可选）。数值型检查项只填纯数字（如 25.3），
               勿带单位/文字，否则会被拒绝并要求重填。
             - remark: 备注（可选）
+        equipment_note: 设备现场说明（可选）。计划外突发现象等不属于任何
+            检查项的自由文字记录（如"旁边地面有油渍，疑似法兰渗漏"），
+            工人主动提及时填入。
     """
     db = get_db()
     try:
-        await resolve_user(db, operator_id)
+        operator = await resolve_user(db, operator_id)
     except ValueError as e:
-        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
 
     task = await get_task_by_no(db, task_no)
     if not task:
@@ -101,7 +111,9 @@ async def submit_inspection(
     try:
         eq = await _resolve_equipment(db, equipment)
     except ValueError as e:
-        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
     equipment_uuid = eq.id
 
     task_uuid = task.id
@@ -126,7 +138,9 @@ async def submit_inspection(
         if result == "异常" and not item.get("actual_value") and not item.get("remark"):
             return ToolResult(
                 content=f"提交失败：检查项「{item_name}」结果为【异常】，必须填写实际值（actual_value）或备注（remark）。",
-                structured_content={"error": f"异常项缺少 actual_value/remark：{item_name}"},
+                structured_content={
+                    "error": f"异常项缺少 actual_value/remark：{item_name}"
+                },
                 is_error=True,
             )
 
@@ -157,8 +171,8 @@ async def submit_inspection(
                 available = "、".join([k for k, v in name_to_id.items() if v][:10])
                 return ToolResult(
                     content=f"提交失败：template_item_id「{tid}」无效，数据库中没有此检查项。\n"
-                            f"请使用 get_inspection_check_items 获取正确的 template_item_id。\n"
-                            f"可用检查项：{available}",
+                    f"请使用 get_inspection_check_items 获取正确的 template_item_id。\n"
+                    f"可用检查项：{available}",
                     structured_content={
                         "error": f"无效的 template_item_id：{tid}",
                         "available": [k for k, v in name_to_id.items() if v][:10],
@@ -173,16 +187,19 @@ async def submit_inspection(
                 available = "、".join([k for k in name_to_id if name_to_id[k]][:10])
                 return ToolResult(
                     content=f"提交失败：未找到检查项「{item_name}」。\n"
-                            f"可用检查项：{available}\n"
-                            f"请确认检查项名称与模板完全一致。",
-                    structured_content={"error": f"未知检查项：{item_name}", "available": [k for k in name_to_id if name_to_id[k]][:10]},
+                    f"可用检查项：{available}\n"
+                    f"请确认检查项名称与模板完全一致。",
+                    structured_content={
+                        "error": f"未知检查项：{item_name}",
+                        "available": [k for k in name_to_id if name_to_id[k]][:10],
+                    },
                     is_error=True,
                 )
             if not mapped_id:
                 return ToolResult(
                     content=f"提交失败：检查项「{item_name}」在多个模板中存在，无法通过名称定位。\n"
-                            f"请使用 get_inspection_check_items 获取正确的 template_item_id，"
-                            f"并在提交时提供 template_item_id 而非 item_name。",
+                    f"请使用 get_inspection_check_items 获取正确的 template_item_id，"
+                    f"并在提交时提供 template_item_id 而非 item_name。",
                     structured_content={
                         "error": f"检查项名称冲突：{item_name}",
                         "hint": "使用 template_item_id 替代 item_name",
@@ -194,7 +211,14 @@ async def submit_inspection(
 
     # 提交
     try:
-        submitted = await submit_equipment_check(db, task_uuid, equipment_uuid, records)
+        submitted = await submit_equipment_check(
+            db,
+            task_uuid,
+            equipment_uuid,
+            records,
+            note=equipment_note,
+            note_by=operator.id,
+        )
     except Exception as e:
         await db.rollback()
         return ToolResult(
@@ -206,16 +230,27 @@ async def submit_inspection(
     # 显式提交事务
     await db.commit()
 
-    # 重新查询任务状态
+    # 重新查询任务状态；提交动作本身不会把任务置为已完成，
+    # 所以按「已完成设备数 >= 任务设备数」判断是否全部提交
     task_after = await get_inspection_task_by_id(db, task_uuid)
-    all_done = task_after.status == "已完成"
+    completed_ids = await get_task_equipment_completed_ids(db, task_uuid)
+    total_equipments = _task_equipment_count(task_after)
+    all_done = task_after.status == "已完成" or (
+        total_equipments > 0 and len(completed_ids) >= total_equipments
+    )
 
     lines = [
         f"任务 {task.task_no} · 设备 {eq.equipment_no}（{eq.name}）提交成功！",
         f"已记录 {len(submitted)} 项检查结果",
     ]
-    if all_done:
-        lines.append("所有设备均已提交，巡检任务已完成！")
+    if equipment_note and equipment_note.strip():
+        lines.append(f"已记录现场说明：{equipment_note.strip()}")
+    if task_after.status == "已完成":
+        lines.append("巡检任务已完成。")
+    elif all_done:
+        lines.append(
+            "所有设备均已提交，可调用 update_inspection_task(action=\"complete\") 完成任务。"
+        )
     else:
         lines.append("还有待检设备，请继续巡检。")
     content = "\n".join(lines)
@@ -228,6 +263,91 @@ async def submit_inspection(
             "equipment_no": eq.equipment_no,
             "submitted_count": len(submitted),
             "all_done": all_done,
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Tool 4.4: 补记设备现场说明
+# ─────────────────────────────────────────────────────────────
+@mcp.tool()
+async def add_inspection_note(
+    task_no: str,
+    equipment: str,
+    content: str,
+    operator_id: str,
+) -> ToolResult:
+    """
+    为执行中的巡检任务补记一条设备现场说明。
+
+    适用场景：工人在巡检过程中主动提到计划外突发现象——
+    不属于任何已配置检查项的现场情况（如"旁边地面有油渍，疑似法兰渗漏"、
+    "设备运行声音和平时不一样"）。随口提到即可记录，不必等提交检查结果。
+
+    同一设备允许多条追加；提交检查结果时也可通过 submit_inspection 的
+    equipment_note 参数一并带上。现场说明会在巡检详情中展示，
+    若该设备巡检异常自动生成工单，说明会拼入工单故障描述。
+
+    Args:
+        task_no: 巡检任务编号（如 IT-20260630-0001）
+        equipment: 设备编号（如 EQ-001）或 UUID
+        content: 说明内容（工人原话或整理后的现场描述）
+        operator_id: 实际操作人的 user_id 或姓名
+    """
+    db = get_db()
+    try:
+        operator = await resolve_user(db, operator_id)
+    except ValueError as e:
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
+
+    task = await get_task_by_no(db, task_no)
+    if not task:
+        return ToolResult(
+            content=f"未找到任务「{task_no}」，请检查任务编号是否正确。",
+            structured_content={"error": f"任务不存在：{task_no}"},
+            is_error=True,
+        )
+
+    try:
+        eq = await _resolve_equipment(db, equipment)
+    except ValueError as e:
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
+
+    if not (content or "").strip():
+        return ToolResult(
+            content="现场说明内容不能为空。",
+            structured_content={"error": "content 不能为空"},
+            is_error=True,
+        )
+
+    try:
+        note = await add_equipment_note(
+            db, task.id, eq.id, content, created_by=operator.id
+        )
+    except Exception as e:
+        await db.rollback()
+        return ToolResult(
+            content=f"补记失败：{e}",
+            structured_content={"error": str(e)},
+            is_error=True,
+        )
+
+    await db.commit()
+
+    return ToolResult(
+        content=(
+            f"已记录设备 {eq.equipment_no}（{eq.name}）的现场说明：\n"
+            f"{note.content}"
+        ),
+        structured_content={
+            "success": True,
+            "task_no": task.task_no,
+            "equipment_no": eq.equipment_no,
+            "note_id": str(note.id),
         },
     )
 
@@ -282,47 +402,57 @@ async def submit_inspection_photos(
         idx = i + 1
 
         if not isinstance(img, str) or not img.strip():
-            validation_errors.append({
-                "index": idx,
-                "reason": f"第{idx}张图片数据为空，请提供有效的 base64 编码字符串",
-            })
+            validation_errors.append(
+                {
+                    "index": idx,
+                    "reason": f"第{idx}张图片数据为空，请提供有效的 base64 编码字符串",
+                }
+            )
             decoded_images.append(b"")
             continue
 
         try:
             content = base64.b64decode(img, validate=True)
         except Exception as e:
-            validation_errors.append({
-                "index": idx,
-                "reason": f"第{idx}张图片 base64 解码失败：{e}。请确保传入的是不含前缀的纯 base64 字符串",
-            })
+            validation_errors.append(
+                {
+                    "index": idx,
+                    "reason": f"第{idx}张图片 base64 解码失败：{e}。请确保传入的是不含前缀的纯 base64 字符串",
+                }
+            )
             decoded_images.append(b"")
             continue
 
         if len(content) > max_size:
             size_mb = len(content) / 1024 / 1024
-            validation_errors.append({
-                "index": idx,
-                "reason": f"第{idx}张图片大小 {size_mb:.1f}MB 超过上限 10MB，请压缩后再上传",
-            })
+            validation_errors.append(
+                {
+                    "index": idx,
+                    "reason": f"第{idx}张图片大小 {size_mb:.1f}MB 超过上限 10MB，请压缩后再上传",
+                }
+            )
             decoded_images.append(b"")
             continue
 
         if len(content) < 64:
-            validation_errors.append({
-                "index": idx,
-                "reason": f"第{idx}张图片数据过小（{len(content)} bytes），可能不是有效图片",
-            })
+            validation_errors.append(
+                {
+                    "index": idx,
+                    "reason": f"第{idx}张图片数据过小（{len(content)} bytes），可能不是有效图片",
+                }
+            )
             decoded_images.append(b"")
             continue
 
         magic = content[:4]
         recognized = any(magic.startswith(mb) for mb in valid_magics)
         if not recognized:
-            validation_errors.append({
-                "index": idx,
-                "reason": f"第{idx}张图片格式无法识别，仅支持 {supported_formats} 格式",
-            })
+            validation_errors.append(
+                {
+                    "index": idx,
+                    "reason": f"第{idx}张图片格式无法识别，仅支持 {supported_formats} 格式",
+                }
+            )
             decoded_images.append(b"")
             continue
 
@@ -331,7 +461,8 @@ async def submit_inspection_photos(
     if validation_errors:
         reason_lines = [e["reason"] for e in validation_errors]
         return ToolResult(
-            content=f"图片校验失败，共 {len(validation_errors)} 张图片有问题：\n" + "\n".join(f"  · {r}" for r in reason_lines),
+            content=f"图片校验失败，共 {len(validation_errors)} 张图片有问题：\n"
+            + "\n".join(f"  · {r}" for r in reason_lines),
             structured_content={
                 "success": False,
                 "error": "图片校验失败",
@@ -346,7 +477,9 @@ async def submit_inspection_photos(
     try:
         await resolve_user(db, operator_id)
     except ValueError as e:
-        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
 
     task = await get_task_by_no(db, task_no)
     if not task:
@@ -368,7 +501,9 @@ async def submit_inspection_photos(
     try:
         eq = await _resolve_equipment(db, equipment)
     except ValueError as e:
-        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
 
     task_uuid = task.id
     equipment_uuid = eq.id
@@ -382,15 +517,20 @@ async def submit_inspection_photos(
     for i, img_b64 in enumerate(images):
         idx = i + 1
         try:
-            await save_photo_from_base64(db, task_uuid, equipment_uuid, img_b64)
+            # 行级 SAVEPOINT：单张失败只回滚本张。此前 db.rollback() 会把同批
+            # 前面已保存（未提交）的照片一并回滚，而 success_count 已计入，
+            # 返回"成功上传 N 张"与实际落库数不符。
+            async with db.begin_nested():
+                await save_photo_from_base64(db, task_uuid, equipment_uuid, img_b64)
             success_count += 1
         except Exception as e:
-            await db.rollback()
             failed_count += 1
-            failed_details.append({
-                "index": idx,
-                "reason": f"第{idx}张图片保存失败：{e}",
-            })
+            failed_details.append(
+                {
+                    "index": idx,
+                    "reason": f"第{idx}张图片保存失败：{e}",
+                }
+            )
 
     await db.commit()
 
@@ -399,7 +539,8 @@ async def submit_inspection_photos(
     if success_count == 0:
         reason_lines = [d["reason"] for d in failed_details]
         return ToolResult(
-            content=f"上传失败：{failed_count} 张照片全部未能保存。\n" + "\n".join(f"  · {r}" for r in reason_lines),
+            content=f"上传失败：{failed_count} 张照片全部未能保存。\n"
+            + "\n".join(f"  · {r}" for r in reason_lines),
             structured_content={
                 "success": False,
                 "task_no": task.task_no,
@@ -464,7 +605,12 @@ async def list_inspection_tasks(
             )
 
     tasks, _total = await get_inspection_tasks(
-        db, ctx, assigned_to=user.id, status=status, page=1, page_size=100,
+        db,
+        ctx,
+        assigned_to=user.id,
+        status=status,
+        page=1,
+        page_size=100,
     )
     if not status:
         tasks = [t for t in tasks if t.status in ("待执行", "执行中")]
@@ -487,10 +633,7 @@ async def list_inspection_tasks(
                 name_map.get(uuid.UUID(eid), eid[:8] + "…")
                 for eid in r["equipment_ids"]
             ]
-            nos = [
-                no_map.get(uuid.UUID(eid), "")
-                for eid in r["equipment_ids"]
-            ]
+            nos = [no_map.get(uuid.UUID(eid), "") for eid in r["equipment_ids"]]
             if names:
                 r["equipment_name"] = "、".join(n for n in names[:3] if n)
                 if len(names) > 3:
@@ -505,7 +648,11 @@ async def list_inspection_tasks(
     else:
         lines = [f"{user.name} 共有 {len(result)} 个巡检任务："]
         for t in result:
-            eq_label = t["equipment_name"] or t.get("equipment_no", "") or f"{t['equipment_count']}台设备"
+            eq_label = (
+                t["equipment_name"]
+                or t.get("equipment_no", "")
+                or f"{t['equipment_count']}台设备"
+            )
             route_label = f"路线「{t['route_name']}」" if t["route_name"] else ""
             lines.append(
                 f"- [{t['status']}] {t['task_no']} "
@@ -548,7 +695,9 @@ async def update_inspection_task(
     try:
         user = await resolve_user(db, operator_id)
     except ValueError as e:
-        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
 
     if action not in ("start", "complete", "close"):
         return ToolResult(
@@ -628,30 +777,44 @@ async def get_inspection_task_progress(
     equipments: list[dict[str, Any]] = []
 
     if task.route_id:
-        loc_stmt = select(RouteLocation).where(
-            RouteLocation.route_id == task.route_id,
-            RouteLocation.is_deleted == False,  # noqa: E712
-        ).options(
-            selectinload(RouteLocation.location),
-        ).order_by(RouteLocation.sort_order)
+        loc_stmt = (
+            select(RouteLocation)
+            .where(
+                RouteLocation.route_id == task.route_id,
+                RouteLocation.is_deleted == False,  # noqa: E712
+            )
+            .options(
+                selectinload(RouteLocation.location),
+            )
+            .order_by(RouteLocation.sort_order)
+        )
         locs = (await db.execute(loc_stmt)).scalars().all()
 
         for loc in locs:
-            eq_stmt = select(RouteLocationEquipment).where(
-                RouteLocationEquipment.route_location_id == loc.id,
-                RouteLocationEquipment.is_deleted == False,  # noqa: E712
-            ).options(
-                selectinload(RouteLocationEquipment.equipment),
-            ).order_by(RouteLocationEquipment.sort_order)
+            eq_stmt = (
+                select(RouteLocationEquipment)
+                .where(
+                    RouteLocationEquipment.route_location_id == loc.id,
+                    RouteLocationEquipment.is_deleted == False,  # noqa: E712
+                )
+                .options(
+                    selectinload(RouteLocationEquipment.equipment),
+                )
+                .order_by(RouteLocationEquipment.sort_order)
+            )
             eqs = (await db.execute(eq_stmt)).scalars().all()
             for eq in eqs:
-                equipments.append({
-                    "equipment_id": str(eq.equipment_id),
-                    "equipment_name": eq.equipment.name if eq.equipment else "",
-                    "equipment_no": eq.equipment.equipment_no if eq.equipment else "",
-                    "location_name": loc.location.name if loc.location else "",
-                    "sort_order": eq.sort_order,
-                })
+                equipments.append(
+                    {
+                        "equipment_id": str(eq.equipment_id),
+                        "equipment_name": eq.equipment.name if eq.equipment else "",
+                        "equipment_no": eq.equipment.equipment_no
+                        if eq.equipment
+                        else "",
+                        "location_name": loc.location.name if loc.location else "",
+                        "sort_order": eq.sort_order,
+                    }
+                )
     elif task.equipment_ids or task.equipment_id:
         eq_ids: list[str] = list(task.equipment_ids or [])
         if task.equipment_id:
@@ -662,26 +825,37 @@ async def get_inspection_task_progress(
         name_map = await get_equipment_names_by_ids(
             db, [uuid.UUID(eid) for eid in eq_ids]
         )
-        no_map = await get_equipment_nos_by_ids(
-            db, [uuid.UUID(eid) for eid in eq_ids]
-        )
+        no_map = await get_equipment_nos_by_ids(db, [uuid.UUID(eid) for eid in eq_ids])
         for eid_str in eq_ids:
-            equipments.append({
-                "equipment_id": eid_str,
-                "equipment_name": name_map.get(uuid.UUID(eid_str), ""),
-                "equipment_no": no_map.get(uuid.UUID(eid_str), ""),
-                "location_name": "",
-                "sort_order": 0,
-            })
+            equipments.append(
+                {
+                    "equipment_id": eid_str,
+                    "equipment_name": name_map.get(uuid.UUID(eid_str), ""),
+                    "equipment_no": no_map.get(uuid.UUID(eid_str), ""),
+                    "location_name": "",
+                    "sort_order": 0,
+                }
+            )
 
     completed_ids = await get_task_equipment_completed_ids(db, task_uuid)
     completed_set = {str(cid) for cid in completed_ids}
 
-    for eq in equipments:
-        eq["checked"] = eq["equipment_id"] in completed_set
+    for row in equipments:
+        row["checked"] = row["equipment_id"] in completed_set
 
-    pending = [eq for eq in equipments if not eq["checked"]]
-    checked = [eq for eq in equipments if eq["checked"]]
+    # 已记录的设备现场说明（工人回查"我说那个漏水记了没"时可见）
+    from app.modules.equipment.repository.inspection import (
+        get_notes_by_task as _get_notes_by_task,
+    )
+
+    notes = await _get_notes_by_task(db, task_uuid)
+    notes_by_eq: dict[str, list[str]] = {}
+    for n in notes:
+        if n.content and n.content.strip():
+            notes_by_eq.setdefault(str(n.equipment_id), []).append(n.content.strip())
+
+    pending = [row for row in equipments if not row["checked"]]
+    checked = [row for row in equipments if row["checked"]]
 
     route_label = f" · 路线「{task.route.name}」" if task.route else ""
     lines = [
@@ -690,15 +864,23 @@ async def get_inspection_task_progress(
     ]
     if pending:
         lines.append("待检设备：")
-        for eq in pending:
-            loc = f"（{eq['location_name']}）" if eq.get("location_name") else ""
-            no = f" {eq['equipment_no']}" if eq.get("equipment_no") else ""
-            lines.append(f"  - {eq['equipment_name']}{no}{loc}  [{eq['equipment_id']}]")
+        for row in pending:
+            loc_label = (
+                f"（{row['location_name']}）" if row.get("location_name") else ""
+            )
+            no = f" {row['equipment_no']}" if row.get("equipment_no") else ""
+            lines.append(
+                f"  - {row['equipment_name']}{no}{loc_label}  [{row['equipment_id']}]"
+            )
+            for note_text in notes_by_eq.get(row["equipment_id"], []):
+                lines.append(f"      现场说明：{note_text}")
     if checked:
         lines.append("已检设备：")
-        for eq in checked:
-            no = f" {eq['equipment_no']}" if eq.get("equipment_no") else ""
-            lines.append(f"  - {eq['equipment_name']}{no}  [{eq['equipment_id']}]")
+        for row in checked:
+            no = f" {row['equipment_no']}" if row.get("equipment_no") else ""
+            lines.append(f"  - {row['equipment_name']}{no}  [{row['equipment_id']}]")
+            for note_text in notes_by_eq.get(row["equipment_id"], []):
+                lines.append(f"      现场说明：{note_text}")
     content = "\n".join(lines)
 
     return ToolResult(
@@ -749,7 +931,9 @@ async def get_inspection_check_items(
     try:
         await resolve_user(db, operator_id)
     except ValueError as e:
-        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
 
     task = await get_task_by_no(db, task_no)
     if not task:
@@ -762,13 +946,15 @@ async def get_inspection_check_items(
     try:
         eq = await _resolve_equipment(db, equipment)
     except ValueError as e:
-        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+        return ToolResult(
+            content=str(e), structured_content={"error": str(e)}, is_error=True
+        )
 
     from app.modules.equipment.service.inspection import get_inspection_items
 
     items, tpl_names = await get_inspection_items(db, task, eq.id)
 
-    item_dicts = [
+    item_dicts: list[dict[str, Any]] = [
         {
             "template_item_id": str(item.id),
             "item_name": item.item_name,
@@ -788,14 +974,20 @@ async def get_inspection_check_items(
             f"设备 {eq.equipment_no}（{eq.name}）的检查项（共 {len(item_dicts)} 项）：",
         ]
         for item in item_dicts:
-            std = f"（标准：{item['expected_result']}）" if item["expected_result"] else ""
+            std = (
+                f"（标准：{item['expected_result']}）"
+                if item["expected_result"]
+                else ""
+            )
             tpl = f" [{item['template_name']}]" if item["template_name"] else ""
             if item["data_type"] == "numeric":
                 unit_label = f"·单位{item['unit']}" if item["unit"] else ""
                 type_hint = f"（数值{unit_label}，请填纯数字）"
             else:
                 type_hint = ""
-            lines.append(f"{item['sort_order'] + 1}. {item['item_name']}{type_hint}{std}{tpl}")
+            lines.append(
+                f"{item['sort_order'] + 1}. {item['item_name']}{type_hint}{std}{tpl}"
+            )
         content = "\n".join(lines)
 
     return ToolResult(

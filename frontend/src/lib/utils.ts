@@ -26,10 +26,11 @@ export function formatDateTime(iso: string | null): string {
 
 // ── 批号递增 ──
 // ponytail: 消除 PlanItemTable / PlanOrderDetailDrawer 5 处重复 regex
-// 贪婪首组匹配最后一个数字段（PO-20260824-001 递增的是 001 而不是日期），
+// 惰性前缀 + 非数字尾段，捕获最后一个完整数字段（PO-20260824-001 递增的是
+// 001 而不是日期；XHA26189 递增的是 26189 整段而非末位 9，末位 9 才能正确进位），
 // 与后端 planning_service._decrement_batch_no 保持同语义。
 
-const BATCH_NO_RE = /^(.*)(\d+)(.*)$/
+const BATCH_NO_RE = /^(.*?)(\d+)(\D*)$/
 
 export function incrementBatchNo(current: string): string {
   const m = current.match(BATCH_NO_RE)

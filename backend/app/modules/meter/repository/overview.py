@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import today as time_today
@@ -16,6 +16,14 @@ async def get_instrument_overview(db: AsyncSession) -> dict[str, int]:
     from sqlalchemy import case
 
     today = time_today()
+
+    # 到期窗口只统计需关注复检的记录：停用器具不参与（与 reminder_notify
+    # 发送口径一致），status 为空的记录仍计入。计量室记录保留在台账统计内
+    # （超期/在用桶也含它们），只是不推送提醒，避免总览内部口径互相矛盾
+    due_scope = or_(
+        InstrumentRecord.status.is_(None),
+        InstrumentRecord.status != "停用",
+    )
 
     # 子查询计算每条记录的有效状态
     # 在用/超期 + 已过期 → 超期；手动超期 + 未过期/无日期 → 在用
@@ -45,7 +53,8 @@ async def get_instrument_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    InstrumentRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & InstrumentRecord.next_calibration_date.isnot(None)
                     & (InstrumentRecord.next_calibration_date <= today),
                     1,
                 ),
@@ -55,7 +64,8 @@ async def get_instrument_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    InstrumentRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & InstrumentRecord.next_calibration_date.isnot(None)
                     & (InstrumentRecord.next_calibration_date >= today)
                     & (InstrumentRecord.next_calibration_date <= today + timedelta(days=7)),
                     1,
@@ -66,7 +76,8 @@ async def get_instrument_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    InstrumentRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & InstrumentRecord.next_calibration_date.isnot(None)
                     & (InstrumentRecord.next_calibration_date >= today)
                     & (InstrumentRecord.next_calibration_date <= today + timedelta(days=30)),
                     1,
@@ -77,7 +88,8 @@ async def get_instrument_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    InstrumentRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & InstrumentRecord.next_calibration_date.isnot(None)
                     & (InstrumentRecord.next_calibration_date >= today)
                     & (InstrumentRecord.next_calibration_date <= today + timedelta(days=90)),
                     1,
@@ -109,6 +121,13 @@ async def get_gas_detector_overview(db: AsyncSession) -> dict[str, int]:
 
     today = time_today()
 
+    # 与 get_calibration_alerts / reminder_notify 同口径：停用记录不计入
+    # 到期窗口，状态为空的仍计入；计量室记录保留在台账统计内（见 instrument 说明）
+    due_scope = or_(
+        GasDetectorRecord.status.is_(None),
+        GasDetectorRecord.status != "停用",
+    )
+
     # 子查询计算每条记录的有效状态
     status_expr = case(
         (
@@ -135,7 +154,8 @@ async def get_gas_detector_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    GasDetectorRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & GasDetectorRecord.next_calibration_date.isnot(None)
                     & (GasDetectorRecord.next_calibration_date <= today),
                     1,
                 ),
@@ -145,7 +165,8 @@ async def get_gas_detector_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    GasDetectorRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & GasDetectorRecord.next_calibration_date.isnot(None)
                     & (GasDetectorRecord.next_calibration_date >= today)
                     & (GasDetectorRecord.next_calibration_date <= today + timedelta(days=7)),
                     1,
@@ -156,7 +177,8 @@ async def get_gas_detector_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    GasDetectorRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & GasDetectorRecord.next_calibration_date.isnot(None)
                     & (GasDetectorRecord.next_calibration_date >= today)
                     & (GasDetectorRecord.next_calibration_date <= today + timedelta(days=30)),
                     1,
@@ -167,7 +189,8 @@ async def get_gas_detector_overview(db: AsyncSession) -> dict[str, int]:
         func.sum(
             case(
                 (
-                    GasDetectorRecord.next_calibration_date.isnot(None)
+                    due_scope
+                    & GasDetectorRecord.next_calibration_date.isnot(None)
                     & (GasDetectorRecord.next_calibration_date >= today)
                     & (GasDetectorRecord.next_calibration_date <= today + timedelta(days=90)),
                     1,

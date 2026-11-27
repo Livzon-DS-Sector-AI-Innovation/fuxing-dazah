@@ -74,9 +74,15 @@ async def _node(db: AsyncSession, route_id: uuid.UUID, node_code: str):
 async def _clone_published(
     db: AsyncSession, source_route_id: uuid.UUID, product,
 ) -> ProcessRoute:
-    """复刻为发布路线（不编辑图，结构与源一致）。"""
+    """复刻为发布路线（不编辑图，结构与源一致）。
+
+    血缘用例关注版本链/字段归并，显式关闭计算字段复制：避免新版本自带
+    公式后让"祖先路线公式展开"的断言失去区分度；复制携带计算字段的行为
+    由 test_route_service 覆盖。
+    """
     clone = await route_service.copy_route(
         db, source_route_id, rand_code("V"), user=None,
+        copy_computed_fields=False,
     )
     await route_service.publish_route(db, clone.id, user=None)
     return clone

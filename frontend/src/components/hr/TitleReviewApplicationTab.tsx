@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { App, Button, Descriptions, Drawer, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { ReloadOutlined, TeamOutlined } from '@ant-design/icons'
 import { usePermission } from '@/hooks/usePermission'
+import { useDebouncedCallback } from '@/hooks/hr'
 import type { Employee, TitleReviewApplication, TitleReviewJudge } from '@/types/hr'
 import {
   assignTitleJudges,
@@ -11,6 +12,7 @@ import {
   fetchTitleDefaultJudges,
   finalizeTitleVotes,
 } from '@/actions/hr'
+import TitleReviewAttachments from './TitleReviewAttachments'
 import TitleReviewProfile from './TitleReviewProfile'
 import TitleReviewWorkValue from './TitleReviewWorkValue'
 
@@ -130,6 +132,9 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
     }
   }
 
+  // 远程搜索防抖 300ms（此前每敲一个字发一次请求）
+  const { run: debouncedSearchEmployees } = useDebouncedCallback(searchEmployees, 300)
+
   const handleAssign = async () => {
     if (!judgeModal) return
     if (!selectedJudges.length) {
@@ -225,7 +230,7 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
       <Drawer
         title={detail ? `${detail.name}（${detail.employee_no}）申报详情` : '申报详情'}
         open={!!detail}
-        width={640}
+        size={640}
         onClose={() => setDetail(null)}
       >
         {detail && (
@@ -288,16 +293,10 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
               </div>
             )}
             {detail.attachments && (
-              <div>
-                <Typography.Text strong>附件材料</Typography.Text>
-                <div className="mt-2 space-y-1">
-                  {Object.entries(detail.attachments).map(([k, files]) => (
-                    <div key={k} className="text-[13px]">
-                      {k}：{(files || []).map((f: any) => f.name).join('、') || '无'}
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <TitleReviewAttachments
+                applicationId={detail.id}
+                attachments={detail.attachments}
+              />
             )}
             {detail.judges.length > 0 && (
               <div>
@@ -357,7 +356,7 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
             showSearch
             filterOption={false}
             loading={employeeSearching}
-            onSearch={searchEmployees}
+            onSearch={debouncedSearchEmployees}
             value={null as any}
             options={employeeOptions
               .filter((e) => !selectedJudges.some((j) => j.employee_id === e.id))

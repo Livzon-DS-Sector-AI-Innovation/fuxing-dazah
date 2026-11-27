@@ -23,6 +23,9 @@ dependencies = [
     "openai>=2.41.0",
     "openpyxl>=3.1.5",
     "python-docx>=1.2.0",
+    "docxtpl>=0.20.0",
+    "matplotlib>=3.10.0",
+    "segno>=1.6.0",
     "fpdf2>=2.8.0",
     "weasyprint>=63.0",
     "reportlab>=4.0.0",
@@ -32,17 +35,13 @@ dependencies = [
     "xlrd>=2.0.0",
     "fastmcp>=3.4.2",
     "minio>=7.2.0",
+    "markdown-it-py>=4.0.0",
     "graphon>=0.5.3,<0.6",
-    # ── 以下 4 项随 safety 模块合并自 dazah-backend，原仓库未声明（仅装在 venv 里）──
-    "pydantic-ai>=2.8.0",   # business_agent 智能体框架
-    "PyMuPDF>=1.28.0",      # knowledge 模块 PDF 解析（import fitz）
-    "playwright>=1.61.0",   # regulation_crawler 法规爬取
-    "markitdown>=0.1.6",    # knowledge 文档转换
-    # ── safety 模块直连但此前靠传递依赖存活的 3 项 ──
-    "numpy>=1.26.0",        # knowledge/bm25 向量计算
+    # ── 仓储模块直连但此前靠传递依赖存活的 2 项（safety 摘除后仓库仍需）──
     "websockets>=12.0",     # feishu/event_client 飞书长连接
-    "beautifulsoup4>=4.12.0",  # regulation_crawler HTML 解析
     "python-socks>=3.1.1",  # websockets 经系统 SOCKS 代理连飞书 WS 必需
+    "pymupdf>=1.24",
+    "msoffcrypto-tool>=6.1.0",
 ]
 
 [project.optional-dependencies]
@@ -85,8 +84,30 @@ module = ["mammoth", "weasyprint", "weasyprint.*", "reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# PyMuPDF 的 fitz 兼容入口未携带 py.typed，类型需改用 pymupdf 才能获得
+module = ["fitz"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # vendor 引擎（ai_translator 原样拷贝）不按本仓 strict 标准整改
 module = ["app.modules.toolbox.tools.document_translate._engine.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# PyMuPDF 的 Python 侧函数（Page.get_text / Font.text_length 等）没有类型标注，
+# 调用点必然触发 no-untyped-call；只关闭这类噪声，其余类型检查照常
+module = [
+    "app.modules.toolbox.tools.chromatogram_translate",
+    "app.modules.toolbox.tools.chromatogram_translate.*",
+]
+disable_error_code = ["no-untyped-call"]
+
+[[tool.mypy.overrides]]
+# 新工具测试沿用仓库既有写法（测试函数不带注解），随模块一并豁免
+module = [
+    "tests.modules.toolbox.chromatogram_translate",
+    "tests.modules.toolbox.chromatogram_translate.*",
+]
 ignore_errors = true
 
 [tool.pytest.ini_options]

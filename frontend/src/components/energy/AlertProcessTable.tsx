@@ -199,6 +199,7 @@ export function AlertProcessTable({
       title: '操作',
       key: 'action',
       width: 140,
+      fixed: 'right',
       render: (_, record) => {
         if (record.status === 'processed' || record.status === 'ignored') {
           return <span style={{ color: '#a4a097' }}>—</span>
@@ -242,6 +243,7 @@ export function AlertProcessTable({
         dataSource={data}
         loading={loading}
         rowKey="id"
+        scroll={{ x: 1220 }}
         pagination={{
           current: page,
           pageSize,

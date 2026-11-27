@@ -91,10 +91,12 @@ async def batch_create_instruments(
                 continue
 
         try:
-            _auto_calc_next_calibration_date(item)
-            max_order += 1
-            item["sort_order"] = max_order
-            record = await repo.create_instrument(db, item)
+            # 每项独立 SAVEPOINT：单行插入失败只回滚该行，不毒化整批事务
+            async with db.begin_nested():
+                _auto_calc_next_calibration_date(item)
+                max_order += 1
+                item["sort_order"] = max_order
+                record = await repo.create_instrument(db, item)
             created += 1
             results.append({
                 "index": i, "asset_number": asset_number,
@@ -165,8 +167,13 @@ async def update_instrument(
             raise NotFoundException("标准计量器具", str(instrument_id))
         return obj
 
-    # 如果修改了 asset_number，检查唯一性
-    if "asset_number" in updates and updates["asset_number"] != obj.asset_number:
+    # 如果修改了 asset_number，检查唯一性（清空为 None 时不查——
+    # IS NULL 会误命中其他空编号记录）
+    if (
+        "asset_number" in updates
+        and updates["asset_number"]
+        and updates["asset_number"] != obj.asset_number
+    ):
         if await repo.exists_instrument_by_asset_number(
             db, updates["asset_number"], exclude_id=instrument_id
         ):

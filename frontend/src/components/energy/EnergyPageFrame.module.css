@@ -1,0 +1,15 @@
+.frame {
+  min-height: 100%;
+  min-width: 0;
+}
+
+.frame > header { margin-bottom: 24px; }
+.frame :global(.ant-table-thead > tr > th) { padding-block: 14px; background: #fafaf9; font-size: 12px; font-weight: 600; color: #5d5b54; }
+.frame :global(.ant-table-tbody > tr > td) { padding-block: 12px; }
+.frame :global(.ant-table-pagination) { padding-inline: 16px; }
+.frame :global(.ant-empty) { padding-block: 32px; }
+.frame :global(.ant-table-wrapper), .frame :global(.ant-spin-nested-loading), .frame :global(.ant-tabs) { min-width: 0; }
+@media (max-width: 760px) {
+  .frame > header > div:last-child { flex-wrap: wrap; }
+  .frame > header > div:last-child > div:last-child { max-width: 100%; flex-wrap: wrap; }
+}

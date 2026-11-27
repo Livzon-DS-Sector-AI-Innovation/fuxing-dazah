@@ -9,6 +9,7 @@ import { usePermission } from '@/hooks/usePermission'
 import type { Product, Execution } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { ProductSidebar, CARD_STYLE } from '../shared/ProductSidebar'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { BatchTable } from './BatchTable'
 import { BatchDetailDrawer } from './BatchDetailDrawer'
 import { CreateBatchModal } from './CreateBatchModal'
@@ -44,7 +45,11 @@ function BatchesPageInner() {
 
   return (
     <div>
-      <PageHeading title="批次管理" subtitle="批次执行记录、工序数据提交与全链路溯源" />
+      <PageHeading
+        title="批次管理"
+        subtitle="批次执行记录、工序数据提交与全链路溯源"
+        actions={<PageGuideButton />}
+      />
       <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
         <ProductSidebar
           selectedId={selectedProductId}

@@ -4,10 +4,25 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field
 
-StrUUID = Annotated[str, BeforeValidator(str)]
+
+def _ensure_uuid(value: str) -> str:
+    """校验并规范化 UUID 字符串。
+
+    只做 str 转换而不校验格式时，任意字符串都能被持久化（如 JSONB 里的设备 id 列表），
+    读取端再把它绑到 uuid 列时 asyncpg 会抛 ValueError —— 表现为该记录所属页面持续 500，
+    只能手工改库才能恢复。
+    """
+    try:
+        return str(UUID(value))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ValueError(f"不是合法的 UUID: {value!r}") from exc
+
+
+StrUUID = Annotated[str, BeforeValidator(str), AfterValidator(_ensure_uuid)]
 EnergyType = str
 MonitorLevel = Literal["normal", "important", "urgent"]
 CollectStatus = Literal["success", "partial", "failed"]

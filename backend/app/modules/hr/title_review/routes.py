@@ -297,6 +297,29 @@ async def get_application(
     return success_response(data=out)
 
 
+@router.get(
+    "/title/applications/{application_id}/attachments/{file_token}/download",
+    summary="下载申报附件（飞书 Base 附件素材）",
+)
+async def download_application_attachment(
+    application_id: UUID,
+    file_token: str,
+    ctx: HrAccessContext = Depends(require_hr_access("hr:title:read")),
+    service: TitleReviewService = Depends(get_service),
+) -> StreamingResponse:
+    from urllib.parse import quote
+
+    _apply_scope(service, ctx)
+    content, filename = await service.download_attachment(
+        application_id, file_token, employee_no=ctx.employee_number
+    )
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
+    )
+
+
 @router.post("/title/applications/{application_id}/finalize", summary="按当前票数判定（可提前判定）")
 async def finalize_votes(
     application_id: UUID,

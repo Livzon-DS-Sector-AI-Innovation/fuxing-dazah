@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -83,6 +83,14 @@ async def count_open_work_orders_by_equipment(
     return result.scalar() or 0
 
 
+WORK_ORDER_PERSPECTIVE_COLUMNS = {
+    "reporter": WorkOrder.reporter_id,
+    "assignee": WorkOrder.assignee_id,
+    "responsible": WorkOrder.responsible_person_id,
+}
+"""工单用户视角 → 当前人锚定字段：reporter=我报修的 / assignee=我维修的 / responsible=我负责的。"""
+
+
 async def get_work_orders(
     db: AsyncSession,
     ctx: EquipmentAccessContext,
@@ -91,6 +99,7 @@ async def get_work_orders(
     equipment_id: uuid.UUID | None = None,
     priority: str | None = None,
     order_type: str | None = None,
+    perspective: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[WorkOrder], int]:
@@ -138,6 +147,12 @@ async def get_work_orders(
         query = query.where(WorkOrder.priority == priority)
     if order_type:
         query = query.where(WorkOrder.order_type == order_type)
+
+    # 用户视角过滤（与数据范围取交集）：当前人分别按报修人 / 维修人 / 工单负责人锚定
+    if perspective in WORK_ORDER_PERSPECTIVE_COLUMNS:
+        query = query.where(
+            WORK_ORDER_PERSPECTIVE_COLUMNS[perspective] == ctx.user_id
+        )
 
     count_query = select(func.count()).select_from(
         query.with_only_columns(WorkOrder.id).subquery()
@@ -277,6 +292,24 @@ async def exists_unclosed_work_order(
     return (result.scalar() or 0) > 0
 
 
+async def get_unclosed_work_order(
+    db: AsyncSession, task_id: uuid.UUID, equipment_id: uuid.UUID
+) -> WorkOrder | None:
+    """取某巡检任务+设备的未关闭工单（最近的），没有则 None。"""
+    result = await db.execute(
+        select(WorkOrder)
+        .where(
+            WorkOrder.inspection_task_id == task_id,
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
 async def get_pending_work_orders_by_inspection_task(
     db: AsyncSession, task_id: uuid.UUID
 ) -> list[WorkOrder]:
@@ -321,6 +354,111 @@ async def get_user_work_orders(
         .order_by(WorkOrder.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def list_reported_work_orders(
+    db: AsyncSession,
+    reporter_id: uuid.UUID,
+    *,
+    status: str | None = None,
+    limit: int = 20,
+) -> list[WorkOrder]:
+    """查询某用户作为报修人提交的工单（报修进度视角）。
+
+    与 get_user_work_orders（维修人/负责人视角）互补：按 reporter_id 过滤，
+    且不排除已完结单——报修人关心「修好了没有」，已完成/已关闭的历史单
+    也要可见。默认最近 limit 条，按报修时间倒序。
+    """
+    stmt = (
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.reporter_id == reporter_id,
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+        .limit(limit)
+    )
+    if status:
+        stmt = stmt.where(WorkOrder.status == status)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_open_work_orders_by_equipment(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+    *,
+    limit: int = 5,
+) -> list[WorkOrder]:
+    """查询某设备当前未完结的工单（报修建单前查重视角）。
+
+    同设备 + 未完结（待处理 / 执行中 / 待验收）+ 未删除，按报修时间倒序
+    取最近 limit 条。已完成 / 已关闭不返回——修完又坏属复发，应允许再报。
+    """
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def list_responsible_pending_orders(
+    db: AsyncSession,
+    responsible_person_id: uuid.UUID,
+    *,
+    unassigned_only: bool = False,
+    limit: int = 20,
+) -> list[WorkOrder]:
+    """查询某负责人名下的待处理工单（供指派维修人用）。
+
+    unassigned_only=True 时只返回尚未指派维修人（assignee_id 为空）的单。
+    按优先级（紧急>高>中>低）+ 报修时间排序。
+    """
+    priority_rank = case(
+        (WorkOrder.priority == "紧急", 0),
+        (WorkOrder.priority == "高", 1),
+        (WorkOrder.priority == "中", 2),
+        else_=3,
+    )
+    stmt = (
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.responsible_person_id == responsible_person_id,
+            WorkOrder.status == "待处理",
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    if unassigned_only:
+        stmt = stmt.where(WorkOrder.assignee_id.is_(None))
+    stmt = stmt.order_by(priority_rank, WorkOrder.reported_at).limit(limit)
+    return list((await db.execute(stmt)).scalars().all())
 
 
 async def get_work_order_by_no(

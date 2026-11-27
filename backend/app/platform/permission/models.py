@@ -75,6 +75,11 @@ class Role(BaseModel):
         server_default="false",
         comment="系统内置角色不可删除",
     )
+    group_feishu_department_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="展示分组：飞书部门 open_department_id，NULL=未分组",
+    )
 
 
 class RolePermission(BaseModel):

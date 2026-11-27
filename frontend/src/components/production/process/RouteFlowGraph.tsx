@@ -1,19 +1,27 @@
 'use client'
 
 import { useMemo } from 'react'
-import { Handle, Position, type Edge, type Node, type NodeProps } from '@xyflow/react'
-import { FlowGraph, MaterialNode, MATERIAL_INPUT, MATERIAL_OUTPUT, type MaterialNodeData } from '../shared/FlowGraph'
+import type { CSSProperties } from 'react'
+import {
+  Handle,
+  MarkerType,
+  Position,
+  type Edge,
+  type Node,
+  type NodeProps,
+} from '@xyflow/react'
+import {
+  FlowGraph,
+  MaterialNode,
+  MATERIAL_INPUT,
+  MATERIAL_OUTPUT,
+  PROCESS_NODE_H,
+  PROCESS_NODE_W,
+  type MaterialNodeData,
+} from '../shared/FlowGraph'
+import { stageColor, stageTint } from '../shared/stageColor'
+import styles from '../shared/FlowGraph.module.css'
 import type { RouteEdge, RouteNode } from '@/types/production'
-
-// 工段 pastel 色板（与 DESIGN.md pastel tint 对齐，如有出入以 DESIGN.md 为准）
-const STAGE_TINTS = ['#f6e5d8', '#f8e0e6', '#dff2e4', '#e8e4f6', '#ddedf8', '#f8f0d8']
-
-function stageTint(stage: string | null): string {
-  if (!stage) return '#f6f5f4'
-  let h = 0
-  for (let i = 0; i < stage.length; i++) h = stage.charCodeAt(i) + ((h << 5) - h)
-  return STAGE_TINTS[Math.abs(h) % STAGE_TINTS.length]
-}
 
 type ProcessNodeData = {
   name: string
@@ -24,27 +32,29 @@ type ProcessNodeData = {
 
 function ProcessNode({ data, selected }: NodeProps) {
   const d = data as ProcessNodeData
+  const accent = d.stage_name ? stageColor(d.stage_name) : '#a4a097'
   return (
     <div
-      style={{
-        width: 200,
-        background: '#fff',
-        border: selected ? '2px solid #5645d4' : '1px solid #e5e3df',
-        borderRadius: 12,
-        overflow: 'hidden',
-        cursor: 'pointer',
-      }}
+      className={`${styles.processNode}${selected ? ` ${styles.processNodeSelected}` : ''}`}
+      style={
+        {
+          width: PROCESS_NODE_W,
+          height: PROCESS_NODE_H,
+          '--stage-accent': accent,
+          '--stage-tint': d.stage_name ? stageTint(d.stage_name) : '#f6f5f4',
+        } as CSSProperties
+      }
     >
       <Handle type="target" position={Position.Top} id="top" style={{ opacity: 0 }} />
       <Handle type="target" position={Position.Left} id="left-target" style={{ opacity: 0 }} />
       <Handle type="target" position={Position.Right} id="right-target" style={{ opacity: 0 }} />
-      <div style={{ height: 6, background: stageTint(d.stage_name) }} />
-      <div style={{ padding: '8px 12px' }}>
-        <div style={{ fontWeight: 600, fontSize: 14, color: '#1a1a1a' }}>{d.name}</div>
-        <div style={{ fontSize: 12, color: '#787671', display: 'flex', gap: 8 }}>
-          <span>{d.node_code}</span>
-          {d.stage_name && <span>{d.stage_name}</span>}
-          <span>{d.fieldCount} 字段</span>
+      <span className={styles.processAccent} />
+      <div className={styles.processBody}>
+        <div className={styles.processTitle}>{d.name}</div>
+        <div className={styles.processMeta}>
+          <span className={styles.processCode}>{d.node_code}</span>
+          {d.stage_name && <span className={styles.processStage}>{d.stage_name}</span>}
+          <span className={styles.processFields}>{d.fieldCount} 字段</span>
         </div>
       </div>
       <Handle type="source" position={Position.Bottom} id="bottom" style={{ opacity: 0 }} />
@@ -103,6 +113,7 @@ export function toRouteFlowElements(
         targetHandle: 'left-target',
         type: 'straight',
         style: { stroke: '#dd5b00', strokeDasharray: '4 3', strokeWidth: 1.5 },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#dd5b00' },
       })
     }
 
@@ -126,6 +137,7 @@ export function toRouteFlowElements(
         targetHandle: 'material-target',
         type: 'straight',
         style: { stroke: '#1aae39', strokeDasharray: '4 3', strokeWidth: 1.5 },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: '#1aae39' },
       })
     }
   }
@@ -134,24 +146,32 @@ export function toRouteFlowElements(
     ...edges.map(e => {
       const isRework = e.edge_type === 'rework'
       const isBoundary = e.is_batch_boundary
+      const stroke = isRework
+        ? '#dd5b00'
+        : e.allow_overlap
+          ? '#1aae39'
+          : isBoundary
+            ? '#5645d4'
+            : '#cbc7c1'
       return {
         id: e.id,
         source: e.from_node_id,
         target: e.to_node_id,
         type: 'smoothstep',
-        animated: true,
+        // 仅回流线保留流动动画：主线全部流动会淹没"异常路径"的信号
+        animated: isRework,
         sourceHandle: isRework ? 'right-source' : 'bottom',
         targetHandle: isRework ? 'right-target' : 'top',
         pathOptions: isRework ? { borderRadius: 18, offset: 30 } : undefined,
         label: isRework ? '回流' : e.allow_overlap ? '流水线' : isBoundary ? '批次边界' : undefined,
-        labelStyle: { fontSize: 11, fill: isRework ? '#dd5b00' : e.allow_overlap ? '#1aae39' : '#5645d4' },
+        labelStyle: { fontSize: 10.5, fontWeight: 500, fill: stroke },
+        labelBgStyle: { fill: '#ffffff', stroke, strokeWidth: 1 },
+        labelBgPadding: [5, 3] as [number, number],
+        labelBgBorderRadius: 7,
         style: isRework
-          ? { stroke: '#dd5b00', strokeDasharray: '6 4', strokeWidth: 2 }
-          : e.allow_overlap
-            ? { stroke: '#1aae39', strokeWidth: 2.5 }
-            : isBoundary
-              ? { stroke: '#5645d4', strokeWidth: 2.5 }
-              : { stroke: '#b8b6b1' },
+          ? { stroke, strokeDasharray: '6 4', strokeWidth: 2 }
+          : { stroke, strokeWidth: isBoundary || e.allow_overlap ? 2 : 1.5 },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 13, height: 13, color: stroke },
       }
     }),
     ...materialEdges,
@@ -164,9 +184,10 @@ interface Props {
   nodes: RouteNode[]
   edges: RouteEdge[]
   onNodeClick?: (nodeId: string) => void
+  height?: number | string
 }
 
-export function RouteFlowGraph({ nodes, edges, onNodeClick }: Props) {
+export function RouteFlowGraph({ nodes, edges, onNodeClick, height = 460 }: Props) {
   const { rfNodes, rfEdges } = useMemo(
     () => toRouteFlowElements(nodes, edges),
     [nodes, edges],
@@ -177,7 +198,7 @@ export function RouteFlowGraph({ nodes, edges, onNodeClick }: Props) {
       edges={rfEdges}
       nodeTypes={nodeTypes}
       onNodeClick={onNodeClick ? (id) => { if (!id.includes('__material-')) onNodeClick(id) } : undefined}
-      height={460}
+      height={height}
     />
   )
 }

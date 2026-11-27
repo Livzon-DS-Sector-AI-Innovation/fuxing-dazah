@@ -62,7 +62,13 @@ def _register_fake_tool() -> None:
                 name="上传",
                 description="",
                 inputs=[
-                    ToolInput(key="doc", label="文档", type="file", accept=".docx", required=True),
+                    ToolInput(
+                        key="doc",
+                        label="文档",
+                        type="file",
+                        accept=".docx",
+                        required=True,
+                    ),
                 ],
             ),
             ToolStep(
@@ -70,7 +76,13 @@ def _register_fake_tool() -> None:
                 name="汇总",
                 description="",
                 inputs=[
-                    ToolInput(key="doc", label="文档", type="file", from_step="s1", from_key="doc"),
+                    ToolInput(
+                        key="doc",
+                        label="文档",
+                        type="file",
+                        from_step="s1",
+                        from_key="doc",
+                    ),
                 ],
             ),
         ],
@@ -79,7 +91,11 @@ def _register_fake_tool() -> None:
         step_id: str, params: dict[str, Any], context: StepContext
     ) -> dict[str, Any]:
         if step_id == "s1":
-            return {"ok": True, "prev": context.prev_outputs, "paths": context.file_paths.get("doc", [])}
+            return {
+                "ok": True,
+                "prev": context.prev_outputs,
+                "paths": context.file_paths.get("doc", []),
+            }
         return {"sum": 2, "prev_s1": context.prev_outputs.get("s1")}
 
 
@@ -97,7 +113,14 @@ def _register_multi_tool() -> None:
                 name="批量上传",
                 description="",
                 inputs=[
-                    ToolInput(key="docs", label="文档集", type="file", accept=".docx", required=True, multiple=True),
+                    ToolInput(
+                        key="docs",
+                        label="文档集",
+                        type="file",
+                        accept=".docx",
+                        required=True,
+                        multiple=True,
+                    ),
                 ],
             ),
         ],
@@ -105,7 +128,10 @@ def _register_multi_tool() -> None:
     async def _func(
         step_id: str, params: dict[str, Any], context: StepContext
     ) -> dict[str, Any]:
-        return {"n": len(context.file_paths.get("docs", []))}
+        return {
+            "n": len(context.file_paths.get("docs", [])),
+            "names": context.file_names.get("docs", []),
+        }
 
 
 _register_multi_tool()
@@ -183,7 +209,13 @@ async def test_run_step1_creates_execution_and_saves_file(
     resp = await client.post(
         "/tools/t-fake/steps/s1/run",
         data={"params": "{}"},
-        files={"doc": ("a.docx", b"fake-docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        files={
+            "doc": (
+                "a.docx",
+                b"fake-docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()["data"]
@@ -198,7 +230,9 @@ async def test_run_step1_creates_execution_and_saves_file(
     assert exec_data["outputs"]["s1"]["ok"] is True
 
 
-async def test_run_step2_gets_prev_outputs_and_references_file(client: AsyncClient) -> None:
+async def test_run_step2_gets_prev_outputs_and_references_file(
+    client: AsyncClient,
+) -> None:
     first = await client.post(
         "/tools/t-fake/steps/s1/run",
         data={"params": "{}"},
@@ -302,6 +336,8 @@ async def test_run_multiple_files_registers_all(
     data = resp.json()["data"]
     assert len(data["file_ids"]["docs"]) == 2
     assert data["data"]["n"] == 2
+    # 原始文件名随上下文透传（落盘是 uuid 名，工具产物命名必须用原始名）
+    assert data["data"]["names"] == ["a.docx", "b.docx"]
     # 两个文件都落盘且登记到会话
     for fid in data["file_ids"]["docs"]:
         assert storage.resolve_file(data["execution_id"], fid) is not None
@@ -335,13 +371,18 @@ async def test_list_tools_unauthenticated_401(client: AsyncClient) -> None:
     assert resp.status_code == 401
 
 
-async def _wait_step_done(fake_redis: FakeRedis, execution_id: str, step_id: str) -> dict[str, Any]:
+async def _wait_step_done(
+    fake_redis: FakeRedis, execution_id: str, step_id: str
+) -> dict[str, Any]:
     """轮询 FakeRedis 直到后台任务写入 outputs（或超时失败）。"""
     for _ in range(200):
         raw = fake_redis.store.get(_key(execution_id))
         if raw:
             data = json.loads(raw)
-            if data.get("progress", {}).get(step_id, {}).get("status") in ("done", "failed"):
+            if data.get("progress", {}).get(step_id, {}).get("status") in (
+                "done",
+                "failed",
+            ):
                 return data
         await asyncio.sleep(0.01)
     raise AssertionError("后台任务未在预期时间内完成")
@@ -406,7 +447,9 @@ async def test_background_tool_failure_marks_progress_failed(
     assert "b1" not in exec_data["outputs"]
 
 
-async def test_background_tool_rejects_duplicate_running_step(client: AsyncClient) -> None:
+async def test_background_tool_rejects_duplicate_running_step(
+    client: AsyncClient,
+) -> None:
     """同一步骤执行中重复提交 → 400（会话 progress 仍为 running 时拦截）。"""
     first = await client.post("/tools/t-bg/steps/b1/run", data={"params": "{}"})
     assert first.status_code == 200
@@ -490,8 +533,11 @@ async def test_late_progress_does_not_revert_terminal_status(
             "files": {},
             "progress": {
                 "s1": {
-                    "percent": 10, "message": "半程", "status": "running",
-                    "error": None, "updated_at": 1.0,
+                    "percent": 10,
+                    "message": "半程",
+                    "status": "running",
+                    "error": None,
+                    "updated_at": 1.0,
                 }
             },
             "created_at": 1.0,
@@ -514,7 +560,9 @@ async def test_late_progress_does_not_revert_terminal_status(
 
     monkeypatch.setattr(sessions, "get_execution", gated_get)
 
-    late = asyncio.create_task(api._write_progress_safe(fake_redis, eid, "s1", 50, "半程"))
+    late = asyncio.create_task(
+        api._write_progress_safe(fake_redis, eid, "s1", 50, "半程")
+    )
     await asyncio.wait_for(entered.wait(), 5)
     finish = asyncio.create_task(
         api._finish_background(fake_redis, eid, "s1", result={"ok": True})
@@ -527,3 +575,34 @@ async def test_late_progress_does_not_revert_terminal_status(
     assert data is not None
     assert data["progress"]["s1"]["status"] == "done"
     assert data["outputs"]["s1"] == {"ok": True}
+
+
+def test_register_output_files_collects_refs_from_nested_values() -> None:
+    """结果里的产物文件引用（含数组/嵌套）登记进会话 files 元数据：
+    下载端点据此返回原始文件名，否则回退为落盘 uuid 名。"""
+    exec_data: dict[str, Any] = {"files": {}}
+    api._register_output_files(
+        exec_data,
+        {
+            "files": [
+                {"file_id": "f1", "filename": "a_英文.pdf"},
+                {"file_id": "f2", "filename": "b_英文.pdf"},
+            ],
+            "zip_file": {"file_id": "f3", "filename": "打包.zip"},
+            "nested": {"deep": [{"file_id": "f4", "filename": "c.md"}]},
+            "not_a_ref": {"file_id": 123},  # 非字符串 id：忽略
+            "text": "普通值",
+        },
+    )
+    assert exec_data["files"] == {
+        "f1": {"filename": "a_英文.pdf"},
+        "f2": {"filename": "b_英文.pdf"},
+        "f3": {"filename": "打包.zip"},
+        "f4": {"filename": "c.md"},
+    }
+
+
+def test_register_output_files_noop_on_none() -> None:
+    exec_data: dict[str, Any] = {"files": {}}
+    api._register_output_files(exec_data, None)
+    assert exec_data["files"] == {}

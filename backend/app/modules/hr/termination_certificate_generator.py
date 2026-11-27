@@ -53,7 +53,6 @@ def _generate_termination_certificate_pdf_fallback(
     leave_reason: str = "个人原因",
 ) -> BytesIO:
     """fpdf2 兜底 PDF（macOS 开发环境，无 WeasyPrint 系统库时使用）。"""
-    import os as _os
     from fpdf import FPDF
 
     pdf = FPDF(unit="mm", format="A4")

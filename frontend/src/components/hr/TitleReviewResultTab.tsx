@@ -11,11 +11,16 @@ interface Props {
   canViewScores: boolean
 }
 
+// 申报状态 → 中文文案与 Tag 颜色，覆盖 TitleApplicationStatus 全部取值（此前缺 submitted / voting / invalid，
+// 结果列直接显示英文状态码）。颜色与「申报与评审」页同一套，文案沿用结果页口径。
 const RESULT_META: Record<string, { label: string; color: string }> = {
+  submitted: { label: '待评审', color: 'blue' },
+  voting: { label: '投票中', color: 'processing' },
   passed: { label: '评审合格', color: 'success' },
   failed: { label: '评审未通过', color: 'error' },
   final_passed: { label: '终审通过', color: 'success' },
   final_failed: { label: '终审驳回', color: 'error' },
+  invalid: { label: '员工未匹配', color: 'warning' },
 }
 
 export default function TitleReviewResultTab({ activityId, canViewScores }: Props) {
@@ -28,6 +33,7 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
   const [rosterIds, setRosterIds] = useState<string[]>([])
   const [rosterSaving, setRosterSaving] = useState(false)
 
+  // 列表与汇总一并拉取：此前汇总只在进入页签时取一次，点「刷新」后卡片仍是旧数据
   const load = useCallback(() => {
     if (!canViewScores) return
     setLoading(true)
@@ -35,16 +41,14 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
       .then((d) => setResults(d?.data || []))
       .catch((err: any) => message.error(err.message || '加载评审结果失败'))
       .finally(() => setLoading(false))
+    fetchTitleSummary(activityId)
+      .then((d) => setSummary(d?.data || null))
+      .catch(() => setSummary(null))
   }, [activityId, canViewScores, message])
 
   useEffect(() => {
     load()
-    if (canViewScores) {
-      fetchTitleSummary(activityId)
-        .then((d) => setSummary(d?.data || null))
-        .catch(() => setSummary(null))
-    }
-  }, [load, canViewScores, activityId])
+  }, [load])
 
   const passedRows = results.filter((r) => r.application.status === 'passed')
   // 名单候选：仅已通过评审的申报可勾选（投票中/待评审不可进最终名单）
@@ -95,7 +99,7 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
       render: (_: unknown, r: TitleReviewResultRow) => `${r.application.sequence || '-'} · ${r.application.apply_level || '-'}`,
     },
     {
-      title: '票数', key: 'votes', width: 120,
+      title: '票数(同意/反对/弃权)', key: 'votes', width: 140,
       render: (_: unknown, r: TitleReviewResultRow) => `${r.application.agree_votes} / ${r.application.oppose_votes} / ${r.application.abstain_votes}`,
     },
     {
@@ -107,7 +111,7 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
       title: '结果', key: 'result', width: 110,
       render: (_: unknown, r: TitleReviewResultRow) => {
         const meta = RESULT_META[r.application.status]
-        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : (r.application.status === 'voting' ? <Tag>投票中</Tag> : r.application.status)
+        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : r.application.status
       },
     },
   ]
@@ -168,22 +172,26 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
           <Typography.Text type="secondary">
             勾选进入最终名单的人员（默认勾选评审合格者，可手动调整）；生成表格含：序号 / 部门 / 职务 / 姓名 / 本年度认定职称。
           </Typography.Text>
-          <Checkbox.Group
-            className="flex flex-col gap-1"
-            value={rosterIds}
-            onChange={(v) => setRosterIds(v as string[])}
-          >
-            {rosterRows.map((r) => (
-              <Checkbox key={r.application.id} value={r.application.id}>
-                <span className="inline-flex items-center gap-2">
-                  {r.application.name}（{r.application.employee_no}）· {r.application.department || '-'} · 申报{r.application.apply_level || '-'}
-                  {RESULT_META[r.application.status] && (
-                    <Tag color={RESULT_META[r.application.status].color}>{RESULT_META[r.application.status].label}</Tag>
-                  )}
-                </span>
-              </Checkbox>
-            ))}
-          </Checkbox.Group>
+          <Typography.Text strong>已选 {rosterIds.length} / 共 {rosterRows.length} 人</Typography.Text>
+          {/* 人数多时限高滚动，避免弹窗被撑出屏幕 */}
+          <div className="max-h-[50vh] overflow-y-auto">
+            <Checkbox.Group
+              className="flex flex-col gap-1"
+              value={rosterIds}
+              onChange={(v) => setRosterIds(v as string[])}
+            >
+              {rosterRows.map((r) => (
+                <Checkbox key={r.application.id} value={r.application.id}>
+                  <span className="inline-flex items-center gap-2">
+                    {r.application.name}（{r.application.employee_no}）· {r.application.department || '-'} · 申报{r.application.apply_level || '-'}
+                    {RESULT_META[r.application.status] && (
+                      <Tag color={RESULT_META[r.application.status].color}>{RESULT_META[r.application.status].label}</Tag>
+                    )}
+                  </span>
+                </Checkbox>
+              ))}
+            </Checkbox.Group>
+          </div>
         </div>
       </Modal>
 
@@ -243,7 +251,7 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
           scroll={{ x: 900 }}
         />
       ) : (
-        <Alert type="info" showIcon message="您没有查看评审结果与投票明细的权限（hr:title:scores:read），如需查看请联系管理员配置。" />
+        <Alert type="info" showIcon title="您没有查看评审结果与投票明细的权限，如需查看请联系管理员配置。" />
       )}
     </div>
   )

@@ -8,6 +8,7 @@ venv/
 env/
 .env
 .env.development
+.env.development.bak
 .env.production
 *.egg-info/
 dist/
@@ -40,5 +41,6 @@ uploads/
 lark-auth-qrcode.png
 temp/
 
-# 识别数据集图片（S2 ticket 01，不入库）
-.dataset/
+# 质量报告模板与生成文件（本地运行时目录，同 uploads）
+报告模板/
+质量附件/ 

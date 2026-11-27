@@ -35,8 +35,9 @@ async def _upsert_ledger_rows(
     - key 命中旧记录 → 更新字段（保留 id，报告关联不断链）；文件中重复出现的
       同一 key，首个更新旧记录、其余按新行插入（与旧版「一行一记录」语义一致）
     - key 为新的 → 插入
-    - 旧台账中文件未出现的记录（含 key 为空、历史重复 key 的记录）→ 软删除；
-      preserve_keys 中的 key 即使文件未映射成功也不删除（行被必填过滤跳过时用）
+    - 旧台账中文件未出现的有 key 记录 → 软删除；key 为空的历史记录无法与
+      文件匹配，一律保留；preserve_keys 中的 key 即使文件未映射成功也不删除
+      （行被必填过滤跳过时用）
     返回 (updated, inserted, deleted)。
     """
     from sqlalchemy import select as sa_select
@@ -52,8 +53,12 @@ async def _upsert_ledger_rows(
     existing_map: dict[str, uuid.UUID] = {}
     stale_ids: list[uuid.UUID] = []
     for rid, key in existing_rows:
-        if not key or key in existing_map:
-            stale_ids.append(rid)  # key 为空或历史重复的旧记录一并移除
+        if not key:
+            # 无编号记录无法与文件行匹配，一律保留：文件里没有它不代表它已过期，
+            # 否则单条新增的无编号器具会在每次导入时被静默删除
+            continue
+        if key in existing_map:
+            stale_ids.append(rid)  # 历史重复 key 只保留第一条
         else:
             existing_map[key] = rid
 
@@ -248,9 +253,11 @@ async def import_gas_detector_ledger(
         else:
             raise ValueError("文件中未找到任何数据 sheet")
 
-    # 3. 映射和转换
-    mapped_rows, map_warnings, _skipped_keys = _map_and_convert_rows(
-        [detector_sheet], GAS_DETECTOR_COLUMN_MAP, datemode
+    # 3. 映射和转换（名称/产品编号任一为空的行跳过——残缺行 upsert 会把旧记录
+    #    字段清空，且无编号的行会作为垃圾记录插入；被跳过行的旧记录不参与清理）
+    mapped_rows, map_warnings, skipped_keys = _map_and_convert_rows(
+        [detector_sheet], GAS_DETECTOR_COLUMN_MAP, datemode,
+        required_fields=("instrument_name", "product_number"),
     )
 
     if not mapped_rows:
@@ -275,7 +282,7 @@ async def import_gas_detector_ledger(
             row["anomaly_flags"] = {}
 
     updated_count, inserted_count, deleted_count = await _upsert_ledger_rows(
-        db, GasDetectorRecord, "product_number", mapped_rows
+        db, GasDetectorRecord, "product_number", mapped_rows, preserve_keys=skipped_keys
     )
 
     # 6. 同步部门到 departments 表

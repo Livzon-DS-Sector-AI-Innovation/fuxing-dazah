@@ -14,6 +14,7 @@ import { BatchUploadDialog } from './BatchUploadDialog'
 import { BatchCreateModal } from './BatchCreateModal'
 import { LedgerImportModal } from './LedgerImportModal'
 import { InstrumentDateFilterModal } from './InstrumentDateFilterModal'
+import { usePermission } from '@/hooks/usePermission'
 import dayjs from 'dayjs'
 
 /** 筛选字段名 → InstrumentFilter 参数 key 的映射。
@@ -47,6 +48,11 @@ const fetchInstrumentStatusOptions = async () =>
 
 export function InstrumentTable() {
   const { message, modal } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canCreate = hasPermission('meter:instrument:create')
+  const canUpdate = hasPermission('meter:instrument:update')
+  const canDelete = hasPermission('meter:instrument:delete')
+  const canUploadReport = hasPermission('meter:report:upload')
   const [data, setData] = useState<InstrumentRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -84,7 +90,11 @@ export function InstrumentTable() {
     setPage(1)
   }, [])
 
+  // 请求序号：快速翻页/改筛选时，慢的旧响应后到不得覆盖新结果
+  const fetchSeqRef = useRef(0)
+
   const fetchData = useCallback(async () => {
+    const seq = ++fetchSeqRef.current
     setLoading(true)
     try {
       const params: InstrumentFilter = { page, page_size: pageSize }
@@ -103,14 +113,15 @@ export function InstrumentTable() {
         if (key && value) (params as Record<string, unknown>)[key] = value
       }
       const res = await getInstruments(params)
+      if (seq !== fetchSeqRef.current) return
       setData(res.items)
       setTotal(res.total)
     } catch {
-      message.error('获取数据失败')
+      if (seq === fetchSeqRef.current) message.error('获取数据失败')
     } finally {
-      setLoading(false)
+      if (seq === fetchSeqRef.current) setLoading(false)
     }
-  }, [page, pageSize, keyword, columnFilters, dateFilters])
+  }, [page, pageSize, keyword, columnFilters, dateFilters, message])
 
   // setTimeout 延后到下一 tick，避免 effect 内同步 setState 链（react-hooks/set-state-in-effect）
   useEffect(() => {
@@ -122,7 +133,9 @@ export function InstrumentTable() {
     try {
       await deleteInstrument(id)
       message.success('删除成功')
-      fetchData()
+      // 当前页只剩这一条且不在第一页：回退一页（改 page 会经 effect 重新拉取）
+      if (data.length === 1 && page > 1) setPage(page - 1)
+      else fetchData()
     } catch {
       message.error('删除失败')
     }
@@ -243,7 +256,10 @@ export function InstrumentTable() {
           message.success(`成功删除 ${result.deleted_count} 条记录`)
           setSelectedRowKeys([])
           setSelectAllAcrossPages(false)
-          fetchData()
+          // 删除后当前页可能越界：回退到最后一个有效页（改 page 会经 effect 重新拉取）
+          const maxPage = Math.max(1, Math.ceil((total - result.deleted_count) / pageSize))
+          if (page > maxPage) setPage(maxPage)
+          else fetchData()
         } catch {
           message.error('批量删除失败')
         }
@@ -328,7 +344,7 @@ export function InstrumentTable() {
       onFilter: () => true,
     },
     {
-      title: '器具编号', dataIndex: 'serial_number', width: 110, ellipsis: true,
+      title: '器具编号', dataIndex: 'serial_number', width: 110,
       filteredValue: columnFilters.serial_number ? columnFilters.serial_number.split(',') : null,
       filterDropdown: textFilter('serial_number', '器具编号'),
       onFilter: () => true,
@@ -422,18 +438,22 @@ export function InstrumentTable() {
       ),
     },
     {
-      title: '操作', key: 'actions', width: 120, fixed: 'right',
+      title: '操作', key: 'actions', width: 150, fixed: 'right',
       render: (_: unknown, r: InstrumentRecord) => (
         <Space size="small">
           <Tooltip title="报告">
             <Button size="small" icon={<FileTextOutlined />} onClick={() => { setReportRecord(r); setReportDialogOpen(true) }} />
           </Tooltip>
-          <Tooltip title="编辑">
-            <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)} />
-          </Tooltip>
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {canUpdate && (
+            <Tooltip title="编辑">
+              <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)} />
+            </Tooltip>
+          )}
+          {canDelete && (
+            <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -492,22 +512,24 @@ export function InstrumentTable() {
           )}
         </Space>
         <Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增器具</Button>
-          <Button icon={<PlusOutlined />} onClick={() => setBatchCreateOpen(true)}>批量新增</Button>
-          <Button icon={<UploadOutlined />} onClick={() => setBatchUploadOpen(true)}>批量上传报告</Button>
+          {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增器具</Button>}
+          {canCreate && <Button icon={<PlusOutlined />} onClick={() => setBatchCreateOpen(true)}>批量新增</Button>}
+          {canUploadReport && <Button icon={<UploadOutlined />} onClick={() => setBatchUploadOpen(true)}>批量上传报告</Button>}
           <Popconfirm title={`确定导出选中的 ${selectedRowKeys.length} 份报告？`} onConfirm={handleExportReports}>
             <Button icon={<DownloadOutlined />} loading={exporting} disabled={selectedRowKeys.length === 0}>
               批量导出报告{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
             </Button>
           </Popconfirm>
-          <Button
-            danger
-            icon={<DeleteOutlined />}
-            disabled={selectedRowKeys.length === 0}
-            onClick={handleBatchDelete}
-          >
-            批量删除{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
-          </Button>
+          {canDelete && (
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={handleBatchDelete}
+            >
+              批量删除{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
+            </Button>
+          )}
           {selectedRowKeys.length > 0 && total > pageSize && (
             <Button loading={fetchingAllIds} onClick={handleSelectAllAcrossPages}>
               {selectAllAcrossPages ? `取消全选 (${selectedRowKeys.length})` : `全选所有 ${total} 条`}
@@ -516,8 +538,8 @@ export function InstrumentTable() {
           <Popconfirm title="确定导出当前筛选结果？" onConfirm={handleExportExcel}>
             <Button icon={<FileExcelOutlined />} loading={exportingExcel}>导出Excel</Button>
           </Popconfirm>
-          <Button icon={<ImportOutlined />} onClick={() => setImportModalOpen(true)}>导入台账</Button>
-          <BatchCreateModal open={batchCreateOpen} onClose={() => setBatchCreateOpen(false)} source="instrument" />
+          {canUpdate && <Button icon={<ImportOutlined />} onClick={() => setImportModalOpen(true)}>导入台账</Button>}
+          {canCreate && <BatchCreateModal open={batchCreateOpen} onClose={() => { setBatchCreateOpen(false); fetchData() }} source="instrument" />}
         </Space>
       </div>
 

@@ -82,7 +82,8 @@ def run_pdf_pipeline(s: Settings, progress_cb=None) -> int:
     rng = f"第 {page_range[0]}~{page_range[1]} 页" if page_range else "全部页"
     print(f"结构抽取：共 {estats.total_pages} 页（本次处理 {rng}）｜标题 {estats.headings}｜"
           f"正文段落 {estats.paragraphs}｜表格 {estats.tables}（单元格 {estats.cells}）｜"
-          f"目录页跳过 {estats.toc_pages}｜行号剥离 {estats.line_numbers_stripped}｜图片 {estats.images}（原位嵌入）")
+          f"目录页跳过 {estats.toc_pages}｜行号剥离 {estats.line_numbers_stripped}｜图片 {estats.images}（原位嵌入）"
+          + (f"｜字体缺陷清洗 {estats.control_chars_replaced} 处（→ � 占位）" if estats.control_chars_replaced else ""))
     print(f"翻译单元：待翻译 {len(todo)} 个，方向不符跳过 {skipped_by_direction} 个")
     if progress_cb:
         progress_cb(8, f"结构抽取完成：共 {estats.total_pages} 页，待翻译 {len(todo)} 个单元")
@@ -107,6 +108,9 @@ def run_pdf_pipeline(s: Settings, progress_cb=None) -> int:
             f"方向不符跳过（{s.direction}）": skipped_by_direction,
         },
     )
+    if estats.control_chars_replaced:
+        ctx.stats["字体映射缺陷字符（已替换为 � 占位，译文由模型按上下文还原）"] = (
+            estats.control_chars_replaced)
 
     # ── 2. 翻译器 ─────────────────────────────────────────────
     if s.mock:
@@ -160,11 +164,12 @@ def run_pdf_pipeline(s: Settings, progress_cb=None) -> int:
     # ── 4. 生成重排式 DOCX ────────────────────────────────────
     if progress_cb:
         progress_cb(88, "正在生成重排式文档…")
-    doc, expected_paras = build_docx(blocks, s.mode)
     try:
+        doc, expected_paras = build_docx(blocks, s.mode)
         doc.save(str(output_path))
-    except OSError as e:
-        print(f"错误：输出文件写入失败：{e}", file=sys.stderr)
+    except (ValueError, OSError) as e:
+        # 抽取层已清洗控制字符，此处为防御纵深：宁可友好失败，不让裸 lxml 异常透给用户
+        print(f"错误：生成输出文档失败：{e}", file=sys.stderr)
         return 2
 
     # ── 5. 结构校验：重开文件核对段落数 + 每条译文确实落在输出中 ──

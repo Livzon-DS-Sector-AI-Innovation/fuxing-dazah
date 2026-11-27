@@ -6,7 +6,8 @@ import {
   CreateCategoryInput, UpdateCategoryInput, CreateLocationInput, UpdateLocationInput, CreateEquipmentInput, UpdateEquipmentInput,
   CreateFailureCodeInput, UpdateFailureCodeInput,
   CreateWorkOrderInput, UpdateWorkOrderInput, AssignWorkOrderInput, CompleteWorkOrderInput, VerifyWorkOrderInput,
-  CreateSparePartInput, UpdateSparePartInput, StockInboundInput, StockAdjustInput, LinkEquipmentInput,
+  CreateSparePartInput, UpdateSparePartInput, StockSettingsInput, StockInboundInput, StockOutboundInput, StockAdjustInput, LinkEquipmentInput,
+  SparePartBatchDeleteResult,
   CreateMaintenancePlanInput, UpdateMaintenancePlanInput,
   CreateInspectionTemplateInput, UpdateInspectionTemplateInput,
   CreateInspectionTemplateItemInput, UpdateInspectionTemplateItemInput,
@@ -17,10 +18,10 @@ const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BAS
 
 type ActionResult<T = unknown> = { success: true; data: T | null } | { success: false; error: string }
 
-async function actionFetch(
+async function actionFetch<T = unknown>(
   url: string,
   options?: RequestInit,
-): Promise<ActionResult> {
+): Promise<ActionResult<T>> {
   try {
     const authHeaders = await getAuthHeaders()
     const response = await fetch(url, {
@@ -128,6 +129,33 @@ export async function updateEquipment(id: string, data: UpdateEquipmentInput): P
 export async function deleteEquipment(id: string): Promise<ActionResult> {
   const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/equipments/${id}`, {
     method: 'DELETE',
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+// ==================== 跨模块引用授权 ====================
+export async function grantEquipmentReferences(
+  targetModule: string,
+  equipmentIds: string[],
+): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/references/grants`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_module: targetModule, equipment_ids: equipmentIds }),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export async function revokeEquipmentReferences(
+  targetModule: string,
+  equipmentIds: string[],
+): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/references/grants/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_module: targetModule, equipment_ids: equipmentIds }),
   })
   if (result.success) revalidatePath('/equipment')
   return result
@@ -251,8 +279,24 @@ export async function deleteSparePart(id: string): Promise<ActionResult> {
   return result
 }
 
-export async function stockInbound(sparePartId: string, data: StockInboundInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/inbound`, {
+export async function batchDeleteSpareParts(ids: string[]): Promise<ActionResult<SparePartBatchDeleteResult>> {
+  const result = await actionFetch<SparePartBatchDeleteResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/batch-delete`, {
+    method: 'POST',
+    body: JSON.stringify({ spare_part_ids: ids }),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export interface StockMutationResult {
+  current_qty: number
+  safety_qty: number
+  min_order_qty: number
+  warehouse_location: string | null
+}
+
+export async function stockInbound(sparePartId: string, data: StockInboundInput): Promise<ActionResult<StockMutationResult>> {
+  const result = await actionFetch<StockMutationResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/inbound`, {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -260,9 +304,27 @@ export async function stockInbound(sparePartId: string, data: StockInboundInput)
   return result
 }
 
-export async function stockAdjust(sparePartId: string, data: StockAdjustInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/adjust`, {
+export async function stockOutbound(sparePartId: string, data: StockOutboundInput): Promise<ActionResult<StockMutationResult>> {
+  const result = await actionFetch<StockMutationResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/outbound`, {
     method: 'POST',
+    body: JSON.stringify(data),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export async function stockAdjust(sparePartId: string, data: StockAdjustInput): Promise<ActionResult<StockMutationResult>> {
+  const result = await actionFetch<StockMutationResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/adjust`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export async function updateStockSettings(sparePartId: string, data: StockSettingsInput): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/settings`, {
+    method: 'PUT',
     body: JSON.stringify(data),
   })
   if (result.success) revalidatePath('/equipment')
@@ -400,7 +462,7 @@ export async function uploadWorkOrderImages(workOrderId: string, formData: FormD
     })
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      return { success: false, error: (err as any).message || '上传失败' }
+      return { success: false, error: (err as { message?: string }).message || '上传失败' }
     }
     revalidatePath('/equipment')
     const json = await response.json()
@@ -470,7 +532,8 @@ export async function importEquipments(formData: FormData): Promise<ActionResult
   try {
     const authHeaders = await getAuthHeaders()
     // 文件上传不能设 Content-Type，fetch 会自动加 multipart/form-data + boundary
-    const { 'Content-Type': _ct, ...uploadHeaders } = authHeaders
+    const uploadHeaders = { ...authHeaders }
+    delete uploadHeaders['Content-Type']
     const res = await fetch(`${API_BASE_URL}/api/v1/equipment/equipments/import`, {
       method: 'POST',
       headers: uploadHeaders,
@@ -478,7 +541,7 @@ export async function importEquipments(formData: FormData): Promise<ActionResult
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      return { success: false, error: (err as any).message || '导入失败' }
+      return { success: false, error: (err as { message?: string }).message || '导入失败' }
     }
     const json = await res.json()
     const data = (json.data ?? json) as ImportResult
@@ -508,7 +571,8 @@ export async function downloadSparePartImportTemplate(): Promise<ActionResult<st
 export async function importSpareParts(formData: FormData): Promise<ActionResult<ImportResult>> {
   try {
     const authHeaders = await getAuthHeaders()
-    const { 'Content-Type': _ct, ...uploadHeaders } = authHeaders
+    const uploadHeaders = { ...authHeaders }
+    delete uploadHeaders['Content-Type']
     const res = await fetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/import`, {
       method: 'POST',
       headers: uploadHeaders,
@@ -516,7 +580,7 @@ export async function importSpareParts(formData: FormData): Promise<ActionResult
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      return { success: false, error: (err as any).message || '导入失败' }
+      return { success: false, error: (err as { message?: string }).message || '导入失败' }
     }
     const json = await res.json()
     const data = (json.data ?? json) as ImportResult

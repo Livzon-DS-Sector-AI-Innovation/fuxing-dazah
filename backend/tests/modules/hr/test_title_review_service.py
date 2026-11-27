@@ -621,3 +621,100 @@ class TestComprehensiveGrade:
 
         # 「优秀」等级已取消，出现即视为非法
         assert compute_comprehensive_grade(["优秀"] * 7) is None
+
+
+# ─── 申报附件下载 ───
+
+
+class TestDownloadAttachment:
+    @pytest.fixture
+    async def setup(self, db_session: AsyncSession, monkeypatch):
+        """申报（带附件元数据）+ 1 位评委；download_media 打桩。"""
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.bitable_client.batch_create_records",
+            AsyncMock(return_value=["vrow-1"]),
+        )
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.bitable_client.update_record", AsyncMock()
+        )
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
+        )
+        service = TitleReviewService(db_session)
+        activity = await service.create_activity(_activity_create())
+        activity.feishu_app_token = "appdl1234567890"
+        activity.apply_table_id = "tbldl0000000001"
+        activity.vote_table_id = "tbldl0000000002"
+        await db_session.flush()
+        await service.open_activity(activity.id)
+        await service.start_review(activity.id)
+        emp = await _create_employee(db_session, "申报人", f"D{_rand()}")
+        application = m.TitleReviewApplication(
+            activity_id=activity.id,
+            employee_id=emp.id,
+            employee_no=emp.employee_number,
+            name=emp.name,
+            department="测试部",
+            sequence=m.SEQUENCE_TECH,
+            apply_level="工程师",
+            status=m.APPLICATION_VOTING,
+            feishu_record_id="rec-app-dl",
+            attachments={
+                "职称评审申报表": [
+                    {"file_token": "tok-111", "name": "申报表.pdf", "size": 1024},
+                    {"file_token": "tok-222", "name": "成果证明.pdf", "size": 2048},
+                ]
+            },
+        )
+        await service.application_repo.create(application)
+        judge = await _create_employee(db_session, "评委", f"DJ{_rand()}")
+        await service.assign_judges(
+            application.id,
+            TitleReviewJudgeAssignIn(
+                judges=[TitleReviewJudgeAssignItemIn(employee_id=judge.id, role="技术专家")]
+            ),
+        )
+        download_mock = AsyncMock(return_value=b"%PDF-fake-content")
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.bitable_client.download_media", download_mock
+        )
+        return service, application, judge, download_mock
+
+    async def test_download_ok(self, setup):
+        service, application, judge, download_mock = setup
+        content, filename = await service.download_attachment(
+            application.id, "tok-222"
+        )
+        assert content == b"%PDF-fake-content"
+        assert filename == "成果证明.pdf"
+        download_mock.assert_awaited_once_with("tok-222")
+
+    async def test_token_not_in_application_rejected(self, setup):
+        """任意 file_token 不能越权下载其他表的附件（token 必须在该申报元数据里）。"""
+        service, application, judge, download_mock = setup
+        with pytest.raises(HTTPException, match="附件不存在"):
+            await service.download_attachment(application.id, "tok-other")
+        download_mock.assert_not_awaited()
+
+    async def test_judge_can_download_outside_scope(self, setup):
+        """scope 外的评委可下载（与 my-judge-tasks 可见性一致）。"""
+        service, application, judge, download_mock = setup
+        service.set_scope({"别的部门"}, None)
+        content, filename = await service.download_attachment(
+            application.id, "tok-111", employee_no=judge.employee_number
+        )
+        assert filename == "申报表.pdf"
+
+    async def test_outside_scope_and_not_judge_rejected(self, setup):
+        service, application, judge, download_mock = setup
+        service.set_scope({"别的部门"}, None)
+        with pytest.raises(HTTPException, match="数据范围"):
+            await service.download_attachment(
+                application.id, "tok-111", employee_no=None
+            )
+        # 工号存在但不是该申报评委同样拒绝
+        stranger = await _create_employee(service.session, "路人", f"S{_rand()}")
+        with pytest.raises(HTTPException, match="数据范围"):
+            await service.download_attachment(
+                application.id, "tok-111", employee_no=stranger.employee_number
+            )

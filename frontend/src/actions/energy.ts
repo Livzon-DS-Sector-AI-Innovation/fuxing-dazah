@@ -52,6 +52,7 @@ import {
   fillAlertReason as apiFillAlertReason,
   approveAlertRecord as apiApproveAlertRecord,
   rejectAlertRecord as apiRejectAlertRecord,
+  normalizeEnergyTypeConfigs,
 } from '@/lib/api/energy'
 import {
   CreateDeviceInput,
@@ -359,11 +360,10 @@ export async function getEnergyOverview(params: {
 }
 
 export async function getEnabledTypeConfigs(): Promise<EnergyTypeMeta[]> {
-  const json = await apiGet<any>(`${_ENERGY_API}/type-configs/enabled`)
-  return (json as any).data ?? (json as any)
+  const json = await apiGet<unknown>(`${_ENERGY_API}/type-configs/enabled`)
+  return normalizeEnergyTypeConfigs(json)
 }
 
 export async function updateEnergyDataValue(dataId: string, value: number): Promise<void> {
   await apiPut(`${_ENERGY_API}/data/${dataId}`, { value })
 }
-

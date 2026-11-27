@@ -102,18 +102,17 @@ function StatStrip({ data, tintBg, tintInk }: { data: Record<string, unknown>; t
   )
 }
 
-/** 结果区下载按钮：含 file_id 的对象 → 下载按钮（横排并排展示）。 */
+/** 结果区下载按钮：含 file_id 的对象（或其数组）→ 下载按钮（横排并排展示）。 */
 function DownloadButtons({
   refs,
   executionId,
 }: {
-  refs: [string, unknown][]
+  refs: [string, { file_id: string; filename?: string }][]
   executionId: string
 }) {
   return (
     <div className="flex flex-wrap gap-3">
-      {refs.map(([key, v]) => {
-        const ref = v as { file_id: string; filename?: string }
+      {refs.map(([key, ref]) => {
         return (
           <Button
             key={key}
@@ -137,7 +136,7 @@ function DownloadButtons({
 }
 
 /** 结果区渲染约定：text → 文本块；键名以 _md 结尾 → Markdown 渲染；
- * rows+columns → 表格；含 file_id 的对象 → 下载按钮（多形态同框渲染不互斥）；其余 → 键值。 */
+ * rows+columns → 表格；含 file_id 的对象或其数组 → 下载按钮（多形态同框渲染不互斥）；其余 → 键值。 */
 function ResultView({
   data,
   executionId,
@@ -149,9 +148,18 @@ function ResultView({
   tintBg: string
   tintInk: string
 }) {
-  const fileRefs = Object.entries(data).filter(
-    ([, v]) => typeof v === 'object' && v !== null && (v as Record<string, unknown>).file_id,
-  )
+  // 含 file_id 的对象直接作为下载项；数组则摊平为逐项下载（批量工具的多产物）
+  const fileRefs = Object.entries(data).flatMap(([k, v]): [string, { file_id: string; filename?: string }][] => {
+    const isFileRef = (x: unknown) =>
+      typeof x === 'object' && x !== null && typeof (x as { file_id?: unknown }).file_id === 'string'
+    if (isFileRef(v)) return [[k, v as { file_id: string; filename?: string }]]
+    if (Array.isArray(v)) {
+      return v
+        .filter(isFileRef)
+        .map((item, i): [string, { file_id: string; filename?: string }] => [`${k}-${i + 1}`, item])
+    }
+    return []
+  })
   const mdEntries = Object.entries(data).filter(
     ([k, v]) => k.endsWith('_md') && typeof v === 'string' && v,
   )
@@ -303,7 +311,9 @@ function MaterialSlot({
                 {input.label}
                 {input.required && <span className="ml-0.5 text-[var(--color-error)]">*</span>}
               </p>
-              <p className="m-0 mt-1 text-[12px]" style={{ color: tintInk, opacity: 0.7 }}>点击或拖拽上传</p>
+              <p className="m-0 mt-1 text-[12px]" style={{ color: tintInk, opacity: 0.7 }}>
+                {input.multiple ? '点击或拖拽上传，支持一次多选批量文件' : '点击或拖拽上传'}
+              </p>
               {input.accept && (
                 <p className="m-0 mt-1 text-[11px]" style={{ color: tintInk, opacity: 0.5 }}>
                   {input.accept.split(',').map((s) => s.trim().replace(/^\./, '')).join(' / ')}

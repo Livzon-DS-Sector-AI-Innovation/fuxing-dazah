@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.main import app
-from app.modules.equipment.public_api import EquipmentBrief
 from app.modules.production.schemas import (
     EdgeIn,
     FieldDefIn,
@@ -108,30 +107,6 @@ async def make_raw_output(
     db.add(out)
     await db.flush()
     return out
-
-
-@pytest.fixture(autouse=True)
-def _mock_equipment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock 设备校验：任何请求的设备 ID 都视为存在。
-
-    execution_service 在后续任务才创建，模块不存在时静默跳过，
-    保证 route/batch 阶段的测试也能加载本 conftest。
-    """
-    import importlib
-
-    async def fake(db: AsyncSession, ids: list[uuid.UUID]) -> list[EquipmentBrief]:
-        return [
-            EquipmentBrief(id=i, equipment_no=f"EQ-{str(i)[:4]}", name="测试设备")
-            for i in ids
-        ]
-
-    try:
-        mod = importlib.import_module(
-            "app.modules.production.service.execution_service"
-        )
-    except ModuleNotFoundError:
-        return
-    monkeypatch.setattr(mod, "get_equipment_briefs", fake)
 
 
 def build_graph_in() -> RouteGraphIn:

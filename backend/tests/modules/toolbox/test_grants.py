@@ -7,18 +7,57 @@ from typing import Any, Protocol
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.toolbox import api
 from app.modules.toolbox.models import ToolGrant
 from app.modules.toolbox.registry import StepContext, ToolStep, tool
 from app.platform.identity.models import User
+from app.platform.permission.models import Permission, Role, UserRole
+from app.platform.permission.repository import PermissionRepository
 from tests.modules.toolbox.conftest import FakeRedis
 
 TOOL_ID = "t-grant"
 
 MakeUser = Callable[[str], Awaitable[User]]
 GrantsClient = tuple[AsyncClient, dict[str, SimpleNamespace]]
+_perm_repo = PermissionRepository()
+
+
+async def _grant_super_admin(db_session: AsyncSession, user: User) -> None:
+    """真实授予 super_admin 角色（可能已被 bootstrap 写入：先查后建）。"""
+    role = (
+        await db_session.execute(select(Role).where(Role.code == "super_admin"))
+    ).scalar_one_or_none()
+    if role is None:
+        role = Role(code="super_admin", name="超级管理员", data_scope="all", is_system=True)
+        db_session.add(role)
+        await db_session.flush()
+    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    await db_session.flush()
+
+
+async def _grant_role_manage_permission(db_session: AsyncSession, user: User) -> None:
+    """真实授予 permission:role:manage 权限（但不是 super_admin 角色）。"""
+    perm = (
+        await db_session.execute(
+            select(Permission).where(Permission.code == "permission:role:manage")
+        )
+    ).scalar_one_or_none()
+    if perm is None:
+        perm = Permission(
+            code="permission:role:manage", name="管理角色",
+            module="permission", resource="role", action="manage",
+        )
+        db_session.add(perm)
+        await db_session.flush()
+    role = Role(code=f"probe_manage_{uuid.uuid4().hex[:6]}", name="权限管理员")
+    db_session.add(role)
+    await db_session.flush()
+    await _perm_repo.set_role_permissions(db_session, role.id, [perm.id])
+    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    await db_session.flush()
 
 
 class AddGrant(Protocol):
@@ -100,7 +139,7 @@ def grants_client(
     app.dependency_overrides[api.get_current_user] = fake_user_dep  # type: ignore[attr-defined]
     app.dependency_overrides[api.get_redis] = fake_redis_dep  # type: ignore[attr-defined]
     app.dependency_overrides[api.get_db] = fake_db_dep  # type: ignore[attr-defined]
-    app.dependency_overrides[api.require_admin] = fake_admin_dep  # type: ignore[attr-defined]
+    app.dependency_overrides[api.require_super_admin] = fake_admin_dep  # type: ignore[attr-defined]
     client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
     return client, state
 
@@ -239,19 +278,13 @@ async def test_use_only_user_cannot_read_config(
 async def test_admin_bypass_everything(
     grants_client: GrantsClient,
     make_user: MakeUser,
-    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
 ) -> None:
-    """超管（permission:role:manage）不受授权限制，全工具可见且 can 标志全 True。"""
+    """系统超级管理员（super_admin 角色）不受授权限制，全工具可见且 can 标志全 True。"""
     client, state = grants_client
     u1 = await make_user("u1")
     state["user"] = SimpleNamespace(id=str(u1.id))
-
-    import app.modules.toolbox.service as service_mod
-
-    async def _admin_perms(_user_id: str, _db: object) -> set[str]:
-        return {"permission:role:manage"}
-
-    monkeypatch.setattr(service_mod, "get_user_permissions", _admin_perms)
+    await _grant_super_admin(db_session, u1)
 
     run = await client.post(f"/tools/{TOOL_ID}/steps/s1/run", data={"params": "{}"})
     assert run.status_code == 200, run.text
@@ -262,6 +295,23 @@ async def test_admin_bypass_everything(
     grant_tool = next(t for t in tools if t["id"] == TOOL_ID)
     assert grant_tool["can_use"] is True
     assert grant_tool["can_config"] is True
+
+
+async def test_role_manage_only_is_not_admin(
+    grants_client: GrantsClient,
+    make_user: MakeUser,
+    db_session: AsyncSession,
+) -> None:
+    """只有 permission:role:manage 权限、没有 super_admin 角色 → 不再获得工具管理放行。"""
+    client, state = grants_client
+    u1 = await make_user("rm-only")
+    state["user"] = SimpleNamespace(id=str(u1.id))
+    await _grant_role_manage_permission(db_session, u1)
+
+    tools = (await client.get("/tools")).json()["data"]
+    tool = next(t for t in tools if t["id"] == TOOL_ID)
+    assert tool["can_use"] is True  # 未配置使用名单 → 默认开放
+    assert tool["can_config"] is False  # 不再恒为 True
 
 
 async def test_grant_management_endpoints(

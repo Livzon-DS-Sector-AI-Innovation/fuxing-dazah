@@ -51,6 +51,8 @@ app/
 - `repository.py`：数据库查询与持久化
 - `models.py`：本模块 SQLAlchemy ORM 模型
 
+模块增大后可把以上五类各自拆成同名子包（`api/`、`schemas/`、`service/`、`repository/`、`models/`），由每个子包的 `__init__.py` 全量 re-export 对外保持同一导入面；其中 `models/__init__.py` 必须 re-export 全部模型，因为 alembic env 只 `import_module("app.modules.{module}.models")`。production、equipment、qa 采用这一形态。
+
 跨模块调用优先通过对方模块的 `public_api.py`，不要直接跨模块 import 对方 `service.py`、`repository.py` 或内部拆分文件。飞书、ERP、LIMS 等外部系统只从 `platform/integrations` 接入，业务模块不直接散落第三方 API 调用。
 
 ## 数据库边界

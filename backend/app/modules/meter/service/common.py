@@ -10,6 +10,17 @@ from app.core.time import today as time_today
 MODULE_CODE = "meter"
 
 
+def normalize_report_content_type(content_type: str | None) -> str:
+    """报告文件 content_type 白名单：仅放行 PDF 与图片，其余一律落为
+    application/octet-stream。客户端可任意声明 content_type，preview 端点
+    以 inline 回显，若原样透传 text/html 等类型会在 API 域下构成存储型 XSS。
+    """
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    if ct == "application/pdf" or ct.startswith("image/"):
+        return ct
+    return "application/octet-stream"
+
+
 def compute_status(record_status: str | None, next_calibration_date: date | None) -> str | None:
     """计算显示状态。
 

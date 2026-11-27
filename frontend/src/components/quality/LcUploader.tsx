@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { Upload, App, Space, Typography } from 'antd'
+import { Upload, App, Typography, Input } from 'antd'
 import { InboxOutlined, FileExcelOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd'
 import { uploadLcExcel } from '@/actions/quality'
@@ -17,6 +17,8 @@ interface Props {
 export default function LcUploader({ onResult }: Props) {
   const [uploading, setUploading] = useState(false)
   const [fileList, setFileList] = useState<UploadFile[]>([])
+  // 加密计算表密码一般留空：服务端已配兜底通行密码，仅特殊密码文件需手填
+  const [password, setPassword] = useState('')
   const { message } = App.useApp()
 
   const handleUpload = useCallback(async (file: File) => {
@@ -24,17 +26,26 @@ export default function LcUploader({ onResult }: Props) {
     try {
       const formData = new FormData()
       formData.append('file', file)
+      if (password) formData.append('password', password)
 
       const result = await uploadLcExcel(formData)
-      message.success(`解析成功：${result.report.product_name} / ${result.report.batch_number}`)
+      if (result.task_link) {
+        message.success(
+          `解析成功并已自动关联检验任务：填入 ${result.task_link.filled.length} 项` +
+          (result.task_link.unmatched.length ? `，未匹配 ${result.task_link.unmatched.length} 项` : ''),
+          5,
+        )
+      } else {
+        message.success(`解析成功：${result.report.product_name} / ${result.report.batch_number}`)
+      }
       onResult(result)
-    } catch (err: any) {
-      message.error(err.message || '解析失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '解析失败')
     } finally {
       setUploading(false)
     }
     return false // 阻止 antd 默认上传行为
-  }, [onResult, message])
+  }, [onResult, message, password])
 
   return (
     <div style={{ maxWidth: 600 }}>
@@ -71,6 +82,18 @@ export default function LcUploader({ onResult }: Props) {
           支持 .xlsx / .xls 格式，文件大小不超过 10MB
         </p>
       </Dragger>
+      <div style={{ marginTop: 8 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          一般留空即可：加密计算表由服务端默认密码自动解密；特殊密码再单独填写（仅本次使用，不保存）
+        </Typography.Text>
+        <Input.Password
+          placeholder="文件密码（一般留空）"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          style={{ maxWidth: 260, marginTop: 4 }}
+          autoComplete="new-password"
+        />
+      </div>
 
       {uploading && (
         <div style={{ textAlign: 'center', marginTop: 12 }}>

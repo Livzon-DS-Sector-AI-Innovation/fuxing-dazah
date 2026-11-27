@@ -1,12 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { useDebouncedCallback } from '@/hooks/hr'
+import { usePermission } from '@/hooks/usePermission'
 import {
+  App,
   Button,
   Card,
   DatePicker,
   Spin,
-  message,
   Input,
   Select,
   Space,
@@ -15,6 +18,7 @@ import {
   Row,
   Col,
   Table,
+  Tooltip,
 } from 'antd'
 import {
   PrinterOutlined,
@@ -25,13 +29,15 @@ import {
   ExportOutlined,
   SearchOutlined,
   ReloadOutlined,
+  ImportOutlined,
 } from '@ant-design/icons'
 import { downloadBase64File } from '@/lib/hr'
+import Link from 'next/link'
 import dayjs from 'dayjs'
 import { Employee, TrainingLedgerRecord } from '@/types/hr'
 import {
   fetchEmployeeByNumberAction,
-  fetchEmployeesAction,
+  fetchTrainingRoster,
   fetchTrainingLedgers,
   fetchTrainingLedgersAdmin,
   batchUpdateScores,
@@ -45,6 +51,7 @@ import {
   updateTrainingLedger,
   deleteTrainingLedger,
 } from '@/actions/hr'
+import { LedgerImportModal } from '@/components/hr'
 
 interface TrainingLedgerClientProps {
   employeeNumber: string
@@ -77,10 +84,28 @@ interface StatsData {
 
 const METHOD_OPTIONS = ['面授', '函授', '远程教育', '自学', '其他']
 
+// 台账来源类型 → 展示文案（表里没有的类型一律显示「手动」）
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  notification: '培训通知',
+  qa_assessment: '问答考核',
+  prejob: '入职培训',
+  prejob_export: '入职培训',
+}
+
 export default function TrainingLedgerClient({
   employeeNumber,
 }: TrainingLedgerClientProps) {
   const isAdminMode = !employeeNumber
+  const router = useRouter()
+  const { message, modal } = App.useApp()
+  // 导入是写操作，按培训台账写权限显隐（只读用户点了只会得到 403）
+  const { hasPermission } = usePermission()
+  const canImport = hasPermission('hr:training:manage')
+  // 员工切换跳转（替代 window.location.href 整页刷新，保持 SPA 体验）
+  const goEmployeeLedger = (val: string | undefined) => {
+    if (!val) return
+    router.push(`/hr/training/ledger?employee_number=${val}`)
+  }
 
   // ─── Employee mode state ───
   const [employee, setEmployee] = useState<Employee | null>(null)
@@ -110,27 +135,39 @@ export default function TrainingLedgerClient({
   const [adminEditMap, setAdminEditMap] = useState<Record<string, string>>({})
   const [adminDirtyIds, setAdminDirtyIds] = useState<Set<string>>(new Set())
   const [adminSaving, setAdminSaving] = useState(false)
+  const [evalExporting, setEvalExporting] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   // ─── Employee mode: data loading ───
+  // 远程搜索：防抖（300ms）+ 序号守卫丢弃过期响应
+  const employeeSearchSeq = useRef(0)
   const handleEmployeeSearch = async (keyword: string) => {
     if (!keyword || keyword.length < 1) { setSearchOptions([]); return }
+    const seq = ++employeeSearchSeq.current
     setSearching(true)
     try {
-      const res = await fetchEmployeesAction({ keyword, page_size: 20 })
+      const res = await fetchTrainingRoster({ keyword, page_size: 20 })
+      if (seq !== employeeSearchSeq.current) return
       const emps = res.data || []
       setSearchOptions(emps.map((e: any) => ({
         value: e.employee_number,
         label: `${e.employee_number} — ${e.name} (${e.department || ''})`,
       })))
-    } catch { setSearchOptions([]) }
-    finally { setSearching(false) }
+    } catch { if (seq === employeeSearchSeq.current) setSearchOptions([]) }
+    finally { if (seq === employeeSearchSeq.current) setSearching(false) }
   }
+  const { run: debouncedEmployeeSearch } = useDebouncedCallback(handleEmployeeSearch, 300)
+
+  // 个人台账请求序号守卫：员工/日期切换后，慢响应回来时若已不是最新请求则丢弃
+  const ledgerReqSeq = useRef(0)
 
   const loadEmployeeData = async () => {
+    const seq = ++ledgerReqSeq.current
     setLoading(true)
     try {
       if (employeeNumber) {
         const empRes = await fetchEmployeeByNumberAction(employeeNumber)
+        if (seq !== ledgerReqSeq.current) return
         setEmployee(empRes.data)
       }
       if (!employeeNumber) {
@@ -138,17 +175,28 @@ export default function TrainingLedgerClient({
         setLoading(false)
         return
       }
-      const ledgerRes = await fetchTrainingLedgers({
-        employee_number: employeeNumber,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        page_size: 100,
-      })
-      setRecords(ledgerRes.data || [])
+      // 从第 1 页开始循环取（每页 100），直到本页不足 100 条，避免只显示前 100 条
+      const LEDGER_PAGE_SIZE = 100
+      const allRecords: TrainingLedgerRecord[] = []
+      for (let page = 1; ; page += 1) {
+        const ledgerRes = await fetchTrainingLedgers({
+          employee_number: employeeNumber,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          page,
+          page_size: LEDGER_PAGE_SIZE,
+        })
+        if (seq !== ledgerReqSeq.current) return
+        const pageRecords = ledgerRes.data || []
+        allRecords.push(...pageRecords)
+        if (pageRecords.length < LEDGER_PAGE_SIZE) break
+      }
+      setRecords(allRecords)
     } catch (err: any) {
+      if (seq !== ledgerReqSeq.current) return
       message.error('加载数据失败: ' + (err.message || '未知错误'))
     } finally {
-      setLoading(false)
+      if (seq === ledgerReqSeq.current) setLoading(false)
     }
   }
 
@@ -230,6 +278,19 @@ export default function TrainingLedgerClient({
   }, [filterDept, filterSubject, adminDateRange, adminPage, adminPageSize])
 
   // ─── Admin: score editing ───
+  // 翻页/筛选/刷新会重置行内成绩编辑，有未保存修改时先确认，避免静默丢工作
+  const confirmDiscardDirty = (action: () => void) => {
+    if (adminDirtyIds.size === 0) { action(); return }
+    modal.confirm({
+      title: '有未保存的成绩修改',
+      content: `当前有 ${adminDirtyIds.size} 条成绩已修改尚未保存，继续操作将丢失这些修改。`,
+      okText: '放弃修改并继续',
+      okButtonProps: { danger: true },
+      cancelText: '返回保存',
+      onOk: action,
+    })
+  }
+
   const handleAdminScoreChange = (recordId: string, value: string) => {
     setAdminEditMap((prev) => ({ ...prev, [recordId]: value }))
     setAdminDirtyIds((prev) => new Set(prev).add(recordId))
@@ -267,15 +328,35 @@ export default function TrainingLedgerClient({
       message.warning('请先选择培训主题')
       return
     }
-    // 从当前已加载的记录中聚合培训信息
-    const records = adminRecords
-    const uniqueEmployees = [...new Set(records.map(r => r.employee_number))]
-    const scores = records.filter(r => r.assessment_result).map(r => ({ name: r.employee_name || r.employee_number, result: r.assessment_result }))
-    const excellentCount = scores.filter(s => Number(s.result) >= 90).length
-    const qualifiedCount = scores.filter(s => Number(s.result) >= 60 && Number(s.result) < 90).length
-    const unqualifiedCount = scores.filter(s => Number(s.result) < 60).length
-
+    if (adminTotal === 0) {
+      message.warning('当前筛选条件下没有可导出的记录')
+      return
+    }
+    setEvalExporting(true)
     try {
+      // 按当前筛选条件拉取全量记录（非仅当前页），避免评估表人数/成绩统计失真
+      // 后端 page_size 上限为 200，超过一页时按每页 200 循环累加取全
+      const EXPORT_PAGE_SIZE = 200
+      const records: AdminRecord[] = []
+      for (let page = 1; ; page += 1) {
+        const pageRes = await fetchTrainingLedgersAdmin({
+          department: filterDept,
+          training_subject: filterSubject,
+          date_from: adminDateRange ? adminDateRange[0] : undefined,
+          date_to: adminDateRange ? adminDateRange[1] : undefined,
+          page,
+          page_size: EXPORT_PAGE_SIZE,
+        })
+        const pageRecords = pageRes.data || []
+        records.push(...pageRecords)
+        if (pageRecords.length < EXPORT_PAGE_SIZE) break
+      }
+      const uniqueEmployees = [...new Set(records.map(r => r.employee_number))]
+      const scores = records.filter(r => r.assessment_result).map(r => ({ name: r.employee_name || r.employee_number, result: r.assessment_result }))
+      const excellentCount = scores.filter(s => Number(s.result) >= 90).length
+      const qualifiedCount = scores.filter(s => Number(s.result) >= 60 && Number(s.result) < 90).length
+      const unqualifiedCount = scores.filter(s => Number(s.result) < 60).length
+
       const r = await exportTrainingEvaluationReport({
         department: filterDept,
         training_subject: filterSubject,
@@ -290,9 +371,11 @@ export default function TrainingLedgerClient({
         unqualified_count: unqualifiedCount,
       })
       downloadBase64File(r.base64, r.filename)
-      message.success('评估表已导出')
+      message.success(`评估表已导出（含 ${records.length} 条记录）`)
     } catch (err: any) {
       message.error(err.message || '导出失败')
+    } finally {
+      setEvalExporting(false)
     }
   }
 
@@ -411,19 +494,24 @@ export default function TrainingLedgerClient({
   if (isAdminMode) {
     return (
       <div className="space-y-4">
-        {/* 员工搜索入口 */}
-        <Select
-          showSearch
-          placeholder="输入工号或姓名搜索员工，查看个人台账"
-          value={undefined}
-          style={{ width: 360 }}
-          filterOption={false}
-          onSearch={handleEmployeeSearch}
-          onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
-          notFoundContent={searching ? <Spin size="small" /> : null}
-          options={searchOptions}
-          allowClear
-        />
+        {/* 员工搜索入口 + 新建个人台账（原孤儿页 ledger/new 的入口） */}
+        <div className="flex items-center gap-3">
+          <Select
+            showSearch
+            placeholder="输入工号或姓名搜索员工，查看个人台账"
+            value={undefined}
+              style={{ width: 360 }}
+              filterOption={false}
+              onSearch={debouncedEmployeeSearch}
+              onChange={(val) => { confirmDiscardDirty(() => goEmployeeLedger(val)) }}
+            notFoundContent={searching ? <Spin size="small" /> : null}
+            options={searchOptions}
+            allowClear
+          />
+          <Link href="/hr/training/ledger/new">
+            <Button icon={<PlusOutlined />}>新建台账</Button>
+          </Link>
+        </div>
 
         {/* 筛选栏 */}
         <Card size="small">
@@ -433,7 +521,7 @@ export default function TrainingLedgerClient({
               allowClear
               placeholder="部门筛选"
               value={filterDept}
-              onChange={(v) => { setFilterDept(v); setFilterSubject(undefined); setAdminPage(1) }}
+              onChange={(v) => confirmDiscardDirty(() => { setFilterDept(v); setFilterSubject(undefined); setAdminPage(1) })}
               options={departments.map((d) => ({ label: d, value: d }))}
               style={{ width: 180 }}
             />
@@ -442,20 +530,20 @@ export default function TrainingLedgerClient({
               allowClear
               placeholder="培训内容筛选"
               value={filterSubject}
-              onChange={(v) => { setFilterSubject(v); setAdminPage(1) }}
+              onChange={(v) => confirmDiscardDirty(() => { setFilterSubject(v); setAdminPage(1) })}
               options={subjects.map((s) => ({ label: s, value: s }))}
               style={{ width: 240 }}
             />
             <DatePicker.RangePicker
               placeholder={['日期起', '日期止']}
-              onChange={(dates) => {
+              onChange={(dates) => confirmDiscardDirty(() => {
                 if (dates && dates[0] && dates[1]) {
                   setAdminDateRange([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')])
                 } else { setAdminDateRange(null) }
                 setAdminPage(1)
-              }}
+              })}
             />
-            <Button icon={<ReloadOutlined />} onClick={() => { loadAdminData(); loadAdminStats() }}>
+            <Button icon={<ReloadOutlined />} onClick={() => confirmDiscardDirty(() => { loadAdminData(); loadAdminStats() })}>
               刷新
             </Button>
           </Space>
@@ -467,8 +555,8 @@ export default function TrainingLedgerClient({
             <Row gutter={16}>
               <Col span={4}><Statistic title="总记录数" value={stats.total_count} /></Col>
               <Col span={4}><Statistic title="实到人数" value={stats.assessed_count} /></Col>
-              <Col span={4}><Statistic title="合格人数" value={stats.qualified_count} valueStyle={{ color: '#3f8600' }} /></Col>
-              <Col span={4}><Statistic title="不合格人数" value={stats.unqualified_count} valueStyle={{ color: stats.unqualified_count > 0 ? '#cf1322' : undefined }} /></Col>
+              <Col span={4}><Statistic title="合格人数" value={stats.qualified_count} styles={{ content: { color: '#3f8600' } }} /></Col>
+              <Col span={4}><Statistic title="不合格人数" value={stats.unqualified_count} styles={{ content: { color: stats.unqualified_count > 0 ? '#cf1322' : undefined } }} /></Col>
               <Col span={4}><Statistic title="合格率" value={stats.pass_rate} /></Col>
               <Col span={4}><Statistic title="平均分" value={stats.avg_score ?? '-'} precision={1} /></Col>
             </Row>
@@ -485,7 +573,10 @@ export default function TrainingLedgerClient({
               loading={adminSaving} disabled={adminDirtyIds.size === 0}>
               批量保存成绩
             </Button>
-            <Button icon={<ExportOutlined />} onClick={handleExportEvaluation} disabled={!filterDept}>
+            {canImport && (
+              <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
+            )}
+            <Button icon={<ExportOutlined />} onClick={handleExportEvaluation} disabled={!filterDept} loading={evalExporting}>
               导出效果评估表
             </Button>
           </Space>
@@ -504,7 +595,7 @@ export default function TrainingLedgerClient({
             total: adminTotal,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            onChange: (p, ps) => { setAdminPage(p); setAdminPageSize(ps) },
+            onChange: (p, ps) => confirmDiscardDirty(() => { setAdminPage(p); setAdminPageSize(ps) }),
             showTotal: (t) => `共 ${t} 条`,
           }}
           columns={[
@@ -522,13 +613,13 @@ export default function TrainingLedgerClient({
                 <Input
                   size="small"
                   placeholder="成绩"
-                  defaultValue={v || ''}
+                  value={adminEditMap[record.id] ?? v ?? ''}
                   onChange={(e) => handleAdminScoreChange(record.id, e.target.value)}
                   style={adminDirtyIds.has(record.id) ? { borderColor: '#faad14' } : undefined}
                 />
               ),
             },
-            { title: '来源', dataIndex: 'source_type', width: 60, render: (v: string) => v === 'notification' ? '通知' : '手动' },
+            { title: '来源', dataIndex: 'source_type', width: 80, render: (v: string | null | undefined) => SOURCE_TYPE_LABELS[v ?? ''] ?? '手动' },
           ]}
         />
       </div>
@@ -555,10 +646,10 @@ export default function TrainingLedgerClient({
         <div className="max-w-md mx-auto">
           <Select showSearch placeholder="输入工号或姓名搜索员工" style={{ width: '100%' }}
             value={undefined}
-            filterOption={false}
-            onSearch={handleEmployeeSearch}
-            onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
-            notFoundContent={searching ? <Spin size="small" /> : null}
+              filterOption={false}
+              onSearch={debouncedEmployeeSearch}
+              onChange={(val) => { goEmployeeLedger(val) }}
+              notFoundContent={searching ? <Spin size="small" /> : null}
             options={searchOptions} />
         </div>
       </div>
@@ -573,11 +664,11 @@ export default function TrainingLedgerClient({
           showSearch
           placeholder="输入工号或姓名搜索员工"
           value={employeeNumber || undefined}
-          style={{ width: 320 }}
-          filterOption={false}
-          onSearch={handleEmployeeSearch}
-          onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
-          notFoundContent={searching ? '搜索中...' : null}
+            style={{ width: 320 }}
+            filterOption={false}
+            onSearch={debouncedEmployeeSearch}
+            onChange={(val) => { goEmployeeLedger(val) }}
+            notFoundContent={searching ? '搜索中...' : null}
           options={searchOptions}
           allowClear
         />
@@ -624,7 +715,7 @@ export default function TrainingLedgerClient({
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">岗 位/职 务</td>
                 <td className="border border-gray-300 px-2 py-2 text-center">{employee?.position || ''}</td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">入 厂 时 间</td>
-                <td colSpan={2} className="border border-gray-300 px-2 py-2 text-center">{employee?.factory_entry_date || employee?.hire_date || ''}</td>
+                <td colSpan={2} className="border border-gray-300 px-2 py-2 text-center">{employee?.hire_date || ''}</td>
               </tr>
               <tr>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">岗 位 变 动</td>
@@ -686,14 +777,20 @@ export default function TrainingLedgerClient({
                     <td className="border border-gray-300 px-1 py-1 text-center no-print">
                       {isBlank ? null : editing ? (
                         <Space size="small">
-                          <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => handleSave(record)} />
+                          <Tooltip title="保存">
+                            <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => handleSave(record)} aria-label="保存" />
+                          </Tooltip>
                           <Button size="small" onClick={handleCancel}>取消</Button>
                         </Space>
                       ) : (
                         <Space size="small">
-                          <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
+                          <Tooltip title="编辑">
+                            <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} aria-label="编辑" />
+                          </Tooltip>
                           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record)}>
-                            <Button size="small" danger icon={<DeleteOutlined />} />
+                            <Tooltip title="删除">
+                              <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+                            </Tooltip>
                           </Popconfirm>
                         </Space>
                       )}
@@ -710,6 +807,14 @@ export default function TrainingLedgerClient({
       <style jsx global>{`
         @media print { body * { visibility: hidden; } #print-area, #print-area * { visibility: visible; } #print-area { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } .ant-card { border: none !important; box-shadow: none !important; } .ant-card-body { padding: 0 !important; } }
       `}</style>
+
+      <LedgerImportModal
+        open={importOpen}
+        ledger="training"
+        label="培训台账"
+        onClose={() => setImportOpen(false)}
+        onSuccess={() => confirmDiscardDirty(() => { loadAdminData(); loadAdminStats() })}
+      />
     </div>
   )
 }

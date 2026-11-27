@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Button, Card, Input, InputNumber, Select, Space, Table, Tag, message, Descriptions, Divider, Popconfirm } from 'antd'
+import { App, Button, Card, Input, InputNumber, Select, Space, Table, Tag, Tooltip, Descriptions, Divider, Popconfirm } from 'antd'
 import { SaveOutlined, SendOutlined, ArrowLeftOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { fetchPerformanceEvaluation, updatePerformanceEvaluation, submitSelfEvaluation, submitLeaderEvaluation, fetchCategoryScores, saveCategoryScores } from '@/actions/hr'
+import { PERFORMANCE_STATUS_META, formatDateTime } from '@/lib/hr'
 
 const CATEGORY_OPTIONS = [
   { value: 'key_work', label: '月度重点工作' },
@@ -12,23 +13,29 @@ const CATEGORY_OPTIONS = [
   { value: 'reward_penalty', label: '奖惩项目' },
 ]
 
-const STATUS_MAP: Record<string, { color: string; label: string }> = {
-  draft: { color: 'default', label: '草稿' },
-  self_submitted: { color: 'blue', label: '待领导评分' },
-  leader_scored: { color: 'green', label: '已完成' },
+// 详情页页头的「返回」：页头在 server 页面里，跳转要用客户端 router，故在本客户端文件里导出。
+// 固定回考核列表而不是 router.back()：从别的页面跳进来时 back() 会退到不相干的页面
+export function PerformanceBackButton() {
+  const router = useRouter()
+  return <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/hr/performance')}>返回</Button>
 }
 
 export default function PerformanceFormClient() {
   const params = useParams()
   const router = useRouter()
+  const { message } = App.useApp()
   const evalId = params.id as string
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [evaluation, setEvaluation] = useState<any>(null)
   const [items, setItems] = useState<any[]>([])
-  const [editable, setEditable] = useState(true)
+  // 加载成功前不可编辑：否则加载失败后是一张空表，点保存会把该考核的全部指标清空（后端先删后建）
+  const [editable, setEditable] = useState(false)
   const [categoryScores, setCategoryScores] = useState<any[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // 是否已成功加载过（进 deps 会让 setEvaluation 再次触发加载，形成循环，故用 ref）
+  const loadedRef = useRef(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -41,8 +48,16 @@ export default function PerformanceFormClient() {
       setItems(ev.data.items || [])
       setCategoryScores(cs.data || [])
       setEditable(ev.data.status === 'draft')
-    } catch (err: any) { message.error(err.message || '加载失败') }
+      loadedRef.current = true
+      setLoadError(null)
+    } catch (err: any) {
+      // 已有数据时刷新失败只提示、保留当前内容；首次加载失败则进入错误态并阻断表单
+      message.error(err.message || '加载失败')
+      if (!loadedRef.current) setLoadError(err.message || '加载失败')
+    }
     finally { setLoading(false) }
+    // message 不进依赖数组（App.useApp 的 message 进 deps 会反复触发加载）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evalId])
 
   useEffect(() => { loadData() }, [loadData])
@@ -50,6 +65,8 @@ export default function PerformanceFormClient() {
   const updateItem = (i: number, f: string, v: any) => setItems((p: any[]) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n })
 
   const addItem = () => setItems((p: any[]) => [...p, { category: 'key_work', indicator: '', standard: '', weight: 0, self_score: null, leader_score: null, final_score: null, completion: '', sort_order: p.length }])
+
+  const removeItem = (i: number) => setItems((p: any[]) => p.filter((_, j) => j !== i))
 
   const handleSave = async () => {
     setSaving(true)
@@ -112,12 +129,23 @@ export default function PerformanceFormClient() {
   const totalSelf = items.reduce((s: number, it: any) => s + ((it.self_score || 0) * (it.weight || 0) / 100), 0)
   const totalLeader = items.reduce((s: number, it: any) => s + ((it.leader_score || 0) * (it.weight || 0) / 100), 0)
 
-  if (loading) return <Card loading style={{ minHeight: 400 }} />
-  const si = STATUS_MAP[evaluation?.status] || { color: 'default', label: evaluation?.status }
+  // 整页骨架只在首次加载出现；保存后的刷新不再把页面替换成骨架卡
+  if (loading && !evaluation) return <Card loading style={{ minHeight: 400 }} />
+  if (loadError && !evaluation) {
+    return (
+      <Card>
+        <div className="text-center py-12">
+          <p className="mb-4 text-gray-500">{loadError}</p>
+          {/* 返回入口在页头（PerformanceBackButton），这里只留重试 */}
+          <Button icon={<ArrowLeftOutlined />} onClick={() => void loadData()}>重试</Button>
+        </div>
+      </Card>
+    )
+  }
+  const si = PERFORMANCE_STATUS_META[evaluation?.status] || { color: 'default', label: evaluation?.status }
 
   return (
     <div className="space-y-4">
-      <Button icon={<ArrowLeftOutlined />} onClick={() => router.back()} type="text">返回</Button>
       <Card>
         <Descriptions title="考核信息" column={4} size="small" bordered>
           <Descriptions.Item label="部门">{evaluation?.department}</Descriptions.Item>
@@ -126,8 +154,8 @@ export default function PerformanceFormClient() {
           <Descriptions.Item label="分管领导">{evaluation?.evaluator_leader || '—'}</Descriptions.Item>
           <Descriptions.Item label="状态"><Tag color={si.color}>{si.label}</Tag></Descriptions.Item>
           <Descriptions.Item label="定编">{evaluation?.headcount || '—'}</Descriptions.Item>
-          <Descriptions.Item label="自评时间">{evaluation?.self_submitted_at ? new Date(evaluation.self_submitted_at).toLocaleString() : '—'}</Descriptions.Item>
-          <Descriptions.Item label="领导评分时间">{evaluation?.leader_submitted_at ? new Date(evaluation.leader_submitted_at).toLocaleString() : '—'}</Descriptions.Item>
+          <Descriptions.Item label="自评时间">{formatDateTime(evaluation?.self_submitted_at)}</Descriptions.Item>
+          <Descriptions.Item label="领导评分时间">{formatDateTime(evaluation?.leader_submitted_at)}</Descriptions.Item>
         </Descriptions>
       </Card>
 
@@ -147,13 +175,13 @@ export default function PerformanceFormClient() {
               { title: '得分', dataIndex: 'score', width: 90,
                 render: (v: any, r: any) => <InputNumber size="small" value={v} min={0} max={100} placeholder="打分" disabled={r.can_edit === false} onChange={(val) => updateCatScore(r.category_id, val)} style={{ width: '100%' }} />,
               },
-              { title: '加权', width: 70, render: (_: any, r: any) => r.score != null ? <strong style={{ color: '#1677ff' }}>{(r.score * r.weight / 100).toFixed(1)}</strong> : '—' },
+              { title: '加权', width: 70, render: (_: any, r: any) => r.score != null ? <strong style={{ color: 'var(--color-primary)' }}>{(r.score * r.weight / 100).toFixed(1)}</strong> : '—' },
               { title: '评分人', dataIndex: 'scored_by', width: 80, render: (v: any) => v || '—' },
-              { title: '评分时间', dataIndex: 'scored_at', width: 140, render: (v: any) => v ? new Date(v).toLocaleString() : '—' },
+              { title: '评分时间', dataIndex: 'scored_at', width: 140, render: (v: any) => formatDateTime(v) },
             ]}
             summary={() => {
               const total = categoryScores.reduce((s: number, r: any) => s + (r.score != null ? r.score * r.weight / 100 : 0), 0)
-              return <Table.Summary.Row><Table.Summary.Cell index={0} colSpan={4}><strong>项目评分加权总分</strong></Table.Summary.Cell><Table.Summary.Cell index={1}><strong style={{ color: '#1677ff', fontSize: 16 }}>{total.toFixed(1)}</strong></Table.Summary.Cell></Table.Summary.Row>
+              return <Table.Summary.Row><Table.Summary.Cell index={0} colSpan={4}><strong>项目评分加权总分</strong></Table.Summary.Cell><Table.Summary.Cell index={1}><strong style={{ color: 'var(--color-primary)', fontSize: 16 }}>{total.toFixed(1)}</strong></Table.Summary.Cell></Table.Summary.Row>
             }}
           />
         )}
@@ -169,9 +197,22 @@ export default function PerformanceFormClient() {
             { title: '权重%', dataIndex: 'weight', width: 70, render: (v: number, _: any, i: number) => editable ? <InputNumber size="small" value={v} min={0} max={100} onChange={(val) => updateItem(i, 'weight', val || 0)} style={{ width: '100%' }} /> : <span>{v}%</span> },
             { title: '自评分', dataIndex: 'self_score', width: 70, render: (v: number, _: any, i: number) => editable ? <InputNumber size="small" value={v} min={0} max={100} onChange={(val) => updateItem(i, 'self_score', val)} style={{ width: '100%' }} /> : <span>{v != null ? v : '—'}</span> },
             { title: '领导评分', dataIndex: 'leader_score', width: 80, render: (v: number, _: any, i: number) => <InputNumber size="small" value={v} min={0} max={100} onChange={(val) => updateItem(i, 'leader_score', val)} disabled={evaluation?.status === 'leader_scored' || (evaluation as any)?.can_edit_leader === false} style={{ width: '100%' }} /> },
-            { title: '核定分', dataIndex: 'final_score', width: 70, render: (v: number) => <span style={{ fontWeight: 'bold', color: '#1677ff' }}>{v != null ? v : '—'}</span> },
+            { title: '核定分', dataIndex: 'final_score', width: 70, render: (v: number) => <span style={{ fontWeight: 'bold', color: 'var(--color-primary)' }}>{v != null ? v : '—'}</span> },
             { title: '完成情况', dataIndex: 'completion', width: 160, render: (v: string, _: any, i: number) => editable ? <Input size="small" value={v || ''} onChange={(e) => updateItem(i, 'completion', e.target.value)} /> : <span>{v || '—'}</span> },
-            ...(editable ? [{ title: '', width: 40, render: (_: any, r: any) => <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => setItems((p: any[]) => p.filter((_, j) => j !== r._i))} /> }] : []),
+            ...(editable ? [{
+              title: '', width: 40,
+              // 已填写内容的行先确认再删，避免误触丢数据；空行点击直接删（此时 Popconfirm 置为 disabled）
+              render: (_: any, r: any) => {
+                const filled = Boolean(String(r.indicator || '').trim() || String(r.standard || '').trim() || String(r.completion || '').trim())
+                return (
+                  <Popconfirm title="该指标已填写内容，确认删除？" disabled={!filled} onConfirm={() => removeItem(r._i)}>
+                    <Tooltip title="删除该指标">
+                      <Button type="text" danger size="small" icon={<DeleteOutlined />} aria-label="删除该指标" onClick={() => { if (!filled) removeItem(r._i) }} />
+                    </Tooltip>
+                  </Popconfirm>
+                )
+              },
+            }] : []),
           ]}
           summary={() => (
             <Table.Summary.Row>
@@ -188,13 +229,13 @@ export default function PerformanceFormClient() {
         <Divider />
         <div className="flex justify-between items-center">
           <div>
-            <p>权重合计：<span style={{ color: totalWeight === 100 ? 'green' : 'red' }}>{totalWeight}%{totalWeight === 100 ? ' ✓' : ' ⚠'}</span></p>
+            <p>权重合计：<span style={{ color: totalWeight === 100 ? 'green' : 'red' }}>{totalWeight}%{totalWeight === 100 ? '（符合要求）' : '（应为 100%）'}</span></p>
             <p>自评加权：{totalSelf.toFixed(1)} 分　领导加权：{totalLeader.toFixed(1)} 分</p>
           </div>
           <Space>
             {editable && <Popconfirm title="提交后不可修改自评，确认？" onConfirm={handleSubmitSelf}><Button type="primary" icon={<SendOutlined />} loading={submitting}>提交自评</Button></Popconfirm>}
             {(evaluation?.status === 'draft' || evaluation?.status === 'self_submitted') && (evaluation as any)?.can_edit_leader && (
-              <Popconfirm title="确认提交领导评分？" onConfirm={handleSubmitLeader}><Button type="primary" icon={<SendOutlined />} loading={submitting} style={{ background: '#52c41a' }}>提交领导评分</Button></Popconfirm>
+              <Popconfirm title="确认提交领导评分？" onConfirm={handleSubmitLeader}><Button type="primary" icon={<SendOutlined />} loading={submitting}>提交领导评分</Button></Popconfirm>
             )}
             {!editable && evaluation?.status !== 'leader_scored' && (evaluation as any)?.can_edit_leader !== false && <Button icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>}
           </Space>

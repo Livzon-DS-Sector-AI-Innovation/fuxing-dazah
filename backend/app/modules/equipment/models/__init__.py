@@ -12,6 +12,7 @@ from app.modules.equipment.models.failure_code import (
     FailureSymptom,
 )
 from app.modules.equipment.models.inspection import (
+    InspectionEquipmentNote,
     InspectionPhoto,
     InspectionRoute,
     InspectionRouteEquipment,
@@ -35,6 +36,7 @@ from app.modules.equipment.models.personnel import (
     EquipmentPersonnelRole,
     EquipmentRole,
 )
+from app.modules.equipment.models.reference import EquipmentReferenceGrant
 from app.modules.equipment.models.spare_part import (
     EquipmentSparePart,
     SparePart,
@@ -56,6 +58,7 @@ __all__ = [
     "FailureAction",
     "FailureCause",
     "FailureSymptom",
+    "InspectionEquipmentNote",
     "InspectionPhoto",
     "InspectionRecord",
     "InspectionRoute",
@@ -73,6 +76,7 @@ __all__ = [
     "SparePartStock",
     "SparePartTransaction",
     "EquipmentStatusLog",
+    "EquipmentReferenceGrant",
     "MaintenanceConfig",
     "WorkOrder",
     "WorkOrderImage",

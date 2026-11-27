@@ -126,8 +126,7 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
           <Select
             placeholder="选择故障现象（可选）"
             allowClear
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={(symptoms || []).map((s) => ({ label: `${s.code} - ${s.name}`, value: s.id }))}
           />
         </Form.Item>
@@ -137,8 +136,7 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
         <Form.Item name="responsible_person_id" label="责任人" rules={[{ required: true, message: '请选择责任人' }]}>
           <Select
             placeholder="选择责任人"
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={maintainers.map((m) => ({
               label: `${m.name} (${m.employee_no || '-'})`,
               value: m.user_id,

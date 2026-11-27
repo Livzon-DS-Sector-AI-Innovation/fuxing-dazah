@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..extract import detect_lang
+from . import XML_BAD_RE
 
 # 图片块区域渲染分辨率（输出 DOCX 中的嵌入图清晰度）
 _IMAGE_DPI = 200
@@ -36,6 +37,14 @@ _ANNEX_SECTION = re.compile(r"^([A-Z]\d+-\d+(?:\.\d+)*)")
 _ITEM_START = re.compile(r"^\d{1,2}\s+\S")
 # 行尾数字范围断词："2-" + "8℃"
 _HYPHEN_NUM = re.compile(r"\d-$")
+
+# PDF 字体映射缺陷产生的 XML 非法字符（见包 __init__ 的 XML_BAD_RE）
+# 统一替换为 U+FFFD 保留"此处丢字"信号，译文阶段由模型按上下文还原。
+_REPLACEMENT = "\ufffd"
+
+
+def _scrub(s: str) -> str:
+    return XML_BAD_RE.sub(_REPLACEMENT, s)
 
 
 @dataclass
@@ -86,6 +95,7 @@ class PDFExtractStats:
     pages_with_header_stripped: int = 0
     cross_page_merges: int = 0
     body_font_size: float = 0.0
+    control_chars_replaced: int = 0
 
 
 @dataclass
@@ -101,7 +111,8 @@ class _Line:
 
 
 def _norm(s: str) -> str:
-    return re.sub(r"\s+", " ", s).strip()
+    # _scrub 兜住全部文本出口：段落/标题经 _join_para_text 汇入，表格单元格直接调用
+    return _scrub(re.sub(r"\s+", " ", s).strip())
 
 
 def _in_table_area(x: float, y: float, table_bboxes: list) -> bool:
@@ -175,7 +186,8 @@ def extract_pdf(path: str, page_range: tuple[int, int] | None = None):
     footer_word_pages: dict[str, set] = {}
     for pno in page_nos:
         for w in all_words[pno]:
-            t = w[4].strip()
+            # 与第二遍的 _norm 行文本同步清洗，否则污染词（"O\x01cial"）键不一致，页眉剔除会失配
+            t = _scrub(w[4]).strip()
             if not t or _PURE_DIGIT.match(t) or w[0] < margin_cut:
                 continue
             if w[1] < header_cut:
@@ -343,6 +355,11 @@ def extract_pdf(path: str, page_range: tuple[int, int] | None = None):
         b.unit = u
         units.append(u)
 
+    stats.control_chars_replaced = (
+        sum(b.text.count(_REPLACEMENT) for b in blocks if b.kind in ("para", "heading"))
+        + sum((c or "").count(_REPLACEMENT)
+              for b in blocks if b.kind == "table" for row in b.rows for c in row)
+    )
     return blocks, units, stats
 
 

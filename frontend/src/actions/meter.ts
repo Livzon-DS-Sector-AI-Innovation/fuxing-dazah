@@ -311,6 +311,7 @@ export async function exportInstrumentsExcel(filters: InstrumentFilter = {}): Pr
   if (filters.calibration_date_before) sp.set('calibration_date_before', filters.calibration_date_before)
   if (filters.calibration_date_after) sp.set('calibration_date_after', filters.calibration_date_after)
   if (filters.keyword) sp.set('keyword', filters.keyword)
+  if (filters.has_report !== undefined) sp.set('has_report', String(filters.has_report))
   setInstrumentLike(sp, filters)
 
   const token = await import('@/lib/auth').then(m => m.getServerToken())
@@ -344,6 +345,7 @@ export async function exportGasDetectorsExcel(filters: GasDetectorFilter = {}): 
   if (filters.calibration_date_before) sp.set('calibration_date_before', filters.calibration_date_before)
   if (filters.calibration_date_after) sp.set('calibration_date_after', filters.calibration_date_after)
   if (filters.keyword) sp.set('keyword', filters.keyword)
+  if (filters.has_report !== undefined) sp.set('has_report', String(filters.has_report))
   setGasDetectorLike(sp, filters)
 
   const token = await import('@/lib/auth').then(m => m.getServerToken())

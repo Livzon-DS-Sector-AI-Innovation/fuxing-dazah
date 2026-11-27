@@ -1,45 +1,54 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, Tag, Button, Input, Popconfirm, message, Select, Space, Table } from 'antd'
+import { App, Card, Tag, Button, Input, Popconfirm, Select, Space, Table, InputNumber, Tooltip, AutoComplete } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 
-import { fetchPositions, createPosition, deletePositionByName } from '@/actions/hr'
+import { fetchPositions, createPosition, deletePositionByName, updatePositionHeadcount } from '@/actions/hr'
 
-interface PositionRow { department: string; name: string; categories?: string[] }
+interface PositionRow { department: string; name: string; categories?: string[]; headcount: number | null }
 
 export default function PositionManager() {
+  const { message } = App.useApp()
   const [positions, setPositions] = useState<PositionRow[]>([])
   const [loading, setLoading] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDept, setNewDept] = useState('')
   const [filterDept, setFilterDept] = useState<string | undefined>()
+  const [adding, setAdding] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
     try {
       const data = await fetchPositions(filterDept)
-      setPositions(data.map((p) => ({ department: p.department, name: p.name, categories: p.categories || [] })))
-    } catch { setPositions([]) }
-    finally { setLoading(false) }
+      setPositions(data.map((p) => ({ department: p.department, name: p.name, categories: p.categories || [], headcount: p.headcount ?? null })))
+    } catch (err: unknown) {
+      setPositions([])
+      message.error((err instanceof Error ? err.message : '') || '岗位列表加载失败')
+    } finally { setLoading(false) }
   }
 
   const handleAdd = async () => {
     const name = newName.trim(); const dept = newDept.trim()
     if (!name || !dept) { message.warning('请填写部门和岗位'); return }
+    setAdding(true)
     try {
-      await createPosition({ department: dept, name }).catch(() => {})
+      await createPosition({ department: dept, name, headcount: null })
       message.success('已添加')
       setNewName(''); loadData()
-    } catch { message.error('添加失败') }
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : '') || '添加失败')
+    } finally { setAdding(false) }
   }
 
   const handleDelete = async (dept: string, name: string) => {
     try {
-      await deletePositionByName(name, dept).catch(() => {})
+      await deletePositionByName(name, dept)
       message.success('已删除')
       loadData()
-    } catch { message.error('删除失败') }
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : '') || '删除失败')
+    }
   }
 
   const deptOptions = [...new Set(positions.map(p => p.department))].map(d => ({ value: d, label: d }))
@@ -53,14 +62,13 @@ export default function PositionManager() {
           <Space wrap>
             <Select placeholder="按部门筛选" allowClear style={{ width: 180 }}
               value={filterDept} onChange={setFilterDept} options={deptOptions} />
-            <Input placeholder="部门" style={{ width: 150 }}
-              value={newDept} onChange={e => setNewDept(e.target.value)}
-              list="dept-list" />
-            <datalist id="dept-list">{deptOptions.map(d => <option key={d.value} value={d.value} />)}</datalist>
+            {/* 部门用 antd AutoComplete：既能从已有部门里选，也允许录入新部门（原生 datalist 换成 antd 控件） */}
+            <AutoComplete options={deptOptions} style={{ width: 150 }} placeholder="部门"
+              value={newDept} onChange={v => setNewDept(v)} allowClear />
           <Input placeholder="岗位名称" style={{ width: 150 }}
             value={newName} onChange={e => setNewName(e.target.value)}
             onPressEnter={handleAdd} />
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增岗位</Button>
+          <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={handleAdd}>新增岗位</Button>
           </Space>
         </div>
         <Table
@@ -71,13 +79,36 @@ export default function PositionManager() {
             { title: '部门', dataIndex: 'department', width: 200, filters: deptOptions.map(d => ({ text: d.label, value: d.value })), onFilter: (v, r: PositionRow) => r.department === v,
               render: (v: string) => <Tag color="blue">{v}</Tag> },
             { title: '岗位名称', dataIndex: 'name' },
+            { title: '编制人数', dataIndex: 'headcount', width: 160,
+              render: (v: number | null, r: PositionRow) => (
+                <InputNumber
+                  size="small"
+                  min={0}
+                  placeholder="未设置"
+                  value={v ?? null}
+                  onBlur={async (e) => {
+                    const val = e.target.value.trim()
+                    const num = val === '' ? null : Number(val)
+                    if (num !== null && (Number.isNaN(num) || num < 0)) { message.warning('请输入非负整数'); return }
+                    if (num === (r.headcount ?? null)) return
+                    try {
+                      await updatePositionHeadcount(r.department, r.name, num)
+                      message.success('编制人数已更新')
+                      loadData()
+                    } catch { message.error('编制人数更新失败') }
+                  }}
+                />
+              ),
+            },
             { title: '关联培训大类', dataIndex: 'categories', width: 300,
               render: (cats: string[]) => cats?.length ? cats.map(c => <Tag key={c} className="mb-1">{c}</Tag>) : <span className="text-gray-400">-</span> },
             {
               title: '操作', width: 80, align: 'center',
               render: (_: any, r: PositionRow) => (
                 <Popconfirm title={`删除「${r.name}」？`} onConfirm={() => handleDelete(r.department, r.name)}>
-                  <Button size="small" danger icon={<DeleteOutlined />} />
+                  <Tooltip title="删除">
+                    <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除「${r.name}」`} />
+                  </Tooltip>
                 </Popconfirm>
               ),
             },

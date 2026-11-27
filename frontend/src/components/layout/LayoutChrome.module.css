@@ -10,14 +10,14 @@
     #eef0f5;
 }
 
+/* 顶栏与侧栏是同一块玻璃：彼此之间不留缝，接缝一律交给工作面一侧表达。
+   朝外的一面只留高光；外阴影会被 .main 的不透明背景盖住，故不再声明。 */
 .chrome {
-  background: linear-gradient(125deg, rgba(255,255,255,.78), rgba(255,255,255,.38) 48%, rgba(248,250,255,.62));
+  background: linear-gradient(125deg, rgba(255,255,255,.86), rgba(255,255,255,.5) 48%, rgba(249,251,255,.72));
   -webkit-backdrop-filter: blur(24px) saturate(155%);
   backdrop-filter: blur(24px) saturate(155%);
   border-color: rgba(255,255,255,.72);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.95),
-    inset 0 -1px 0 rgba(98,107,147,.08),
-    0 4px 20px -8px rgba(46,54,94,.16);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.95);
 }
 
 .chrome::after {
@@ -29,17 +29,45 @@
   background: linear-gradient(115deg, rgba(255,255,255,.24), transparent 32%, transparent 70%, rgba(255,255,255,.15));
 }
 
+/* 比顶栏略透一点，让两块玻璃有细微的材质差异而不靠描边区分。
+   不画自身阴影：顶边是与顶栏的接缝（由 .seam 画）、右边是工作面的下沉投影，
+   再留 .chrome 那条顶部白色高光会在接缝正下方多出一道白线，左右两半明暗错位。 */
 .sidebar {
-  background: linear-gradient(160deg, rgba(255,255,255,.66), rgba(255,255,255,.30) 55%, rgba(244,248,255,.52));
-  box-shadow: inset -1px 0 0 rgba(255,255,255,.9), 6px 0 24px -16px rgba(46,54,94,.22);
+  background: linear-gradient(160deg, rgba(255,255,255,.8), rgba(255,255,255,.5) 55%, rgba(247,250,255,.68));
   border-right-color: transparent !important;
+  box-shadow: none;
 }
 
+/* 顶栏下沿的接缝。由顶栏一笔画满整个宽度：既界分侧栏，也界分工作面，
+   横线不断口——分别由两侧各画一段会在 x=侧栏宽度处露出错位。
+   画在 border 上而非 inset 阴影，可避开 .chrome::after 那层高光的冲淡。 */
+.seam {
+  border-bottom: 1px solid rgba(67,58,128,.16);
+}
+
+/* 工作面：沉在框架之下。
+   inset 阴影画在滚动容器自身的图层上、不随内容滚动，接缝始终贴着框架。
+   顶部 / 左侧各一条暗线 + 一段渐变，深度只在这里花，卡片仍是干净的平面。 */
 .main {
+  /* 接缝用紫罗兰向的深靛 rgb(67,58,128)（顶栏阴影同款）：R≈G、B 高，和主色
+     #5645d4 同族。中性黑像脏影子，纯蓝灰 rgba(46,54,94) 的 G 最高，都不是这个紫调。 */
+  --seam-left:
+    inset 1px 0 0 rgba(67,58,128,.13),
+    inset 13px 0 32px -13px rgba(67,58,128,.20);
   background:
-    linear-gradient(180deg, rgba(246,247,249,.78) 0%, rgba(242,244,248,.96) 100%),
-    radial-gradient(ellipse 42rem 24rem at 12% 0%, rgba(143,128,224,.10), transparent 72%);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.72), inset 1px 0 0 rgba(255,255,255,.45);
+    radial-gradient(ellipse 46rem 26rem at 10% 0%, rgba(143,128,224,.07), transparent 72%),
+    linear-gradient(180deg, rgba(242,242,248,.95) 0%, rgba(236,236,244,.97) 100%);
+  /* 顶部那条 1px 暗线由顶栏的 .seam 画（横贯整宽），这里只留渐变下沉 */
+  box-shadow:
+    inset 0 12px 30px -12px rgba(67,58,128,.24),
+    var(--seam-left);
+  /* 跟侧栏 200ms 的收起动画同步，避免接缝突然消失 */
+  transition: box-shadow .2s ease;
+}
+
+/* 侧栏收起后工作面顶到窗口左边，此时左侧不能再有下沉投影 */
+.mainFlush {
+  --seam-left: inset 0 0 0 transparent;
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -53,11 +81,11 @@
     backdrop-filter: none;
   }
   .chrome::after { display: none; }
-  .main { background: #f6f7f9; }
+  .main { background: #f0f0f6; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chrome, .chrome *, .chrome *::after {
+  .chrome, .chrome *, .chrome *::after, .main {
     transition: none !important;
   }
 }

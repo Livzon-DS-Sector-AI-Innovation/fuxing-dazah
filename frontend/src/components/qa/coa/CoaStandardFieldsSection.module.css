@@ -1,0 +1,17 @@
+/* 展开/收起高度动画：靠 interpolate-size 原生插值 auto⇄0，不支持的浏览器直接跳变 */
+.collapse {
+  interpolate-size: allow-keywords;
+  block-size: auto;
+  overflow: hidden;
+  transition: block-size .25s ease;
+}
+
+.collapsed {
+  block-size: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collapse {
+    transition: none;
+  }
+}

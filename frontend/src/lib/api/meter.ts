@@ -186,6 +186,7 @@ export async function fetchInstrumentIds(params: InstrumentFilter = {}): Promise
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   setInstrumentLike(sp, params)
   return apiGet<string[]>(`${SERVER_API}${BASE}/instruments/ids?${sp.toString()}`)
 }
@@ -301,6 +302,7 @@ export async function fetchGasDetectorIds(params: GasDetectorFilter = {}): Promi
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   setGasDetectorLike(sp, params)
   return apiGet<string[]>(`${SERVER_API}${BASE}/gas-detectors/ids?${sp.toString()}`)
 }
@@ -471,6 +473,7 @@ export async function fetchInstrumentDateStats(
   if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
   if (params.color_marking) sp.set('color_marking', params.color_marking)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   setInstrumentLike(sp, params)
   const qs = sp.toString()
   return apiGet<DateStatsResponse>(`${SERVER_API}${BASE}/instruments/date-stats?${qs}`)
@@ -497,6 +500,7 @@ export async function fetchGasDetectorDateStats(
   if (params.detection_unit) sp.set('detection_unit', params.detection_unit)
   if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   setGasDetectorLike(sp, params)
   const qs = sp.toString()
   return apiGet<DateStatsResponse>(`${SERVER_API}${BASE}/gas-detectors/date-stats?${qs}`)

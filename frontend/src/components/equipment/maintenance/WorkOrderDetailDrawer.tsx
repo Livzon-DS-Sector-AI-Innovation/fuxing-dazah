@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { App, Drawer, Descriptions, Tag, Timeline, Button, Space, Input, Image, Upload, Select, InputNumber, Modal, Tooltip } from 'antd'
 import {
   ClockCircleOutlined, UserOutlined, ToolOutlined, UploadOutlined,
@@ -63,6 +63,14 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
   const [consumedParts, setConsumedParts] = useState<{ sparePartId: string; qty: number }[]>([])
   const [availableParts, setAvailableParts] = useState<SparePart[]>([])
   const [completeLoading, setCompleteLoading] = useState(false)
+  // 服务端搜索会替换 availableParts；已选备件的库存校验/回显靠缓存，避免搜索结果切走后丢失
+  const [partCache, setPartCache] = useState<Record<string, SparePart>>({})
+  const partSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const partSearchSeqRef = useRef(0)
+
+  useEffect(() => () => {
+    if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+  }, [])
 
   const refreshDetail = async (id: string) => {
     try {
@@ -116,15 +124,44 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
     await refreshDetail(wo.id)
   }
 
+  const cacheParts = (parts: SparePart[]) => {
+    setPartCache(prev => {
+      const next = { ...prev }
+      for (const p of parts) next[p.id] = p
+      return next
+    })
+  }
+
+  // 输入框搜索走服务端：keyword 在 limit 之前过滤，能搜到前 200 条之外的备件
+  const handlePartSearch = (keyword: string) => {
+    if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+    partSearchTimerRef.current = setTimeout(async () => {
+      const seq = ++partSearchSeqRef.current
+      try {
+        const parts = await fetchAvailableSparePartsClient(wo.equipment_id, keyword.trim() || undefined)
+        if (seq !== partSearchSeqRef.current) return // 丢弃过期响应
+        cacheParts(parts)
+        setAvailableParts(parts)
+      } catch (e) {
+        console.error('搜索可用备件失败:', e)
+      }
+    }, 300)
+  }
+
   const openCompleteModal = async () => {
     setRepairDetail('')
     setFileList([])
     setConsumedParts([])
     setAvailableParts([])
+    setPartCache({})
     setCompleteLoading(false)
     setCompleteOpen(true)
+    if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+    const seq = ++partSearchSeqRef.current
     try {
       const parts = await fetchAvailableSparePartsClient(wo.equipment_id)
+      if (seq !== partSearchSeqRef.current) return // 已被搜索请求取代
+      cacheParts(parts)
       setAvailableParts(parts)
     } catch (e) {
       console.error('获取可用备件失败:', e)
@@ -134,6 +171,16 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
 
   const handleCompleteSubmit = async () => {
     if (!repairDetail.trim()) { message.warning('请填写维修过程描述'); return }
+    // 库存前置校验：不等到验收扣减时才发现数量不够
+    const over = consumedParts.find(p => {
+      const sp = partCache[p.sparePartId]
+      return sp && p.qty > (sp.current_qty ?? 0)
+    })
+    if (over) {
+      const sp = partCache[over.sparePartId]
+      message.warning(`备件「${sp?.name || ''}」库存不足（当前 ${sp?.current_qty ?? 0}），请调整数量`)
+      return
+    }
     setCompleteLoading(true)
     try {
       // 先提交工单（含备件消耗），避免图片已上传但工单提交失败导致脏数据
@@ -370,9 +417,18 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
         title="提交维修完成"
         open={completeOpen}
         width={640}
-        onCancel={() => setCompleteOpen(false)}
+        onCancel={() => {
+          if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+          setCompleteOpen(false)
+        }}
         onOk={handleCompleteSubmit}
         confirmLoading={completeLoading}
+        okButtonProps={{
+          disabled: consumedParts.some(p => {
+            const sp = partCache[p.sparePartId]
+            return sp && p.qty > (sp.current_qty ?? 0)
+          }),
+        }}
         okText="提交验收"
         cancelText="取消"
         destroyOnHidden
@@ -404,7 +460,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
         }}>
           消耗备件
           <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: '#a4a097', marginLeft: 6 }}>
-            （选填）
+            （选填，验收通过时才扣减库存）
           </span>
         </div>
 
@@ -420,109 +476,155 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
-            {consumedParts.map((item, idx) => (
-              <div
-                key={idx}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '12px',
-                  background: '#fafaf9',
-                  borderRadius: 8,
-                  border: '1px solid #ede9e4',
-                }}
-              >
-                <Select
-                  showSearch
-                  placeholder="搜索并选择备件"
-                  style={{ flex: 1, minWidth: 0 }}
-                  value={item.sparePartId || undefined}
-                  onChange={(v) => {
-                    setConsumedParts(prev => prev.map((p, i) => i === idx ? { ...p, sparePartId: v } : p))
-                  }}
-                  filterOption={(input, option) => {
-                    if (!option) return false
-                    const d = option as any
-                    const hay = `${d.code || ''} ${d.name || ''} ${d.spec || ''} ${d.stock || ''}`.toLowerCase()
-                    return hay.includes(input.toLowerCase())
-                  }}
-                  popupMatchSelectWidth={false}
-                  popupStyle={{ minWidth: 420 }}
-                  listHeight={320}
-                  optionRender={(option) => {
-                    const d = option.data as any
-                    return (
-                      <div style={{ padding: '2px 0' }}>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.4 }}>
-                          <span style={{ color: '#787671' }}>{d.code}</span>
-                          <span style={{ margin: '0 6px', color: '#c8c4be' }}>|</span>
-                          {d.name}
-                        </div>
-                        <div style={{ fontSize: 12, color: '#787671', lineHeight: 1.4, marginTop: 1 }}>
-                          规格: {d.spec}
-                          <span style={{ margin: '0 8px', color: '#c8c4be' }}>|</span>
-                          库存: {d.stock} {d.unit}
-                        </div>
-                      </div>
-                    )
-                  }}
-                  labelRender={(props) => {
-                    const sp = availableParts.find(s => s.id === props.value)
-                    const tooltip = sp
-                      ? `${sp.code} ${sp.name} / ${sp.specification || '-'} / 库存 ${sp.current_qty ?? 0} ${sp.unit || ''}`
-                      : ''
-                    return (
-                      <Tooltip title={tooltip}>
-                        <span style={{
-                          display: 'block',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {props.label}
-                        </span>
-                      </Tooltip>
-                    )
-                  }}
-                  options={availableParts.map(sp => ({
-                    label: `${sp.code} ${sp.name}`,
-                    value: sp.id,
-                    code: sp.code,
-                    name: sp.name,
-                    spec: sp.specification || '-',
-                    stock: sp.current_qty ?? 0,
-                    unit: sp.unit || '',
-                  }))}
-                />
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                  <InputNumber
-                    min={1}
-                    value={item.qty || undefined}
-                    onChange={(v) => {
-                      setConsumedParts(prev => prev.map((p, i) => i === idx ? { ...p, qty: v || 1 } : p))
-                    }}
-                    style={{ width: 72 }}
-                    placeholder="数量"
-                  />
-                  <span style={{ fontSize: 12, color: '#787671', whiteSpace: 'nowrap' }}>
-                    {availableParts.find(s => s.id === item.sparePartId)?.unit || ''}
-                  </span>
-                </div>
-                <Button
-                  type="text"
-                  danger
-                  size="small"
-                  style={{ flexShrink: 0, color: '#e03131' }}
-                  onClick={() => {
-                    setConsumedParts(prev => {
-                      const next = prev.filter((_, i) => i !== idx)
-                      return next.length === 0 ? [] : next
-                    })
+            {consumedParts.map((item, idx) => {
+              const selectedPart = partCache[item.sparePartId]
+              const overStock = !!(selectedPart && item.qty > (selectedPart.current_qty ?? 0))
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 8,
+                    padding: '12px',
+                    background: '#fafaf9',
+                    borderRadius: 8,
+                    border: overStock ? '1px solid #e03131' : '1px solid #ede9e4',
                   }}
                 >
-                  移除
-                </Button>
-              </div>
-            ))}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Select
+                      showSearch={{
+                        filterOption: false,
+                        onSearch: handlePartSearch,
+                      }}
+                      placeholder="搜索并选择备件"
+                      style={{ width: '100%' }}
+                      value={item.sparePartId || undefined}
+                      onChange={(v) => {
+                        // 选中即带入该设备的标准需求数量（设备-备件关联维护）
+                        const sp = availableParts.find(s => s.id === v)
+                        const required = sp?.required_qty && sp.required_qty > 0 ? sp.required_qty : 1
+                        setConsumedParts(prev => prev.map((p, i) => i === idx ? { ...p, sparePartId: v, qty: required } : p))
+                      }}
+                      popupMatchSelectWidth={false}
+                      popupStyle={{ minWidth: 420 }}
+                      listHeight={320}
+                      optionRender={(option) => {
+                        const d = option.data as any
+                        // 布尔/数值信息不入 options 数据（rc-select 会把多余字段
+                        // 透传成 DOM 属性，布尔值会触发 React 警告），按 id 反查
+                        const sp = availableParts.find(s => s.id === option.value)
+                        const low = sp?.is_low_stock ?? false
+                        const linked = sp?.is_linked ?? false
+                        const requiredQty = sp?.required_qty ?? 1
+                        const stockColor = d.stock <= 0 ? '#e03131' : low ? '#dd7700' : '#787671'
+                        return (
+                          <div style={{ padding: '2px 0' }}>
+                            <div style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ color: '#787671' }}>{d.code}</span>
+                              <span style={{ color: '#c8c4be' }}>|</span>
+                              {d.name}
+                              {linked && <Tag color="orange" style={{ fontSize: 11, lineHeight: '16px', marginInlineEnd: 0 }}>专用</Tag>}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#787671', lineHeight: 1.4, marginTop: 1 }}>
+                              规格: {d.spec}
+                              <span style={{ margin: '0 8px', color: '#c8c4be' }}>|</span>
+                              库存: <span style={{ color: stockColor, fontWeight: d.stock <= 0 || low ? 600 : 400 }}>{d.stock}</span> {d.unit}
+                              {requiredQty > 1 && (
+                                <>
+                                  <span style={{ margin: '0 8px', color: '#c8c4be' }}>|</span>
+                                  单台需求 {requiredQty}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      }}
+                      labelRender={(props) => {
+                        const sp = partCache[String(props.value)]
+                        const tooltip = sp
+                          ? `${sp.code} ${sp.name} / ${sp.specification || '-'} / 库存 ${sp.current_qty ?? 0} ${sp.unit || ''}`
+                          : ''
+                        return (
+                          <Tooltip title={tooltip}>
+                            <span style={{
+                              display: 'block',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}>
+                              {props.label}
+                            </span>
+                          </Tooltip>
+                        )
+                      }}
+                      options={[
+                        ...(availableParts.some(sp => sp.is_linked)
+                          ? [{
+                              label: `本设备专用（${availableParts.filter(sp => sp.is_linked).length}）`,
+                              options: availableParts.filter(sp => sp.is_linked).map(sp => ({
+                                label: `${sp.code} ${sp.name}`,
+                                value: sp.id,
+                                code: sp.code,
+                                name: sp.name,
+                                spec: sp.specification || '-',
+                                stock: sp.current_qty ?? 0,
+                                unit: sp.unit || '',
+                              })),
+                            }]
+                          : []),
+                        {
+                          label: `通用备件（${availableParts.filter(sp => !sp.is_linked).length}）`,
+                          options: availableParts.filter(sp => !sp.is_linked).map(sp => ({
+                            label: `${sp.code} ${sp.name}`,
+                            value: sp.id,
+                            code: sp.code,
+                            name: sp.name,
+                            spec: sp.specification || '-',
+                            stock: sp.current_qty ?? 0,
+                            unit: sp.unit || '',
+                          })),
+                        },
+                      ]}
+                    />
+                    {overStock && selectedPart && (
+                      <div style={{ fontSize: 12, color: '#e03131', marginTop: 4 }}>
+                        库存不足：当前库存 {selectedPart.current_qty} {selectedPart.unit || ''}，无法提交
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                    <InputNumber
+                      min={1}
+                      max={selectedPart ? Math.max(1, selectedPart.current_qty ?? 0) : undefined}
+                      value={item.qty || undefined}
+                      status={overStock ? 'error' : undefined}
+                      onChange={(v) => {
+                        setConsumedParts(prev => prev.map((p, i) => i === idx ? { ...p, qty: v || 1 } : p))
+                      }}
+                      style={{ width: 72 }}
+                      placeholder="数量"
+                    />
+                    <span style={{ fontSize: 12, color: '#787671', whiteSpace: 'nowrap' }}>
+                      {selectedPart?.unit || ''}
+                    </span>
+                  </div>
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    style={{ flexShrink: 0, color: '#e03131' }}
+                    onClick={() => {
+                      setConsumedParts(prev => {
+                        const next = prev.filter((_, i) => i !== idx)
+                        return next.length === 0 ? [] : next
+                      })
+                    }}
+                  >
+                    移除
+                  </Button>
+                </div>
+              )
+            })}
           </div>
         )}
 

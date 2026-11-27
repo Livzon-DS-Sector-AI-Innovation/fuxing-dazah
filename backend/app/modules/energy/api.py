@@ -118,6 +118,7 @@ async def list_platforms(
 @router.get("/departments", summary="获取部门列表（供数据源配置所属部门下拉使用）")
 async def list_departments(
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:device:read")),
 ) -> JSONResponse:
     data = await service.list_departments(db)
     return success_response(data)
@@ -133,11 +134,15 @@ async def list_equipment_options(
     """查询设备台账候选设备，供数据源「关联设备」下拉使用。
 
     传入 ids 时按 ID 批量回显；否则按 keyword 搜索。
-    数据范围沿用设备台账（equipment:asset）权限配置。
+    返回当前用户设备台账范围内的设备，以及已授权给 energy 模块的共享设备；
+    仅返回设备摘要，不会扩大设备详情权限。
     """
     if ids:
-        id_list = [UUID(i) for i in ids.split(",") if i.strip()]
-        options = await service.get_equipment_options_by_ids(db, id_list)
+        try:
+            id_list = [UUID(i.strip()) for i in ids.split(",") if i.strip()]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="设备ID格式无效") from exc
+        options = await service.get_equipment_options_by_ids(db, user, id_list)
     else:
         options = await service.list_equipment_options(db, user, keyword=keyword)
     return success_response(options)
@@ -152,7 +157,7 @@ async def create_device_config(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:device:create")),
 ) -> JSONResponse:
-    obj = await service.create_device_config(db, data)
+    obj = await service.create_device_config(db, data, user)
     return success_response(
         EnergyDeviceConfigResponse.model_validate(obj).model_dump()
     )
@@ -203,7 +208,7 @@ async def update_device_config(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:device:update")),
 ) -> JSONResponse:
-    obj = await service.update_device_config(db, config_id, data)
+    obj = await service.update_device_config(db, config_id, data, user)
     return success_response(
         EnergyDeviceConfigResponse.model_validate(obj).model_dump()
     )
@@ -1059,14 +1064,19 @@ async def report_client_error(data: ClientErrorLogRequest) -> JSONResponse:
     无需登录校验：错误上报本身应在鉴权异常时也能正常工作。
     请求来源 IP 由 _log_energy_request 统一记录。
     """
+    # 逐字段转义换行后单行输出：message/stack 里内嵌的换行能伪造出额外的日志行，
+    # 让日志看起来像来自别处（污染排查与取证）。本端点无鉴权，尤其不能给这种口子。
+    def _one_line(text: str | None) -> str:
+        return (text or "-").replace("\r", "").replace("\n", "\\n")
+
     logger.error(
-        "energy 前端报错: page=%s | api=%s status=%s | component=%s | %s%s",
-        data.page_url or "-",
-        data.api_url or "-",
+        "energy 前端报错: page=%s | api=%s status=%s | component=%s | message=%s | stack=%s",
+        _one_line(data.page_url),
+        _one_line(data.api_url),
         data.status if data.status is not None else "-",
-        data.component or "-",
-        data.message,
-        f"\n{data.stack}" if data.stack else "",
+        _one_line(data.component),
+        _one_line(data.message),
+        _one_line(data.stack),
     )
     return success_response(None, message="已记录")
 

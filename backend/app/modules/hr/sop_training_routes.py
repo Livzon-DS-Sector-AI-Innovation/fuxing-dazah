@@ -111,25 +111,41 @@ async def _notify_training_admins(
         if not admins:
             return []
 
+        from app.core.config import get_settings
         from app.modules.hr.feishu_review_service import _lookup_open_id, _send_card
         dept_text = "、".join(departments)
+        elements = [
+            {"tag": "div", "text": {"tag": "lark_md", "content": (
+                f"**文件**：{record.file_name}\n"
+                f"**涉及部门**：{dept_text}\n"
+                f"**发起部门**：{record.initiator_department or '-'}\n请在系统中查看并处理"
+            )}},
+        ]
+        # 深链直达二级表页面（进入后按数据范围只显示本人相关部门内容）
+        frontend_url = (get_settings().FRONTEND_URL or "").rstrip("/")
+        if frontend_url:
+            elements.append({"tag": "action", "actions": [{
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "查看培训内容"},
+                "type": "primary",
+                "url": f"{frontend_url}/hr/training/sop-secondary",
+            }]})
         card = {
             "header": {"title": {"tag": "plain_text", "content": "📋 新的SOP培训文件登记"}, "template": "blue"},
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": (
-                    f"**文件**：{record.file_name}\n"
-                    f"**涉及部门**：{dept_text}\n"
-                    f"**发起部门**：{record.initiator_department or '-'}\n请在系统中查看并处理"
-                )}},
-            ],
+            "elements": elements,
         }
-        notified: list[str] = []
-        for name in admins:
+        import asyncio
+
+        async def _send_one(name: str) -> str | None:
             oid = await _lookup_open_id(name)
-            if oid:
-                await _send_card(oid, card)
-                notified.append(name)
-        return notified
+            if not oid:
+                return None
+            await _send_card(oid, card)
+            return name
+
+        # 并发发送，避免提交流程被多个外部请求串行阻塞
+        results = await asyncio.gather(*(_send_one(n) for n in admins))
+        return [n for n in results if n]
     except Exception:
         logger.exception("通知培训管理员失败: record_id=%s", getattr(record, "id", None))  # 记录失败，便于排查
         return []
@@ -269,7 +285,7 @@ async def create_sop_record(
         trainees=payload.get("trainees") or (f"「{initiator}」全体员工及相关部门培训师" if initiator else None),
         involved_departments=json.dumps(involved, ensure_ascii=False),
         change_note=payload.get("change_note"),
-        color=payload.get("color", "新增"),
+        color=payload.get("color") or "新增",
         # 状态由提交流程控制：创建一律草稿，不允许客户端直接指定状态绕过状态机
         status="草稿",
         initiator_department=initiator or None,
@@ -332,6 +348,10 @@ async def update_sop_record(
     r = await session.get(SopTrainingRecord, record_id)
     if not r or r.is_deleted:
         raise HTTPException(404, "记录不存在")
+    if "file_name" in payload and not str(payload.get("file_name") or "").strip():
+        raise HTTPException(400, "请填写文件名称")
+    if "color" in payload and not payload.get("color"):
+        payload.pop("color")
     # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
     if "year" in payload:
         year_val = str(payload["year"]).strip()
@@ -348,16 +368,28 @@ async def update_sop_record(
         if key in payload:
             setattr(r, key, payload[key])
     # status 由提交/转训流程控制，不允许客户端直接改写
+    added_departments: list[str] = []
     if "involved_departments" in payload:
+        old_departments = set(_json_loads(r.involved_departments))
         involved = list(dict.fromkeys(
             str(d).strip() for d in _json_loads(payload["involved_departments"]) if str(d).strip()
         ))
         r.involved_departments = json.dumps(involved, ensure_ascii=False)
+        # 已提交记录新增了部门 → 新部门的培训管理员需要补发通知
+        if r.status == "已提交":
+            added_departments = [d for d in involved if d not in old_departments]
     await session.commit()
     # 已提交的记录编辑后同步二级表；草稿不生成二级表
     if r.status == "已提交":
         await _sync_entries(session, r)
         await session.commit()
+        if added_departments:
+            notified = await _notify_training_admins(session, r, added_departments)
+            if notified:
+                logger.info(
+                    "登记记录 %s 新增部门 %s 已补发通知: %s",
+                    r.id, added_departments, notified,
+                )
     return success_response(message="已更新")
 
 
@@ -460,7 +492,10 @@ async def _records_by_ids(session: AsyncSession, ids: list[str]) -> dict[str, ob
     except ValueError:
         return {}
     rows = (await session.execute(
-        select(SopTrainingRecord).where(SopTrainingRecord.id.in_(uuids))
+        select(SopTrainingRecord).where(
+            SopTrainingRecord.id.in_(uuids),
+            SopTrainingRecord.is_deleted == False,  # noqa: E712
+        )
     )).scalars().all()
     return {str(r.id): r for r in rows}
 
@@ -532,6 +567,8 @@ async def update_sop_entry(
     if not e or e.is_deleted:
         raise HTTPException(404, "记录不存在")
     _ensure_entry_in_scope(hr_scope, e)
+    if "classification" in payload and len(str(payload.get("classification") or "")) > 64:
+        raise HTTPException(400, "分类名称过长（最多 64 字）")
     for key in ("classification", "trainer", "complete_time"):
         if key in payload:
             setattr(e, key, payload[key])
@@ -651,7 +688,7 @@ async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[i
     try:
         result = await session.execute(
             text(
-                "SELECT status, count(*) FROM hr.employees "
+                "SELECT status, count(*) FROM hr.training_roster_profiles "
                 "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
                 "AND is_deleted = false AND status IN ('病假', '产假') GROUP BY status"
             ),
@@ -796,10 +833,10 @@ async def generate_record_materials(
     if not initiator:
         raise HTTPException(400, "该记录未配置发起部门（主办部门）")
 
-    # ── 人员口径：主办部门全体在职员工 + 各涉及部门的一级培训师（去重）──
+    # ── 人员口径：主办部门名单内人员 + 各涉及部门的一级培训师（去重）──
     emp_rows = (await session.execute(
         text(
-            "SELECT name, status FROM hr.employees "
+            "SELECT name, status FROM hr.training_roster_profiles "
             "WHERE (department = :dept OR actual_department = :dept) "
             "AND is_deleted = false AND status NOT IN ('离职', '待审批', '病假', '产假') "
             "ORDER BY name"
@@ -844,6 +881,12 @@ async def generate_record_materials(
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
             if questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
+            zf.writestr("培训登记表.docx", _generate_register_docx(
+                subject=subject, training_date=record.training_date or today,
+                department=initiator, trainer=lead_trainer or "",
+                method=record.method or "", trainee_names=names,
+                sick=sick, maternity=maternity,
+            ).getvalue())
             # 第四份文件：培训效果评估表（7.11 模板）
             from app.modules.hr.evaluation_document_generator import (
                 TrainingEvaluationInput,
@@ -937,13 +980,20 @@ async def batch_generate_materials(
     from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 
     today = date.today()
+    # 培训方式在登记记录上（二级表无该列），取第一条有值的记录
+    method_val = ""
+    for e in rows:
+        rec = record_map.get(e.record_id or "")
+        if rec and rec.method:
+            method_val = rec.method
+            break
     # 该部门培训师
     trainer = next((e.trainer for e in rows if e.trainer), None) or await _lookup_level1_trainer(session, dept)
     # 分类人员并集（过滤病假/产假/离职/待审批）
     if emp_nos:
         leave_rows = (await session.execute(
             text(
-                "SELECT employee_number, status FROM hr.employees "
+                "SELECT employee_number, status FROM hr.training_roster_profiles "
                 "WHERE employee_number = ANY(:nos) AND is_deleted = false "
                 "AND status IN ('病假', '产假', '离职', '待审批')"
             ),
@@ -975,6 +1025,11 @@ async def batch_generate_materials(
             questions = await _lookup_exam_questions(session, file_nos)
             if questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
+            zf.writestr("培训登记表.docx", _generate_register_docx(
+                subject=subject, training_date=today, department=dept,
+                trainer=trainer or "", method=method_val,
+                trainee_names=names, sick=sick, maternity=maternity,
+            ).getvalue())
             # 第四份文件：培训效果评估表（7.11 模板）
             from app.modules.hr.evaluation_document_generator import (
                 TrainingEvaluationInput,
@@ -986,7 +1041,7 @@ async def batch_generate_materials(
                 generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=dept,
                     trainer=trainer or None,
-                    training_method=(rows[0].method or None),
+                    training_method=(method_val or None),
                     trainee_names=names,
                     expected_count=len(names),
                 )).getvalue(),
@@ -1031,14 +1086,16 @@ async def sop_entry_classifications(
         {"creator": creator},
     )).fetchall()
     # ② 本人在该部门打过的标签计数（直接打标签没建清单的分类也在这里）
+    # 人员口径 = 培训人员名单（脱敏独立数据集），不再读员工总表
     tag_rows = (await session.execute(
         text("""
             SELECT t.tag_name, count(DISTINCT t.employee_number)
             FROM hr.employee_tags t
-            JOIN hr.employees e ON e.employee_number = t.employee_number
-            WHERE t.is_deleted = false AND e.is_deleted = false
+            JOIN hr.training_roster_profiles p ON p.employee_number = t.employee_number
+            WHERE t.is_deleted = false AND p.is_deleted = false
               AND t.created_by = :creator
-              AND (e.department = :dept OR e.actual_department = :dept)
+              AND (p.department = :dept OR p.actual_department = :dept)
+              AND p.status NOT IN ('离职', '待审批', '病假', '产假')
             GROUP BY t.tag_name
         """),
         {"dept": department, "creator": creator},
@@ -1074,18 +1131,21 @@ async def sop_entry_personnel(
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
         if department not in hr_scope.scoped_departments:
             raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
+    # 人员口径 = 培训人员名单（脱敏独立数据集，状态由培训管理独立维护）；
+    # 与分类选项一致，只看本人打的标签，避免同名分类串到别人的测试数据
+    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
     rows = (await session.execute(
         text("""
-            SELECT e.employee_number, e.name, e.position, e.status
-            FROM hr.employees e
-            JOIN hr.employee_tags t ON t.employee_number = e.employee_number
-            WHERE t.is_deleted = false AND e.is_deleted = false
-              AND t.tag_name = :tag
-              AND (e.department = :dept OR e.actual_department = :dept)
-              AND e.status NOT IN ('离职', '待审批', '病假', '产假')
-            ORDER BY e.employee_number
+            SELECT p.employee_number, p.name, p.position, p.status
+            FROM hr.training_roster_profiles p
+            JOIN hr.employee_tags t ON t.employee_number = p.employee_number
+            WHERE t.is_deleted = false AND p.is_deleted = false
+              AND t.tag_name = :tag AND t.created_by = :creator
+              AND (p.department = :dept OR p.actual_department = :dept)
+              AND p.status NOT IN ('离职', '待审批', '病假', '产假')
+            ORDER BY p.employee_number
         """),
-        {"dept": department, "tag": classification},
+        {"dept": department, "tag": classification, "creator": creator},
     )).fetchall()
     return success_response(data=[
         {"employee_number": r[0], "name": r[1], "position": r[2], "status": r[3]}

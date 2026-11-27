@@ -65,7 +65,6 @@ class LineageGraph:
     families: list[NodeFamily]  # rep 顺序：当前路线节点按 sort_order 在前，祖先独有家族排后
     merged_defs: dict[uuid.UUID, list[MergedFieldDef]]  # rep 节点 id → 归并字段定义
     rep_by_member: dict[uuid.UUID, uuid.UUID]  # 成员节点 id → rep 节点 id（含自身）
-    merged_route_names: list[str]  # 纳入合并的祖先路线名（旧 → 新），无合并时为空
 
     @property
     def route_ids(self) -> set[uuid.UUID]:
@@ -197,11 +196,9 @@ async def resolve_lineage(db: AsyncSession, route_id: uuid.UUID) -> LineageGraph
 
     merged_defs = {f.rep.id: merge_family_defs(f, defs_by_node) for f in families}
     rep_by_member = {n.id: f.rep.id for f in families for n in f.members}
-    merged_route_names = [r.route_name for r in chain[:-1]] if len(chain) > 1 else []
     return LineageGraph(
         chain=chain,
         families=families,
         merged_defs=merged_defs,
         rep_by_member=rep_by_member,
-        merged_route_names=merged_route_names,
     )

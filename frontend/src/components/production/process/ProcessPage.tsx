@@ -11,6 +11,7 @@ import { fetchRouteGraphClient, fetchRoutesClient } from '@/lib/api/production-c
 import type { Product } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { ProductSidebar, CARD_STYLE } from '../shared/ProductSidebar'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { RouteVersionBar } from './RouteVersionBar'
 import { RouteFlowGraph } from './RouteFlowGraph'
 import { RouteGraphEditor } from './RouteGraphEditor'
@@ -52,7 +53,11 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
 
   return (
     <div>
-      <PageHeading title="工艺路径" subtitle="查看工艺路线与节点流程" />
+      <PageHeading
+        title="工艺路径"
+        subtitle="查看工艺路线与节点流程"
+        actions={<PageGuideButton />}
+      />
       <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
         <ProductSidebar
           selectedId={selectedProductId}
@@ -62,7 +67,16 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
             router.replace(`/production/process?product=${p.id}`)
           }}
         />
-        <div style={{ ...CARD_STYLE, flex: 1, padding: 16, minHeight: 560 }}>
+        <div
+          style={{
+            ...CARD_STYLE,
+            flex: 1,
+            padding: 16,
+            minHeight: 560,
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
           {!selectedProductId ? (
             <div style={{ textAlign: 'center', padding: '80px 0' }}>
               <Empty
@@ -99,7 +113,16 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
                   stageNames={[...new Set((graph?.nodes ?? []).map(n => n.stage_name).filter(Boolean) as string[])]}
                 />
               )}
-              <div style={{ marginTop: 12 }}>
+              {/* 画布高度跟视口走：固定像素在大屏上会显得憋窄，clamp 兜住小屏下限 */}
+              <div
+                style={{
+                  marginTop: 12,
+                  flex: 1,
+                  minHeight: 'clamp(480px, 62dvh, 900px)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
                 {graphLoading ? (
                   <Skeleton active paragraph={{ rows: 8 }} />
                 ) : editing && graph ? (
@@ -131,6 +154,7 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
                     nodes={graph.nodes}
                     edges={graph.edges}
                     onNodeClick={setFieldsNodeId}
+                    height="100%"
                   />
                 )}
               </div>

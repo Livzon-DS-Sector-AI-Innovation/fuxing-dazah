@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DuplicateException, NotFoundException
@@ -231,6 +232,39 @@ class TestBatchCreate:
         assert result["skipped"] == 2
         statuses = {r["index"]: r["status"] for r in result["results"]}
         assert statuses == {0: "skipped", 1: "skipped", 2: "created"}
+
+    async def test_batch_create_isolates_row_failure(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """单行插入抛异常只跳过该行，前后行仍落库（SAVEPOINT 隔离）。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        real_create = repo.create_instrument
+        state = {"calls": 0}
+
+        async def flaky_create(db: Any, data: dict[str, Any]) -> Any:
+            state["calls"] += 1
+            if state["calls"] == 2:
+                # SAVEPOINT 内制造真实数据库错误（除零），验证只回滚该行
+                await db.execute(text("SELECT 1/0"))
+            return await real_create(db, data)
+
+        monkeypatch.setattr(repo, "create_instrument", flaky_create)
+        suffix = uuid4().hex[:8]
+        result = await service.batch_create_instruments(
+            db_session,
+            [
+                {"asset_number": f"ISO-A-{suffix}", "instrument_name": "第一行"},
+                {"asset_number": f"ISO-B-{suffix}", "instrument_name": "第二行"},
+                {"asset_number": f"ISO-C-{suffix}", "instrument_name": "第三行"},
+            ],
+        )
+        assert result["created"] == 2
+        assert result["skipped"] == 1
+        statuses = {r["index"]: r["status"] for r in result["results"]}
+        assert statuses == {0: "created", 1: "skipped", 2: "created"}
+        # 事务未被毒化，失败行之后的行确实入库
+        created = await repo.get_instrument_by_id(db_session, UUID(result["results"][2]["id"]))
+        assert created is not None
 
     async def test_batch_create_sort_order_continues(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch

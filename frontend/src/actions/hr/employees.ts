@@ -2,34 +2,44 @@
 
 import { revalidatePath } from 'next/cache'
 import {
+  Employee,
   EmployeeCreateInput,
   EmployeeUpdateInput,
   EmployeeListResponse,
   DepartmentCreateInput,
   DepartmentUpdateInput,
   DepartmentListResponse,
-  TeamCreateInput,
-  TeamUpdateInput,
-  TeamListResponse,
   PositionOption,
+  EmployeeFilterOptions,
+  EmployeeTransfer,
+  EmployeeFilterParams,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
 
 // ─── 员工 ───
 
+// 注意：本文件是 'use server'，turbopack 会把任何 export（含 export type 的接口）
+// 登记进 ACTIONS_MANIFEST，client 侧一旦 import 就炸——类型一律放 types/hr，
+// 此处只 import type 使用，不再 re-export。
+
 export async function fetchEmployeesAction(
-  params?: {
-    department?: string
-    status?: string
-    keyword?: string
+  params?: EmployeeFilterParams & {
     page?: number
     page_size?: number
-    include_uncategorized?: boolean
   }
 ): Promise<EmployeeListResponse> {
   const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 20 })
   return fetchHrApi<EmployeeListResponse>(`/hr/employees${qs}`, { errorMessage: '获取员工列表失败' })
+}
+
+/** 员工筛选下拉选项：各可枚举字段的现有取值聚合 */
+export async function fetchEmployeeFilterOptionsAction(): Promise<EmployeeFilterOptions> {
+  const res = await fetchHrApi<{ code: number; message: string; data: EmployeeFilterOptions }>(
+    '/hr/employees/filter-options',
+    { errorMessage: '获取筛选选项失败' },
+  )
+  return res.data || {}
 }
 
 export async function createEmployee(data: EmployeeCreateInput) {
@@ -44,6 +54,15 @@ export async function createEmployee(data: EmployeeCreateInput) {
 
 export async function fetchEmployeeByNumberAction(employeeNumber: string) {
   return fetchHrApi(`/hr/employees/by-number/${encodeURIComponent(employeeNumber)}`, { errorMessage: '获取员工详情失败' })
+}
+
+/** 按 ID 获取员工档案（员工详情页） */
+export async function fetchEmployeeByIdAction(id: string): Promise<Employee> {
+  const res = await fetchHrApi<{ code: number; message: string; data: Employee }>(
+    `/hr/employees/${id}`,
+    { errorMessage: '获取员工详情失败' },
+  )
+  return res.data
 }
 
 export async function updateEmployee(id: string, data: EmployeeUpdateInput) {
@@ -65,43 +84,16 @@ export async function deleteEmployee(id: string) {
   return res
 }
 
-/** 批量导入员工（Excel 上传） */
-export async function uploadEmployees(formData: FormData): Promise<{ code: number; message: string; data: { created: number; updated: number; errors?: string[] } }> {
-  return fetchHrApi('/hr/employees/upload', {
-    method: 'POST',
-    body: formData,
-    errorMessage: '上传失败',
-  })
-}
-
-/** 导出员工档案（Excel），列头与导入模板一致 */
-export async function exportEmployees(): Promise<{ base64: string; filename: string }> {
-  const { base64, filename } = await fetchHrDownload('/hr/employees/export', {
+/** 导出员工档案（Excel），列头与导入模板一致；传筛选参数时与列表同口径导出 */
+export async function exportEmployees(params?: EmployeeFilterParams): Promise<{ base64: string; filename: string }> {
+  const qs = params ? buildQueryString(params) : ''
+  const { base64, filename } = await fetchHrDownload(`/hr/employees/export${qs}`, {
     errorMessage: '导出员工档案失败',
   })
   return { base64, filename: filename || `员工档案_${new Date().toISOString().slice(0, 10)}.xlsx` }
 }
 
-/** 试用期到期预警列表 */
-export async function fetchProbationExpiring(params?: { days?: number; department?: string }): Promise<{ data: any[] }> {
-  const qs = buildQueryString({ days: params?.days ?? 0, department: params?.department })
-  return fetchHrApi(`/hr/employees/probation-expiring${qs}`, { errorMessage: '加载失败' })
-}
-
-/** 批量转正 */
-export async function batchRegularizeEmployees(ids: string[]): Promise<{ code: number; message: string; data?: { count?: number } }> {
-  return fetchHrApi('/hr/employees/batch-regularize', {
-    method: 'PUT',
-    body: JSON.stringify(ids),
-    errorMessage: '操作失败',
-  })
-}
-
 /** 试用期延期记录 */
-export async function fetchProbationExtensions(id: string): Promise<{ data: unknown[] }> {
-  return fetchHrApi(`/hr/employees/${id}/probation-extensions`, { errorMessage: '获取延期记录失败' })
-}
-
 /** 待培训员工（岗前培训候选人） */
 export async function fetchTrainingCandidates(keyword?: string): Promise<{ data: unknown[] }> {
   const qs = buildQueryString({ keyword })
@@ -110,7 +102,7 @@ export async function fetchTrainingCandidates(keyword?: string): Promise<{ data:
 
 // ─── 员工异动 ───
 
-export async function fetchTransfers(params: { employee_id: string; page_size?: number }): Promise<{ data: unknown[] }> {
+export async function fetchTransfers(params: { employee_id: string; page_size?: number }): Promise<{ data: EmployeeTransfer[] }> {
   const qs = buildQueryString(params)
   return fetchHrApi(`/hr/transfers${qs}`, { errorMessage: '获取异动记录失败' })
 }
@@ -174,49 +166,6 @@ export async function deleteDepartment(id: string) {
   return res
 }
 
-// ─── 班组 ───
-
-export async function fetchTeamsAction(
-  params?: {
-    department_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TeamListResponse> {
-  const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 100 })
-  return fetchHrApi<TeamListResponse>(`/hr/teams${qs}`, { errorMessage: '获取班组列表失败' })
-}
-
-export async function createTeam(data: TeamCreateInput) {
-  const res = await fetchHrApi('/hr/teams', {
-    method: 'POST',
-    body: JSON.stringify(data),
-    errorMessage: '创建班组失败',
-  })
-  revalidatePath('/hr/departments')
-  return res
-}
-
-export async function updateTeam(id: string, data: TeamUpdateInput) {
-  const res = await fetchHrApi(`/hr/teams/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-    errorMessage: '更新班组失败',
-  })
-  revalidatePath('/hr/departments')
-  return res
-}
-
-export async function deleteTeam(id: string) {
-  const res = await fetchHrApi(`/hr/teams/${id}`, {
-    method: 'DELETE',
-    errorMessage: '删除班组失败',
-  })
-  revalidatePath('/hr/departments')
-  return res
-}
-
 // ─── 职位 ───
 
 export async function fetchPositions(department?: string): Promise<PositionOption[]> {
@@ -225,7 +174,7 @@ export async function fetchPositions(department?: string): Promise<PositionOptio
   return d.data || []
 }
 
-export async function createPosition(data: { department: string; name: string }) {
+export async function createPosition(data: { department: string; name: string; headcount?: number | null }) {
   return fetchHrApi('/hr/positions', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -237,5 +186,15 @@ export async function deletePositionByName(name: string, department?: string) {
   return fetchHrApi(`/hr/positions/by-name/${encodeURIComponent(name)}?department=${encodeURIComponent(department ?? '')}`, {
     method: 'DELETE',
     errorMessage: '删除失败',
+  })
+}
+
+
+export async function updatePositionHeadcount(department: string, name: string, headcount: number | null): Promise<{ message: string }> {
+  return fetchHrApi(`/hr/positions/by-name/${encodeURIComponent(name)}?department=${encodeURIComponent(department ?? '')}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ headcount }),
+    errorMessage: '编制人数更新失败',
   })
 }

@@ -19,13 +19,17 @@ type MenuItem = Required<MenuProps>['items'][number]
 function filterByPermissions(
   items: SubMenuItem[],
   permissions: Set<string>,
+  roles: string[],
 ): SubMenuItem[] {
   return items.flatMap((item) => {
     if (item.permissions && item.permissions.length > 0 && !hasAnyPermission(permissions, item.permissions)) {
       return []
     }
+    if (item.roles && item.roles.length > 0 && !item.roles.some((role) => roles.includes(role))) {
+      return []
+    }
     if (item.children && item.children.length > 0) {
-      const children = filterByPermissions(item.children, permissions)
+      const children = filterByPermissions(item.children, permissions, roles)
       if (children.length === 0) return []
       return [{ ...item, children }]
     }
@@ -48,33 +52,30 @@ function buildKeyPathMap(items: SubMenuItem[]): Map<string, string> {
 }
 
 // ── 递归构建 Ant Design 菜单项 ──
-// ── 递归构建 Ant Design 菜单项（相邻同名 group 生成组头）──
 function buildMenuItems(items: SubMenuItem[]): MenuItem[] {
-  const result: MenuItem[] = []
-  let lastGroup: string | undefined
-  items.forEach((item, index) => {
-    if (item.group && item.group !== lastGroup) {
-      // key 带序号：非相邻同名 group 也不会产生重复 key
-      result.push({ key: `group:${index}:${item.group}`, type: 'group', label: item.group })
-      lastGroup = item.group
-    } else if (!item.group) {
-      lastGroup = undefined
-    }
+  return items.map((item) => {
     if (item.children && item.children.length > 0) {
-      result.push({
+      // group 类型：分组小标题，children 平铺展示不可折叠（培训五区等）
+      if (item.group) {
+        return {
+          key: item.key,
+          label: item.label,
+          type: 'group' as const,
+          children: buildMenuItems(item.children),
+        }
+      }
+      return {
         key: item.key,
         label: item.label,
         children: buildMenuItems(item.children),
-      })
-      return
+      }
     }
     const leaf: MenuItem = { key: item.key, label: item.label }
     if (item.disabled) {
       leaf.disabled = true
     }
-    result.push(leaf)
+    return leaf
   })
-  return result
 }
 
 // ── 收集所有可用的叶子节点（跳过 disabled 和空 path）──
@@ -138,14 +139,14 @@ export function Sidebar() {
   const router = useRouter()
   const collapsed = useSidebarStore((s) => s.collapsed)
   const permissions = usePermissionStore((s) => s.permissions)
+  const roles = usePermissionStore((s) => s.roles)
   const permissionLoaded = usePermissionStore((s) => s.isLoaded)
-  const permissionLoadFailed = usePermissionStore((s) => s.loadError)
   const moduleKey = pathname.split("/")[1] || "production"
   const currentModule = getModuleByKey(moduleKey)
 
-  // 权限加载完成前、或加载失败时不过滤，避免菜单因临时接口故障整块消失；后端接口仍做真实鉴权。
+  // 权限加载完成前不过滤（避免闪烁）；加载后按模块级与 children 的 permissions 声明过滤
   const visibleChildren = useMemo(() => {
-    if (!currentModule || !permissionLoaded || permissionLoadFailed) return currentModule?.children ?? []
+    if (!currentModule || !permissionLoaded) return currentModule?.children ?? []
     // 模块级权限与 TopNav 口径一致：不满足则全部子项隐藏
     if (
       currentModule.permissions &&
@@ -154,8 +155,8 @@ export function Sidebar() {
     ) {
       return []
     }
-    return filterByPermissions(currentModule.children, permissions)
-  }, [currentModule, permissions, permissionLoaded, permissionLoadFailed])
+    return filterByPermissions(currentModule.children, permissions, roles)
+  }, [currentModule, permissions, roles, permissionLoaded])
 
   const menuItems = currentModule ? buildMenuItems(visibleChildren) : []
   const keyPathMap = currentModule ? buildKeyPathMap(visibleChildren) : new Map<string, string>()

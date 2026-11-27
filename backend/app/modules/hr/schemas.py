@@ -1,9 +1,9 @@
 """HR business request and response schemas live here."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 # ─── Department Schemas ───
 
@@ -11,6 +11,8 @@ class DepartmentBase(BaseModel):
     name: str = Field(..., max_length=64, description="部门名称")
     code: str = Field(..., max_length=32, description="部门编码")
     description: str | None = Field(None, max_length=256, description="部门描述")
+    department_manager_name: str | None = Field(None, max_length=64, description="部门负责人（转正审批第二级）")
+    supervising_leader_name: str | None = Field(None, max_length=64, description="分管领导（转正审批第三级）")
 
 
 class DepartmentCreate(DepartmentBase):
@@ -21,6 +23,8 @@ class DepartmentUpdate(BaseModel):
     name: str | None = Field(None, max_length=64)
     code: str | None = Field(None, max_length=32)
     description: str | None = Field(None, max_length=256)
+    department_manager_name: str | None = Field(None, max_length=64)
+    supervising_leader_name: str | None = Field(None, max_length=64)
 
 
 class DepartmentResponse(DepartmentBase):
@@ -28,35 +32,6 @@ class DepartmentResponse(DepartmentBase):
 
     id: UUID
     employee_count: int = 0
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-# ─── Team Schemas ───
-
-class TeamBase(BaseModel):
-    name: str = Field(..., max_length=64, description="班组名称")
-    code: str | None = Field(None, max_length=32, description="班组编码")
-    description: str | None = Field(None, max_length=256, description="班组描述")
-    department_id: UUID = Field(..., description="所属部门ID")
-
-
-class TeamCreate(TeamBase):
-    pass
-
-
-class TeamUpdate(BaseModel):
-    name: str | None = Field(None, max_length=64)
-    code: str | None = Field(None, max_length=32)
-    description: str | None = Field(None, max_length=256)
-    department_id: UUID | None = Field(None)
-
-
-class TeamResponse(TeamBase):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    department: DepartmentResponse | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -71,44 +46,31 @@ class EmployeeBase(BaseModel):
 
     # Department & job
     department: str = Field(..., max_length=64, description="体现部门")
-    actual_department: str | None = Field(None, max_length=64, description="实际部门")
-    team: str | None = Field(None, max_length=64, description="班组")
     position: str = Field(..., max_length=64, description="职位")
     job_category: str | None = Field(None, max_length=32, description="职类")
     level: str | None = Field(None, max_length=32, description="级别")
-    concurrent_departments: str | None = Field(None, max_length=256, description="兼任部门")
-    concurrent_variety: str | None = Field(None, max_length=256, description="兼任品种")
-    variety: str | None = Field(None, max_length=128, description="品种")
     certificates: str | None = Field(None, max_length=512, description="证书")
-
-    # Qualifications
-    qualifications: list[str] | None = Field(None, description="职称／职业资格")
-    qualification_type: str | None = Field(None, max_length=32, description="职称类型")
 
     # Personal
     gender: str | None = Field(None, max_length=8, description="性别")
     native_place: str | None = Field(None, max_length=64, description="籍贯")
-    political_status: str | None = Field(None, max_length=32, description="政治面貌")
+    ethnicity: str | None = Field(None, max_length=32, description="民族")
     marital_status: str | None = Field(None, max_length=16, description="婚姻状况")
     household_type: str | None = Field(None, max_length=16, description="户籍类型")
     status_category: str | None = Field(None, max_length=32, description="统计类别")
+    hr_analysis: str | None = Field(None, max_length=32, description="人力资源分析")
 
     # Birth
     birth_year: int | None = Field(None, description="出生年份")
     birth_month: int | None = Field(None, description="出生月份")
     birth_day: int | None = Field(None, description="出生日期")
-    age: int | None = Field(None, description="年龄")
 
     # Dates
     work_start_date: date | None = Field(None, description="参加工作时间")
-    factory_entry_date: date | None = Field(None, description="进厂时间")
-    livo_entry_date: date | None = Field(None, description="入丽珠时间")
     hire_date: date = Field(..., description="入职日期")
     graduation_date: date | None = Field(None, description="毕业时间")
 
     # Computed
-    work_years: int | None = Field(None, description="工作年限")
-    factory_tenure: str | None = Field(None, max_length=32, description="厂龄")
     company_tenure: str | None = Field(None, max_length=32, description="司龄")
 
     # Education
@@ -116,27 +78,20 @@ class EmployeeBase(BaseModel):
     classification: str | None = Field(None, max_length=16, description="分类")
     school: str | None = Field(None, max_length=128, description="毕业学校")
     major: str | None = Field(None, max_length=64, description="专业")
+    degree_type: str | None = Field(None, max_length=32, description="学位类型")
+    graduation_certificate: str | None = Field(None, max_length=256, description="毕业证书")
 
     # ID & address
     id_card: str | None = Field(None, max_length=18, description="身份证号")
     id_card_expiry: str | None = Field(None, max_length=32, description="身份证到期日")
-    id_card_address: str | None = Field(None, description="身份证地址|家庭地址")
     current_address: str | None = Field(None, description="现住址")
 
     # Contract
-    contract_type: str | None = Field(None, max_length=32, description="合同期限")
     contract_start_date: date | None = Field(None, description="合同开始日期")
     contract_end_date: date | None = Field(None, description="合同结束日期")
-    contract_start_2: date | None = Field(None, description="第二次合同起点")
-    contract_end_2: date | None = Field(None, description="第二次合同终止")
-    contract_start_3: date | None = Field(None, description="第三次合同起点")
-    contract_end_3: date | None = Field(None, description="第三次合同终止")
-    contract_start_4: date | None = Field(None, description="第四次合同起点")
-    contract_end_4: date | None = Field(None, description="第四次合同终止")
 
     # Contact
     phone: str | None = Field(None, max_length=32, description="手机")
-    email: str | None = Field(None, max_length=128, description="邮箱")
     emergency_contact_name: str | None = Field(
         None, max_length=64, description="紧急联系人姓名"
     )
@@ -147,27 +102,16 @@ class EmployeeBase(BaseModel):
         None, max_length=32, description="紧急联系人关系"
     )
 
-    # Banking & training
-    bank_account: str | None = Field(None, max_length=32, description="银行卡号")
-    training_id: str | None = Field(None, max_length=32, description="培训档案编号")
-
     # Other
-    transfer_history: str | None = Field(None, description="异动记录")
-    remarks: list[str] | None = Field(None, description="备注")
+    transfer_history: str | None = Field(None, description="任命与岗位调动")
     status: str = Field("待审批", max_length=16, description="状态")
     sort_order: int | None = Field(None, description="Excel行序号")
 
     # Excel 扩展字段
     duty: str | None = Field(None, max_length=64, description="职务")
-    dept_manager: str | None = Field(None, max_length=64, description="部门管理者")
-    additional_manager: str | None = Field(None, max_length=64, description="额外管理者")
     report_grade: str | None = Field(None, max_length=32, description="报表用职级")
-    dept_head_trainer: str | None = Field(None, max_length=64, description="部门负责人/一级培训师")
-    safety_training_date: date | None = Field(None, description="入职安全培训日期")
-    safety_training_score: str | None = Field(None, max_length=32, description="入职安全培训成绩")
-    culture_training_date: date | None = Field(None, description="企业文化培训日期")
-    gmp_training_date: date | None = Field(None, description="GMP基础培训时间")
     departure_date: date | None = Field(None, description="离职时间")
+    departure_reason: str | None = Field(None, max_length=64, description="离职原因")
 
 
 class EmployeeCreate(EmployeeBase):
@@ -181,56 +125,43 @@ class EmployeeUpdate(BaseModel):
     name: str | None = Field(None, max_length=64)
     domain_account: str | None = Field(None, max_length=64)
     department: str | None = Field(None, max_length=64)
-    team: str | None = Field(None, max_length=64)
     position: str | None = Field(None, max_length=64)
     job_category: str | None = Field(None, max_length=32)
     level: str | None = Field(None, max_length=32)
-    qualifications: list[str] | None = Field(None)
-    qualification_type: str | None = Field(None, max_length=32)
     gender: str | None = Field(None, max_length=8)
     native_place: str | None = Field(None, max_length=64)
-    political_status: str | None = Field(None, max_length=32)
+    ethnicity: str | None = Field(None, max_length=32)
     marital_status: str | None = Field(None, max_length=16)
     household_type: str | None = Field(None, max_length=16)
     status_category: str | None = Field(None, max_length=32)
+    hr_analysis: str | None = Field(None, max_length=32)
     birth_year: int | None = Field(None)
     birth_month: int | None = Field(None)
     birth_day: int | None = Field(None)
-    age: int | None = Field(None)
     work_start_date: date | None = Field(None)
-    factory_entry_date: date | None = Field(None)
-    livo_entry_date: date | None = Field(None)
     hire_date: date | None = Field(None)
     graduation_date: date | None = Field(None)
-    work_years: int | None = Field(None)
-    factory_tenure: str | None = Field(None, max_length=32)
     company_tenure: str | None = Field(None, max_length=32)
     education: str | None = Field(None, max_length=16)
     classification: str | None = Field(None, max_length=16)
     school: str | None = Field(None, max_length=128)
     major: str | None = Field(None, max_length=64)
+    degree_type: str | None = Field(None, max_length=32)
+    graduation_certificate: str | None = Field(None, max_length=256)
     id_card: str | None = Field(None, max_length=18)
     id_card_expiry: str | None = Field(None, max_length=32)
-    id_card_address: str | None = Field(None)
     current_address: str | None = Field(None)
-    contract_type: str | None = Field(None, max_length=32)
     contract_start_date: date | None = Field(None)
     contract_end_date: date | None = Field(None)
-    contract_start_2: date | None = Field(None)
-    contract_end_2: date | None = Field(None)
-    contract_start_3: date | None = Field(None)
-    contract_end_3: date | None = Field(None)
-    contract_start_4: date | None = Field(None)
-    contract_end_4: date | None = Field(None)
     phone: str | None = Field(None, max_length=32)
-    email: str | None = Field(None, max_length=128)
     emergency_contact_name: str | None = Field(None, max_length=64)
     emergency_contact_phone: str | None = Field(None, max_length=32)
     emergency_contact_relation: str | None = Field(None, max_length=32)
-    bank_account: str | None = Field(None, max_length=32)
-    training_id: str | None = Field(None, max_length=32)
-    transfer_history: str | None = Field(None)
-    remarks: list[str] | None = Field(None)
+    certificates: str | None = Field(None, max_length=512)
+    duty: str | None = Field(None, max_length=64)
+    report_grade: str | None = Field(None, max_length=32)
+    departure_date: date | None = Field(None)
+    departure_reason: str | None = Field(None, max_length=64)
     status: str | None = Field(None, max_length=16)
 
 
@@ -248,19 +179,22 @@ class EmployeeResponse(EmployeeBase):
     feishu_open_id: str | None = None
     feishu_record_id: str | None = None
     feishu_synced_at: date | None = None
+    candidate_id: UUID | None = Field(None, description="来源候选人（招聘入职回链）")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
     # 动态计算字段（优先于飞书静态值）
     computed_age: int | None = Field(None, description="从出生日期动态计算的年龄")
     computed_tenure: str | None = Field(None, description="从入职日期动态计算的司龄")
+    computed_probation_end: date | None = Field(None, description="转正到期日（试用期员工；显式值优先否则入职+3月-1天）")
+    computed_probation_days_left: int | None = Field(None, description="距转正到期天数（负数=已过期；非试用期为空）")
 
 
 def mask_sensitive_fields(data: dict, has_sensitive: bool) -> dict:
-    """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证/手写签名"""
+    """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证/手写签名等敏感字段"""
     if has_sensitive:
         return data
-    for key in ("id_card", "id_card_address", "cert_sign_image"):
+    for key in ("id_card", "cert_sign_image", "id_card_expiry", "residence_address", "bank_account"):
         if data.get(key):
             data[key] = "*" * len(str(data[key]))
     return data
@@ -329,31 +263,6 @@ class TrainingEvaluationInput(BaseModel):
     department: str | None = Field(None, max_length=64, description="培训部门")
 
 
-class OnboardingEvaluationInput(BaseModel):
-    employee_name: str = Field(..., max_length=64, description="员工姓名")
-    employee_number: str | None = Field(None, max_length=32, description="工作卡号")
-    gender: str | None = Field(None, max_length=8, description="性别")
-    department_position: str | None = Field(None, max_length=128, description="所在部门/岗位")
-    hire_date: date | None = Field(None, description="入厂时间")
-    training_period: str | None = Field(None, max_length=64, description="培训/考核期")
-    regularization_date: date | None = Field(None, description="转正时间")
-    assessment_contents: list[str] = Field(default_factory=list, description="上岗培训期内考核内容")
-    comprehensive_comment: str | None = Field(None, max_length=1024, description="培训/考核期综合评语")
-    is_qualified: bool | None = Field(None, description="是否同意上岗")
-    assigned_position: str | None = Field(None, max_length=64, description="担任岗位")
-    assessment_method: str | None = Field(None, max_length=32, description="考核方式")
-    dept_manager_signature: str | None = Field(None, max_length=64, description="部门负责人签名")
-    signature_date: date | None = Field(None, description="签名日期")
-    remarks: str | None = Field(None, max_length=512, description="备注")
-    dept_manager_agree: bool | None = Field(None, description="部门负责人是否同意")
-    hr_manager_agree: bool | None = Field(None, description="人事行政部负责人是否同意")
-    qa_manager_agree: bool | None = Field(None, description="质量管理负责人是否同意")
-    dept_manager: str | None = Field(None, max_length=64, description="部门负责人")
-    hr_manager: str | None = Field(None, max_length=64, description="人事行政部负责人")
-    qa_manager: str | None = Field(None, max_length=64, description="质量管理负责人")
-    approval_date: date | None = Field(None, description="审批日期")
-
-
 # ─── OffboardingRecord Schemas ───
 
 class OffboardingRecordBase(BaseModel):
@@ -392,12 +301,17 @@ class OffboardingRecordResponse(OffboardingRecordBase):
 class DepartureRecordBase(BaseModel):
     # Basic
     name: str = Field(..., max_length=64, description="姓名")
+    employee_number: str | None = Field(None, max_length=32, description="工号（飞书离职人员管理表同步）")
     department: str = Field(..., max_length=64, description="体现部门")
     team: str | None = Field(None, max_length=64, description="班组")
     position: str = Field(..., max_length=64, description="职位")
+    duty: str | None = Field(None, max_length=64, description="职务")
+    rank: str | None = Field(None, max_length=16, description="职级（如 S5）")
+    rank_category: str | None = Field(None, max_length=32, description="岗位职级")
     job_category: str | None = Field(None, max_length=64, description="职类")
+    employee_category: str | None = Field(None, max_length=64, description="员工性质（转正员工/退休返聘等）")
     gender: str | None = Field(None, max_length=8, description="性别")
-    status_category: str | None = Field(None, max_length=64, description="统计类别")
+    status_category: str | None = Field(None, max_length=64, description="统计类别（人力资源分析）")
 
     # Dates
     livo_entry_date: date | None = Field(None, description="入丽珠时间")
@@ -410,23 +324,30 @@ class DepartureRecordBase(BaseModel):
     education: str | None = Field(None, max_length=16, description="学历")
     school: str | None = Field(None, max_length=128, description="毕业学校")
     major: str | None = Field(None, max_length=64, description="专业")
+    degree_type: str | None = Field(None, max_length=32, description="学位类型")
     classification: str | None = Field(None, max_length=16, description="分类")
 
     # Personal
     id_card: str | None = Field(None, max_length=18, description="身份证号")
+    id_card_expiry: date | None = Field(None, description="身份证有效期")
     native_place: str | None = Field(None, max_length=64, description="籍贯")
+    ethnicity: str | None = Field(None, max_length=32, description="民族")
     household_type: str | None = Field(None, max_length=128, description="户籍类型")
     marital_status: str | None = Field(None, max_length=32, description="婚姻状况")
     political_status: str | None = Field(None, max_length=64, description="政治面貌")
+    residence_address: str | None = Field(None, max_length=256, description="居住地址")
 
     # Contact
     phone: str | None = Field(None, max_length=32, description="手机")
+    emergency_contact_name: str | None = Field(None, max_length=64, description="紧急联系人姓名")
     emergency_contact_phone: str | None = Field(None, max_length=32, description="紧急联系人电话")
     emergency_contact_relation: str | None = Field(None, max_length=64, description="紧急联系人|关系")
     bank_account: str | None = Field(None, max_length=128, description="银行卡号")
 
     # Contract
     contract_type: str | None = Field(None, max_length=64, description="合同期限")
+    contract_start_date: date | None = Field(None, description="合同开始日期")
+    contract_end_date: date | None = Field(None, description="合同结束日期")
 
     # Work history
     transfer_history: str | None = Field(None, description="异动记录")
@@ -439,6 +360,7 @@ class DepartureRecordBase(BaseModel):
 
     # Other
     remarks: str | None = Field(None, description="备注")
+    certificates: str | None = Field(None, description="证书")
 
 
 class DepartureRecordCreate(DepartureRecordBase):
@@ -665,7 +587,7 @@ class TrainingLedgerCreate(TrainingLedgerBase):
 
 
 class TrainingLedgerUpdate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     employee_number: str | None = Field(None, max_length=32)
     training_date: date | None = Field(None)
@@ -951,6 +873,7 @@ class JobRequirementResponse(BaseModel):
     headcount: int
     hired_count: int
     requirements: str | None = None
+    duties: str | None = None
     status: str
     urgency: str | None = None
     owner: str | None = None
@@ -1055,20 +978,27 @@ class InterviewCreate(BaseModel):
     job_requirement_id: UUID | None = None
     interview_type: str = Field(default="初试", max_length=16, description="初试/复试/终试")
     interview_date: date | None = None
+    start_time: time | None = Field(None, description="面试开始时间（钟点，HH:MM）")
+    end_time: time | None = Field(None, description="面试结束时间（钟点，HH:MM）")
     interviewer: str | None = Field(None, max_length=64)
     location: str | None = Field(None, max_length=256)
     notes: str | None = None
     create_calendar_event: bool = Field(default=False, description="是否创建飞书日历日程")
+    force_conflict: bool = Field(default=False, description="面试官时段冲突时仍强制保存（前端二次确认后置 true）")
 
 
 class InterviewUpdate(BaseModel):
     interview_type: str | None = Field(None, max_length=16)
     interview_date: date | None = None
+    start_time: time | None = None
+    end_time: time | None = None
     interviewer: str | None = Field(None, max_length=64)
     location: str | None = Field(None, max_length=256)
     status: str | None = Field(None, max_length=16, description="待安排/已安排/已完成/已取消")
     transcript_text: str | None = None
     notes: str | None = None
+    create_calendar_event: bool = Field(default=False, description="为尚未创建日历的面试补建日程（已有日程则忽略）")
+    force_conflict: bool = Field(default=False, description="面试官时段冲突时仍强制保存（前端二次确认后置 true）")
     # calendar_event_id 为服务端日历集成内部字段，只读（响应专用），不接受客户端写入
 
 
@@ -1079,12 +1009,18 @@ class InterviewResponse(BaseModel):
     job_requirement_id: UUID | None = None
     interview_type: str
     interview_date: date | None = None
+    start_time: time | None = None
+    end_time: time | None = None
     interviewer: str | None = None
     location: str | None = None
     status: str
     transcript_text: str | None = None
     notes: str | None = None
     calendar_event_id: str | None = None
+    # 日历同步结果提示（保存后前端据此 toast 警告；None=未尝试或成功）
+    calendar_sync_error: str | None = None
+    # 评分卡推送记录（HR 推送评分表单卡给面试官后非空；前端显示「已推送待评分」）
+    score_pushed_at: datetime | None = None
     created_at: datetime | None = None
 
 
@@ -1266,6 +1202,8 @@ class PerformanceCategoryCreate(BaseModel):
     weight: float = Field(default=0, description="权重(%)")
     evaluator: str | None = Field(None, max_length=64, description="项目负责人")
     sort_order: int = Field(default=0)
+    # 默认启用（不传时与此前行为一致）；表单里关掉开关即建成停用
+    is_active: bool = Field(default=True, description="是否启用")
 
 
 class PerformanceCategoryUpdate(BaseModel):
@@ -1315,6 +1253,8 @@ class CandidateAnalysisReportOut(BaseModel):
     candidate_id: UUID
     job_requirement_id: UUID | None
     interview_id: UUID
+    basic_info: list | None
+    jd_review: str | None
     dimensions: list | None
     strengths: list | None
     risks: list | None
@@ -1325,3 +1265,44 @@ class CandidateAnalysisReportOut(BaseModel):
     raw_text: str | None
     model_version: str | None
     generated_at: datetime | None
+
+
+class InterviewOverviewItem(InterviewResponse):
+    """面试总览行：面试字段 + 候选人姓名/岗位 + 人工评价结论/均分 + AI 综合分（跨候选人视图）。"""
+
+    candidate_name: str | None = None
+    candidate_position: str | None = None
+    feedback_result: str | None = None
+    feedback_score: float | None = None  # 面试官四维度均分（1-5）
+    ai_total_score: float | None = None  # AI 综合胜任度（0-100）
+    ai_recommend_level: str | None = None
+
+
+# ─── Recruitment: Interview Feedback Schemas（人工面试评价） ───
+
+
+class InterviewFeedbackDimension(BaseModel):
+    name: str = Field(max_length=32, description="维度名")
+    score: int = Field(ge=1, le=5, description="1-5 分")
+    comment: str | None = Field(None, max_length=500)
+
+
+class InterviewFeedbackIn(BaseModel):
+    evaluator: str = Field(max_length=64, description="评价人（默认面试官）")
+    dimensions: list[InterviewFeedbackDimension] = Field(default_factory=list)
+    overall_comment: str | None = None
+    result: str = Field(description="结论：通过/待定/不通过")
+
+
+class InterviewFeedbackOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    interview_id: UUID
+    candidate_id: UUID
+    evaluator: str
+    dimensions: list | None
+    overall_comment: str | None
+    result: str
+    updated_at: datetime | None
+    created_at: datetime | None

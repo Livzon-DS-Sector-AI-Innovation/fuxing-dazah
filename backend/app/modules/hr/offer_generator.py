@@ -46,7 +46,6 @@ def generate_offer_pdf(**kwargs) -> BytesIO:
 
 def _generate_offer_pdf_fallback(**kwargs) -> BytesIO:
     """fpdf2 兜底 PDF（macOS 开发环境，无 WeasyPrint 系统库时使用）。"""
-    import os as _os
     from fpdf import FPDF
     vals = _build_vals(**kwargs)
     pdf = FPDF(unit="mm", format="A4")

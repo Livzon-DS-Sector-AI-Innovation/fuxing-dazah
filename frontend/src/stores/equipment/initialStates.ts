@@ -54,6 +54,7 @@ export const initialWorkOrderState = {
   workOrderStatusFilter: '' as '' | '待处理' | '执行中' | '待验收' | '已完成' | '已关闭',
   workOrderPriorityFilter: '' as '' | '紧急' | '高' | '中' | '低',
   workOrderTypeFilter: '' as '' | '故障维修' | '计划维护' | '校准' | '异常处理' | '日常维护',
+  workOrderPerspectiveFilter: '' as '' | 'reporter' | 'assignee' | 'responsible',
   workOrderDrawerOpen: false,
   workOrderDetailOpen: false,
   editingWorkOrder: null as WorkOrder | null,
@@ -79,6 +80,8 @@ export const initialSparePartState = {
   sparePartPageSize: 20,
   sparePartLoading: false,
   sparePartKeyword: '',
+  sparePartStatusFilter: null as 'active' | 'inactive' | null,
+  sparePartLowStockFilter: null as 'low' | null,
   stockWarnings: [] as StockWarning[],
   stockWarningsLoading: false,
   sparePartDrawerOpen: false,
@@ -87,6 +90,12 @@ export const initialSparePartState = {
   equipmentManagingSparePart: null as SparePart | null,
   stockInboundDrawerOpen: false,
   stockInboundSparePartId: null as string | null,
+  stockOutboundDrawerOpen: false,
+  stockOutboundSparePartId: null as string | null,
+  stockAdjustDrawerOpen: false,
+  stockAdjustSparePartId: null as string | null,
+  stockSettingsDrawerOpen: false,
+  stockSettingsSparePart: null as SparePart | null,
 }
 
 // ============ 维护计划状态 ============
@@ -138,11 +147,7 @@ export const initialRepairState = {
   repairEquipmentId: null as string | null,
 }
 
-// ============ 超时配置 & 维修人员 ============
-
-export const initialTimeoutConfigState = {
-  claimTimeoutConfig: { emergency: 15, high: 30, medium: 60, low: 120 },
-}
+// ============ 维修人员 ============
 
 export const initialMaintainerState = {
   maintainers: [] as Maintainer[],

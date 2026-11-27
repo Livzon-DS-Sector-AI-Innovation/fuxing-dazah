@@ -2,12 +2,12 @@
 
 import { useState } from 'react'
 import {
+  App,
   Button,
   Card,
   Input,
   InputNumber,
   Upload,
-  message,
   Space,
   Divider,
   Typography,
@@ -40,7 +40,13 @@ const { Title, Text } = Typography
 const BORDER_STYLE = { border: '1px solid #1f2937', padding: '8px' } as React.CSSProperties
 const BORDER_STYLE_CENTER = { border: '1px solid #1f2937', padding: '8px', textAlign: 'center' } as React.CSSProperties
 
+// 每题固定分值
+const SCORE_PER_QUESTION = 10
+const CN_NUMERALS = ['一', '二', '三', '四']
+
 export default function AiExamClient() {
+  const { message } = App.useApp()
+
   // 出题模式：笔试组卷 / 问答考核
   const [mode, setMode] = useState<'exam' | 'qa'>('exam')
 
@@ -70,6 +76,8 @@ export default function AiExamClient() {
 
   // 导出状态
   const [exporting, setExporting] = useState(false)
+  // 保存状态
+  const [saving, setSaving] = useState(false)
 
   // 题目配置
   const [choiceEnabled, setChoiceEnabled] = useState(true)
@@ -160,6 +168,7 @@ export default function AiExamClient() {
       message.warning('请先生成题目')
       return
     }
+    setSaving(true)
     try {
       await saveExamPaper({
         subject: title,
@@ -170,7 +179,8 @@ export default function AiExamClient() {
           multi_choice_questions: multiQuestions,
           fill_blank_questions: fillQuestions,
         },
-        full_score: 100,
+        // 总分 = 全部题目数 × 每题分值
+        full_score: total * SCORE_PER_QUESTION,
         choice_count: choiceQuestions.length,
         true_false_count: trueFalseQuestions.length,
         multi_choice_count: multiQuestions.length,
@@ -179,6 +189,8 @@ export default function AiExamClient() {
       message.success('试卷已保存，可在「资料下载」中查看下载')
     } catch (err: any) {
       message.error(err.message || '保存失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -248,7 +260,7 @@ export default function AiExamClient() {
         subject: qaSubject || qaTitle || (qaFileList[0]?.name || '问答考核').replace(/\.[^.]+$/, ''),
         questions: qaQuestions,
       })
-      message.success(res.message || `已同步 ${res.data?.inserted ?? 0} 题到题库大全`)
+      message.success(res.message || `已同步 ${res.data?.inserted ?? 0} 题到题库`)
     } catch (err: any) {
       message.error(err.message || '同步失败')
     } finally {
@@ -264,20 +276,32 @@ export default function AiExamClient() {
     })
   }
 
+  // 分节序号：按实际出现的题型顺序编号（题数为 0 的题型不参与）
+  const sectionPresent = [
+    choiceQuestions.length > 0,
+    trueFalseQuestions.length > 0,
+    multiQuestions.length > 0,
+    fillQuestions.length > 0,
+  ]
+  const sectionTitle = (sectionIndex: number, name: string, count: number) => {
+    const order = sectionPresent.slice(0, sectionIndex).filter(Boolean).length
+    return `${CN_NUMERALS[order]}、${name}（共${count * SCORE_PER_QUESTION}分，每题${SCORE_PER_QUESTION}分）`
+  }
+
   return (
     <div className="space-y-6">
       <Segmented
         value={mode}
         onChange={(v) => setMode(v as 'exam' | 'qa')}
         options={[
-          { label: '📝 笔试组卷', value: 'exam' },
-          { label: '💬 问答出题', value: 'qa' },
+          { label: '笔试组卷', value: 'exam' },
+          { label: '问答出题', value: 'qa' },
         ]}
       />
       {mode === 'qa' ? (
         <div className="space-y-4">
-          <Card title="问答考核出题（简短问答，可同步到题库大全）" className="shadow-sm">
-            <Space direction="vertical" size="middle" className="w-full">
+          <Card title="问答考核出题（简短问答，可同步到题库）" className="shadow-sm">
+            <Space orientation="vertical" size="middle" className="w-full">
               <Space wrap>
                 <Text>考核主题：</Text>
                 <Input
@@ -311,7 +335,7 @@ export default function AiExamClient() {
               className="shadow-sm"
               extra={
                 <Button type="primary" loading={qaSyncing} onClick={handleQaSync}>
-                  同步到题库大全
+                  同步到题库
                 </Button>
               }
             >
@@ -427,6 +451,7 @@ export default function AiExamClient() {
                 type="primary"
                 icon={<FileTextOutlined />}
                 onClick={handleSave}
+                loading={saving}
               >
                 保存试卷
               </Button>
@@ -437,7 +462,7 @@ export default function AiExamClient() {
             {/* 选择题 */}
             {choiceQuestions.length > 0 && (
               <>
-                <Title level={5}>选择题（共50分，每题10分）</Title>
+                <Title level={5}>{sectionTitle(0, '选择题', choiceQuestions.length)}</Title>
                 <div className="space-y-4">
                   {choiceQuestions.map((item, index) => (
                     <div
@@ -497,7 +522,7 @@ export default function AiExamClient() {
             {/* 判断题 */}
             {trueFalseQuestions.length > 0 && (
               <>
-                <Title level={5}>判断题（共50分，每题10分）</Title>
+                <Title level={5}>{sectionTitle(1, '判断题', trueFalseQuestions.length)}</Title>
                 <div className="space-y-4">
                   {trueFalseQuestions.map((item, index) => (
                     <div
@@ -541,7 +566,7 @@ export default function AiExamClient() {
             {multiQuestions.length > 0 && (
               <>
                 <Divider />
-                <Title level={5}>三、多选题（共{multiQuestions.length * 10}分，每题10分）</Title>
+                <Title level={5}>{sectionTitle(2, '多选题', multiQuestions.length)}</Title>
                 <div className="space-y-4">
                   {multiQuestions.map((item, index) => (
                     <div key={index} className="border border-gray-800 p-3 rounded">
@@ -582,7 +607,7 @@ export default function AiExamClient() {
             {fillQuestions.length > 0 && (
               <>
                 <Divider />
-                <Title level={5}>四、填空题（共{fillQuestions.length * 10}分，每题10分）</Title>
+                <Title level={5}>{sectionTitle(3, '填空题', fillQuestions.length)}</Title>
                 <div className="space-y-4">
                   {fillQuestions.map((item, index) => (
                     <div key={index} className="border border-gray-800 p-3 rounded">

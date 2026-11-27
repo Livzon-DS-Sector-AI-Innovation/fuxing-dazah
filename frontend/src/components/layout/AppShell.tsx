@@ -4,6 +4,7 @@ import { App } from 'antd'
 import { TopNav } from "./TopNav"
 import { Sidebar } from "./Sidebar"
 import { usePermission } from '@/hooks/usePermission'
+import { useSidebarStore } from '@/stores/sidebar'
 import styles from './LayoutChrome.module.css'
 
 interface AppShellProps {
@@ -14,6 +15,7 @@ export function AppShell({ children }: AppShellProps) {
   // 在根布局触发权限加载，确保所有子页面渲染时权限数据已就绪。
   // 后续页面中的 usePermission() 调用直接从 store 读取缓存结果。
   usePermission()
+  const collapsed = useSidebarStore((s) => s.collapsed)
 
   return (
     <div className="relative h-screen flex flex-col overflow-hidden">
@@ -23,7 +25,9 @@ export function AppShell({ children }: AppShellProps) {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <App className="flex-1 overflow-hidden">
-          <main className={`${styles.main} relative z-10 h-full overflow-y-auto p-4`}>
+          <main
+            className={`${styles.main} ${collapsed ? styles.mainFlush : ""} relative z-10 h-full overflow-y-auto p-4`}
+          >
             {children}
           </main>
         </App>

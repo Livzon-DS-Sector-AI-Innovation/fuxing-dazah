@@ -31,6 +31,7 @@ import { MaintenancePlanTable } from './MaintenancePlanTable'
 import { MaintenancePlanDrawer } from './MaintenancePlanDrawer'
 import { InspectionCompleteDrawer } from './InspectionCompleteDrawer'
 import { PageHeading } from '@/components/shared/PageHeading'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { usePermission } from '@/hooks/usePermission'
 
 interface MaintenancePageProps {
@@ -52,6 +53,7 @@ export function MaintenancePage({
   const {
     maintenanceTab, setMaintenanceTab,
     workOrderStatusFilter, workOrderPriorityFilter, workOrderTypeFilter,
+    workOrderPerspectiveFilter,
     workOrderPage, workOrderPageSize, workOrderStatistics,
     setWorkOrders, setWorkOrderTotal, setWorkOrderStatistics, setWorkOrderLoading,
     setFailureCodes,
@@ -93,7 +95,7 @@ export function MaintenancePage({
       configMsg.error(result.error)
       return
     }
-    configMsg.success('超时配置保存成功')
+    configMsg.success('派单超时配置保存成功')
   }
 
   const handleSaveAdvanceDays = async () => {
@@ -147,6 +149,7 @@ export function MaintenancePage({
           exclude_status: workOrderStatusFilter ? undefined : '已关闭',
           priority: workOrderPriorityFilter || undefined,
           order_type: workOrderTypeFilter || undefined,
+          perspective: workOrderPerspectiveFilter || undefined,
           page: workOrderPage, page_size: workOrderPageSize,
         }),
         fetchWorkOrderStatisticsClient(),
@@ -159,7 +162,7 @@ export function MaintenancePage({
     } finally {
       setWorkOrderLoading(false)
     }
-  }, [workOrderStatusFilter, workOrderPriorityFilter, workOrderTypeFilter, workOrderPage, workOrderPageSize, setWorkOrders, setWorkOrderTotal, setWorkOrderStatistics, setWorkOrderLoading])
+  }, [workOrderStatusFilter, workOrderPriorityFilter, workOrderTypeFilter, workOrderPerspectiveFilter, workOrderPage, workOrderPageSize, setWorkOrders, setWorkOrderTotal, setWorkOrderStatistics, setWorkOrderLoading])
 
   const fetchFailureCodeData = useCallback(async () => {
     try {
@@ -221,7 +224,7 @@ export function MaintenancePage({
             style={{ marginTop: 16, marginBottom: 16 }}
             items={[{
               key: 'timeout-config',
-              label: '抢单超时配置',
+              label: '派单超时配置',
               children: (
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                   {[
@@ -347,7 +350,11 @@ export function MaintenancePage({
   return (
     <ConfigProvider theme={antdTheme} locale={zhCN}>
       <App>
-        <PageHeading title="维护保养" subtitle="工单管理 · 故障代码 · 维护计划" />
+        <PageHeading
+          title="维护保养"
+          subtitle="工单管理 · 故障代码 · 维护计划"
+          actions={<PageGuideButton />}
+        />
         <div style={{ background: '#ffffff', padding: 20, borderRadius: 12, border: '1px solid #e5e3df' }}>
           <Tabs activeKey={maintenanceTab} onChange={setMaintenanceTab} items={tabItems} />
         </div>

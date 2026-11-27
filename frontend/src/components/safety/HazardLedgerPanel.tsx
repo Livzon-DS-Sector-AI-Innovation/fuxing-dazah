@@ -633,7 +633,7 @@ export default function HazardLedgerPanel() {
 
     return (
       <div style={{ padding: '12px 24px', background: '#fafafa', borderRadius: 8 }}>
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
           {lecRow('固有风险评价', record.l_inherent, record.e_inherent, record.c_inherent, record.d_inherent, record.inherent_risk_level, record.inherent_risk_label)}
 
           {record.inherent_risk_level_fj && (
@@ -981,7 +981,7 @@ export default function HazardLedgerPanel() {
               if (!open) setPendingFilterField(null)
             }}
             placement="bottomLeft"
-            overlayStyle={{ borderRadius: 12 }}
+            styles={{ root: { borderRadius: 12 } }}
           >
             <button
               type="button"

@@ -1,11 +1,11 @@
 """HR database queries live here."""
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, asc, case, delete, desc, func, or_, select, text
+from sqlalchemy import and_, asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,7 @@ from app.modules.hr.models import (
     Employee,
     HrDepartment,
     Interview,
+    InterviewFeedback,
     JobRequirement,
     MonthlyPerformanceEvaluation,
     OffboardingRecord,
@@ -31,10 +32,12 @@ from app.modules.hr.models import (
     PerformanceCategoryScore,
     PerformanceDeptWeight,
     PerformanceEvaluationItem,
-    Team,
     TrainingLedger,
     TrainingLedgerPage,
 )
+
+# 本地维护的人员状态（源表无法表达）：同步派生值不得覆盖（离职除外）
+_LEAVE_STATUSES = {"病假", "产假", "产假复岗"}
 
 
 class EmployeeRepository:
@@ -58,32 +61,185 @@ class EmployeeRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_feishu_record_id(self, record_id: str) -> Employee | None:
+        """按飞书多维表格 record_id 查未删除员工（事件路由用）。
+
+        record_id 无唯一约束：源表改工号会遗留同 record_id 多行，取最新一行
+        避免 MultipleResultsFound；历史脏行由 upsert_from_bitable 的归属收敛清理。
+        """
+        result = await self.session.execute(
+            select(Employee)
+            .where(
+                Employee.feishu_record_id == record_id,
+                Employee.is_deleted.is_(False),
+            )
+            .order_by(Employee.updated_at.desc())
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def upsert_from_bitable(
+        self,
+        data: dict[str, Any],
+        record_id: str,
+        *,
+        by_number: dict[str, "Employee"] | None = None,
+        by_record_id: dict[str, list["Employee"]] | None = None,
+        flush: bool = True,
+    ) -> tuple[Employee, bool]:
+        """飞书多维表格同步专用 upsert，按工号匹配（含软删除行并复活）。
+
+        与 upsert_by_employee_number 的差异：
+        - 匹配范围含软删除行：工号在飞书表中重现视为有效数据，复活该行
+          （避免软删→重加触发 employee_number 唯一约束）；
+        - 同步写入 feishu_record_id / feishu_synced_at（无变化的行不刷新）；
+        - 源表改工号时 record_id 归属随之迁移：仍持有该 record_id 的旧工号行
+          视为源表身份已被顶替，按删除处理（否则旧行永不被清理且 record_id 重复）；
+        - "以表为准"（对账，缺列补 None）还是"增量补丁"（事件）由调用方
+          在 data 中体现（见 employee_sync.mapping.convert_source_fields）。
+
+        批量对账可传入预加载索引（by_number / by_record_id）规避逐行 SELECT，
+        并传 flush=False 由调用方按批落库。返回 (员工对象, 是否新建)。
+        """
+        employee_number = str(data.get("employee_number") or "").strip()
+        if not employee_number:
+            raise ValueError("记录缺少工号，无法同步")
+
+        # record_id 归属迁移：清掉仍挂着该 record_id 的其他工号行
+        if by_record_id is not None:
+            stale_rows = [
+                row for row in (by_record_id.get(record_id) or [])
+                if row.employee_number != employee_number and not row.is_deleted
+            ]
+        else:
+            stale_rows = list((await self.session.execute(
+                select(Employee).where(
+                    Employee.feishu_record_id == record_id,
+                    Employee.employee_number != employee_number,
+                    Employee.is_deleted.is_(False),
+                )
+            )).scalars().all())
+        for stale in stale_rows:
+            stale.is_deleted = True
+            stale.feishu_record_id = None
+
+        existing = (
+            by_number.get(employee_number)
+            if by_number is not None
+            else await self.get_by_employee_number(employee_number, include_deleted=True)
+        )
+        today = date.today()
+        if existing is not None:
+            # hire_date 列 NOT NULL：源表缺失（对账 reset_missing 置 None）时保留
+            # 本地值——既不能写 None（库拒绝），更不能刷成当天（司龄/转正失真）
+            if data.get("hire_date") is None:
+                data.pop("hire_date", None)
+            changed = False
+            for key, value in data.items():
+                if key in ("id", "employee_number", "created_at"):
+                    continue
+                if (
+                    key == "status"
+                    and existing.status in _LEAVE_STATUSES
+                    and value in ("在职", "试用期")
+                ):
+                    # 病假/产假是本地维护的状态，源表派生值（在职/试用期）
+                    # 不得覆盖；离职始终生效（源表离职日期为权威事实）
+                    continue
+                if getattr(existing, key) != value:
+                    setattr(existing, key, value)
+                    changed = True
+            if existing.is_deleted:
+                existing.is_deleted = False
+                changed = True
+            if existing.feishu_record_id != record_id:
+                existing.feishu_record_id = record_id
+                changed = True
+            # 无变化不刷新时间戳：否则每晚对全部员工产生无谓 UPDATE
+            # （updated_at 同步漂移）。feishu_synced_at 语义=最近一次变更同步时间。
+            if changed:
+                existing.feishu_synced_at = today
+            if flush:
+                await self.session.flush()
+            return existing, False
+
+        insert_data = {k: v for k, v in data.items() if v is not None}
+        insert_data.setdefault("department", "未分类")
+        insert_data.setdefault("position", "")
+        insert_data.setdefault("name", "")
+        insert_data.setdefault("hire_date", today)
+        insert_data.setdefault("status", "在职")
+        employee = Employee(**insert_data)
+        employee.feishu_record_id = record_id
+        employee.feishu_synced_at = today
+        self.session.add(employee)
+        if by_number is not None:
+            # 同工号在源表重复出现时，后续行必须走更新分支（不能重复插入）
+            by_number[employee_number] = employee
+        if flush:
+            await self.session.flush()  # INSERT 走 RETURNING，id/时间戳已回填
+        return employee, True
+
+    async def soft_delete_by_feishu_record_id(self, record_id: str) -> bool:
+        """按 record_id 软删除本地员工（飞书侧删行）。返回是否有行被删除。"""
+        employee = await self.get_by_feishu_record_id(record_id)
+        if employee is None:
+            return False
+        employee.is_deleted = True
+        await self.session.flush()
+        return True
+
+    # 可枚举字段：筛选下拉选项从现有数据聚合（filter-options 端点与此处保持一致）
+    ENUM_FILTER_FIELDS: tuple[str, ...] = (
+        "department", "position", "duty", "job_category", "level", "report_grade",
+        "status_category", "gender", "ethnicity", "native_place", "marital_status",
+        "household_type", "education", "degree_type", "classification",
+        "school", "major", "hr_analysis",
+    )
+
     async def list_employees(
         self,
         *,
         department: str | None = None,
         status: str | None = None,
         keyword: str | None = None,
-        team: str | None = None,
         position: str | None = None,
+        duty: str | None = None,
         job_category: str | None = None,
         level: str | None = None,
-        gender: str | None = None,
-        education: str | None = None,
-        political_status: str | None = None,
-        marital_status: str | None = None,
+        report_grade: str | None = None,
         status_category: str | None = None,
+        gender: str | None = None,
+        ethnicity: str | None = None,
+        native_place: str | None = None,
+        marital_status: str | None = None,
+        household_type: str | None = None,
+        education: str | None = None,
+        degree_type: str | None = None,
+        classification: str | None = None,
+        school: str | None = None,
+        major: str | None = None,
+        hr_analysis: str | None = None,
+        domain_account: str | None = None,
+        departure_reason: str | None = None,
         age_min: int | None = None,
         age_max: int | None = None,
         birth_year_min: int | None = None,
         birth_year_max: int | None = None,
         hire_date_after: date | None = None,
         hire_date_before: date | None = None,
-        factory_entry_date_after: date | None = None,
-        factory_entry_date_before: date | None = None,
         work_start_date_after: date | None = None,
         work_start_date_before: date | None = None,
+        graduation_date_after: date | None = None,
+        graduation_date_before: date | None = None,
+        departure_date_after: date | None = None,
+        departure_date_before: date | None = None,
+        contract_start_date_after: date | None = None,
+        contract_start_date_before: date | None = None,
+        contract_end_date_after: date | None = None,
+        contract_end_date_before: date | None = None,
         include_uncategorized: bool = False,
+        uncategorized_only: bool = False,
         departments: set[str] | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -94,51 +250,73 @@ class EmployeeRepository:
 
         if departments:
             # 多部门数据范围：SQL 层过滤（先过滤后分页，避免页内容稀疏/为空）
-            conds = [Employee.department.in_(departments)]
-            if include_uncategorized:
-                conds.append(and_(Employee.department == "未分类", Employee.actual_department.in_(departments)))
-            stmt = stmt.where(or_(*conds))
+            stmt = stmt.where(Employee.department.in_(departments))
         elif department:
-            # 体现部门 + 兼任部门；include_uncategorized 时额外纳入「未分类」人员按实际部门归属
-            conds = [
-                Employee.department.ilike(f"{department}%"),
-                Employee.concurrent_departments.ilike(f"%{department}%"),
-            ]
-            if include_uncategorized:
-                conds.append(and_(Employee.department == "未分类", Employee.actual_department.ilike(f"{department}%")))
-            stmt = stmt.where(or_(*conds))
+            stmt = stmt.where(Employee.department.ilike(f"{department}%"))
+        if uncategorized_only:
+            # 「未归类」版面：部门为空，或部门名不在部门表中（含部门已删除）。
+            # 仅当未指定具体部门时生效，避免与部门筛选互相打架。
+            if not departments and not department:
+                categorized = select(HrDepartment.name).where(HrDepartment.is_deleted.is_(False))
+                stmt = stmt.where(
+                    or_(
+                        Employee.department.is_(None),
+                        Employee.department == "",
+                        Employee.department.not_in(categorized),
+                    )
+                )
         if status:
             stmt = stmt.where(Employee.status == status)
-        else:
-            # 默认排除待审批和离职员工，只有显式筛选时才显示
-            stmt = stmt.where(Employee.status != "待审批", Employee.status != "离职")
+        # 无显式状态筛选时不过滤状态：与源表全量对齐（仅软删不计，口径同看板）
         if keyword:
             stmt = stmt.where(
                 Employee.name.ilike(f"{keyword}%")
                 | Employee.employee_number.ilike(f"{keyword}%")
             )
-        if team:
-            stmt = stmt.where(Employee.team == team)
         if position:
-            stmt = stmt.where(Employee.position.ilike(f"{position}%"))
+            # 筛选下拉传精确值（选项来自 filter-options 聚合的现有数据）
+            stmt = stmt.where(Employee.position == position)
+        if duty:
+            stmt = stmt.where(Employee.duty == duty)
         if job_category:
             stmt = stmt.where(Employee.job_category == job_category)
         if level:
             stmt = stmt.where(Employee.level == level)
-        if gender:
-            stmt = stmt.where(Employee.gender == gender)
-        if education:
-            stmt = stmt.where(Employee.education == education)
-        if political_status:
-            stmt = stmt.where(Employee.political_status == political_status)
-        if marital_status:
-            stmt = stmt.where(Employee.marital_status == marital_status)
+        if report_grade:
+            stmt = stmt.where(Employee.report_grade == report_grade)
         if status_category:
             stmt = stmt.where(Employee.status_category == status_category)
+        if gender:
+            stmt = stmt.where(Employee.gender == gender)
+        if ethnicity:
+            stmt = stmt.where(Employee.ethnicity == ethnicity)
+        if native_place:
+            stmt = stmt.where(Employee.native_place == native_place)
+        if marital_status:
+            stmt = stmt.where(Employee.marital_status == marital_status)
+        if household_type:
+            stmt = stmt.where(Employee.household_type == household_type)
+        if education:
+            stmt = stmt.where(Employee.education == education)
+        if degree_type:
+            stmt = stmt.where(Employee.degree_type == degree_type)
+        if classification:
+            stmt = stmt.where(Employee.classification == classification)
+        if school:
+            stmt = stmt.where(Employee.school == school)
+        if major:
+            stmt = stmt.where(Employee.major == major)
+        if hr_analysis:
+            stmt = stmt.where(Employee.hr_analysis == hr_analysis)
+        if domain_account:
+            stmt = stmt.where(Employee.domain_account.ilike(f"{domain_account}%"))
+        if departure_reason:
+            stmt = stmt.where(Employee.departure_reason.ilike(f"%{departure_reason}%"))
+        # age 列已下线：年龄筛选换算为出生年份区间（近似年龄，与看板口径一致）
         if age_min is not None:
-            stmt = stmt.where(Employee.age >= age_min)
+            stmt = stmt.where(Employee.birth_year <= date.today().year - age_min)
         if age_max is not None:
-            stmt = stmt.where(Employee.age <= age_max)
+            stmt = stmt.where(Employee.birth_year >= date.today().year - age_max)
         if birth_year_min is not None:
             stmt = stmt.where(Employee.birth_year >= birth_year_min)
         if birth_year_max is not None:
@@ -147,30 +325,34 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.hire_date >= hire_date_after)
         if hire_date_before:
             stmt = stmt.where(Employee.hire_date <= hire_date_before)
-        if factory_entry_date_after:
-            stmt = stmt.where(Employee.factory_entry_date >= factory_entry_date_after)
-        if factory_entry_date_before:
-            stmt = stmt.where(Employee.factory_entry_date <= factory_entry_date_before)
         if work_start_date_after:
             stmt = stmt.where(Employee.work_start_date >= work_start_date_after)
         if work_start_date_before:
             stmt = stmt.where(Employee.work_start_date <= work_start_date_before)
+        if graduation_date_after:
+            stmt = stmt.where(Employee.graduation_date >= graduation_date_after)
+        if graduation_date_before:
+            stmt = stmt.where(Employee.graduation_date <= graduation_date_before)
+        if departure_date_after:
+            stmt = stmt.where(Employee.departure_date >= departure_date_after)
+        if departure_date_before:
+            stmt = stmt.where(Employee.departure_date <= departure_date_before)
+        if contract_start_date_after:
+            stmt = stmt.where(Employee.contract_start_date >= contract_start_date_after)
+        if contract_start_date_before:
+            stmt = stmt.where(Employee.contract_start_date <= contract_start_date_before)
+        if contract_end_date_after:
+            stmt = stmt.where(Employee.contract_end_date >= contract_end_date_after)
+        if contract_end_date_before:
+            stmt = stmt.where(Employee.contract_end_date <= contract_end_date_before)
 
         # 并行执行 COUNT 和数据查询，减少 TTFB
         count_stmt = select(func.count()).select_from(stmt.subquery())
         sort_column = getattr(Employee, sort_by, Employee.created_at)
         order_func = desc if sort_order == "desc" else asc
 
-        # 排序时，"未分类"部门的员工按实际部门作为二级排序，让同实际部门的人聚在一起
-        sort_expr = case(
-            (Employee.department == "未分类", Employee.actual_department),
-            else_=None,
-        )
         data_stmt = (
-            stmt.order_by(
-                order_func(sort_column),
-                asc(sort_expr),
-            )
+            stmt.order_by(order_func(sort_column))
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -182,6 +364,31 @@ class EmployeeRepository:
 
         data_result = await self.session.execute(data_stmt)
         return list(data_result.scalars().all()), total
+
+    async def get_filter_options(
+        self,
+        *,
+        departments: set[str] | None = None,
+        employee_number: str | None = None,
+    ) -> dict[str, list[str]]:
+        """聚合各可枚举字段的现有取值，作为筛选下拉选项。
+
+        员工表体量小（数百行），一次查询拉所需列后内存去重即可；
+        选项跟随数据变化，避免硬编码枚举过期。
+        """
+        cols = [getattr(Employee, f) for f in self.ENUM_FILTER_FIELDS]
+        stmt = select(*cols).where(Employee.is_deleted.is_(False))
+        if departments:
+            stmt = stmt.where(Employee.department.in_(departments))
+        if employee_number:
+            # self_only：选项收敛到本人档案的字段值
+            stmt = stmt.where(Employee.employee_number == employee_number)
+        rows = (await self.session.execute(stmt)).all()
+        options: dict[str, list[str]] = {}
+        for field in self.ENUM_FILTER_FIELDS:
+            values = {getattr(row, field) for row in rows} - {None, ""}
+            options[field] = sorted(values)
+        return options
 
     async def create(self, employee: Employee) -> Employee:
         self.session.add(employee)
@@ -283,15 +490,12 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.department.ilike(f"{filters['department']}%"))
         if filters.get("status"):
             stmt = stmt.where(Employee.status == filters["status"])
-        else:
-            stmt = stmt.where(Employee.status.not_in(["待审批", "离职"]))
+        # 无显式状态筛选时不过滤状态（口径同列表/看板：与源表全量对齐）
         if filters.get("keyword"):
             stmt = stmt.where(
                 Employee.name.ilike(f"{filters['keyword']}%")
                 | Employee.employee_number.ilike(f"{filters['keyword']}%")
             )
-        if filters.get("team"):
-            stmt = stmt.where(Employee.team == filters["team"])
         if filters.get("position"):
             stmt = stmt.where(Employee.position.ilike(f"{filters['position']}%"))
         if filters.get("job_category"):
@@ -302,16 +506,15 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.gender == filters["gender"])
         if filters.get("education"):
             stmt = stmt.where(Employee.education == filters["education"])
-        if filters.get("political_status"):
-            stmt = stmt.where(Employee.political_status == filters["political_status"])
         if filters.get("marital_status"):
             stmt = stmt.where(Employee.marital_status == filters["marital_status"])
         if filters.get("status_category"):
             stmt = stmt.where(Employee.status_category == filters["status_category"])
+        # age 列已下线：年龄筛选换算为出生年份区间（近似年龄，与看板口径一致）
         if filters.get("age_min") is not None:
-            stmt = stmt.where(Employee.age >= filters["age_min"])
+            stmt = stmt.where(Employee.birth_year <= date.today().year - filters["age_min"])
         if filters.get("age_max") is not None:
-            stmt = stmt.where(Employee.age <= filters["age_max"])
+            stmt = stmt.where(Employee.birth_year >= date.today().year - filters["age_max"])
         if filters.get("birth_year_min") is not None:
             stmt = stmt.where(Employee.birth_year >= filters["birth_year_min"])
         if filters.get("birth_year_max") is not None:
@@ -320,14 +523,6 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.hire_date >= filters["hire_date_after"])
         if filters.get("hire_date_before"):
             stmt = stmt.where(Employee.hire_date <= filters["hire_date_before"])
-        if filters.get("factory_entry_date_after"):
-            stmt = stmt.where(
-                Employee.factory_entry_date >= filters["factory_entry_date_after"]
-            )
-        if filters.get("factory_entry_date_before"):
-            stmt = stmt.where(
-                Employee.factory_entry_date <= filters["factory_entry_date_before"]
-            )
         if filters.get("work_start_date_after"):
             stmt = stmt.where(
                 Employee.work_start_date >= filters["work_start_date_after"]
@@ -437,62 +632,6 @@ class DepartmentRepository:
         department.is_deleted = True
         await self.session.flush()
 
-class TeamRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
-
-    async def get_by_id(self, team_id: UUID) -> Team | None:
-        result = await self.session.execute(
-            select(Team)
-            .where(Team.id == team_id, Team.is_deleted.is_(False))
-            .options(selectinload(Team.department))
-        )
-        return result.scalar_one_or_none()
-
-    async def list_teams(
-        self,
-        *,
-        department_id: UUID | None = None,
-        keyword: str | None = None,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> tuple[list[Team], int]:
-        stmt = select(Team).where(Team.is_deleted.is_(False)).options(
-            selectinload(Team.department)
-        )
-
-        if department_id:
-            stmt = stmt.where(Team.department_id == department_id)
-        if keyword:
-            stmt = stmt.where(
-                Team.name.ilike(f"%{keyword}%")
-                | Team.code.ilike(f"%{keyword}%")
-            )
-
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        total_result = await self.session.execute(count_stmt)
-        total = total_result.scalar() or 0
-
-        stmt = stmt.order_by(asc(Team.created_at))
-        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
-
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all()), total
-
-    async def create(self, team: Team) -> Team:
-        self.session.add(team)
-        await self.session.flush()
-        return team
-
-    async def update(self, team: Team) -> Team:
-        await self.session.flush()
-        result = await self.session.execute(select(Team).where(Team.id == team.id))
-        return result.scalar_one()
-
-    async def soft_delete(self, team: Team) -> None:
-        team.is_deleted = True
-        await self.session.flush()
-
 class OffboardingRecordRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -570,38 +709,42 @@ class OnboardingRecordRepository:
         department: str | None = None,
         position: str | None = None,
         is_employed: str | None = None,
+        year: int | None = None,
         keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
-        sort_by: str = "created_at",
+        sort_by: str = "hire_date",
         sort_order: str = "desc",
-        days: int = 7,
-    ) -> tuple[list[OnboardingRecord], int]:
-        from datetime import datetime, timedelta
-        stmt = select(OnboardingRecord).where(OnboardingRecord.is_deleted.is_(False))
+    ) -> tuple[list[Any], int]:
+        """入职台账列表视图：数据源=员工档案（飞书全量镜像，按入职年份自动归类），
+        台账表只按工号补充 source（系统审批/飞书同步/招聘入职）。"""
+        stmt = select(Employee).where(Employee.is_deleted.is_(False))
 
-        # 七天自动清空：只显示最近 N 天内创建的记录
-        if days > 0:
-            cutoff = datetime.now(UTC) - timedelta(days=days)
-            stmt = stmt.where(OnboardingRecord.created_at >= cutoff)
+        # 年份归类：按入职日期所在年份筛选
+        if year:
+            stmt = stmt.where(func.extract("year", Employee.hire_date) == year)
 
         if department:
-            stmt = stmt.where(OnboardingRecord.department == department)
+            stmt = stmt.where(Employee.department == department)
         if position:
-            stmt = stmt.where(OnboardingRecord.position.ilike(f"%{position}%"))
+            stmt = stmt.where(Employee.position.ilike(f"%{position}%"))
         if is_employed:
-            stmt = stmt.where(OnboardingRecord.is_employed == is_employed)
+            # 员工档案无 is_employed 列，按 status 派生：非「离职」即在职
+            if is_employed == "是":
+                stmt = stmt.where(or_(Employee.status != "离职", Employee.status.is_(None)))
+            else:
+                stmt = stmt.where(Employee.status == "离职")
         if keyword:
             stmt = stmt.where(
-                OnboardingRecord.name.ilike(f"%{keyword}%")
-                | OnboardingRecord.employee_number.ilike(f"%{keyword}%")
+                Employee.name.ilike(f"%{keyword}%")
+                | Employee.employee_number.ilike(f"%{keyword}%")
             )
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
-        sort_column = getattr(OnboardingRecord, sort_by, OnboardingRecord.created_at)
+        sort_column = getattr(Employee, sort_by, Employee.hire_date)
         order_func = desc if sort_order == "desc" else asc
         data_stmt = (
-            stmt.order_by(order_func(sort_column))
+            stmt.order_by(order_func(sort_column).nulls_last())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -610,7 +753,29 @@ class OnboardingRecordRepository:
         total = total_result.scalar() or 0
 
         data_result = await self.session.execute(data_stmt)
-        return list(data_result.scalars().all()), total
+        employees = list(data_result.scalars().all())
+        return employees, total
+
+    async def ledger_sources(self, employee_numbers: list[str]) -> dict[str, str]:
+        """按工号聚合台账记录的 source（每工号取 created_at 最新一条）。"""
+        if not employee_numbers:
+            return {}
+        latest = (
+            select(
+                OnboardingRecord.employee_number,
+                OnboardingRecord.source,
+            )
+            .where(
+                OnboardingRecord.is_deleted.is_(False),
+                OnboardingRecord.employee_number.in_(employee_numbers),
+            )
+            .order_by(OnboardingRecord.employee_number, OnboardingRecord.created_at.desc())
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(latest.c.employee_number, latest.c.source).distinct(latest.c.employee_number)
+        )
+        return {row[0]: row[1] for row in result.all() if row[1]}
 
     async def create(self, record: OnboardingRecord) -> OnboardingRecord:
         self.session.add(record)
@@ -621,6 +786,18 @@ class OnboardingRecordRepository:
         await self.session.flush()
         result = await self.session.execute(select(OnboardingRecord).where(OnboardingRecord.id == record.id))
         return result.scalar_one()
+
+    async def list_hire_years(self, departments: set[str] | None = None) -> list[int]:
+        """聚合员工档案中入职日期的可用年份（降序），供筛选下拉。"""
+        stmt = select(func.extract("year", Employee.hire_date).label("year")).where(
+            Employee.is_deleted.is_(False),
+            Employee.hire_date.isnot(None),
+        )
+        if departments is not None:
+            stmt = stmt.where(Employee.department.in_(departments))
+        stmt = stmt.distinct().order_by(func.extract("year", Employee.hire_date).desc())
+        result = await self.session.execute(stmt)
+        return [int(row.year) for row in result.all()]
 
     async def count_total(self) -> int:
         result = await self.session.execute(
@@ -687,6 +864,24 @@ class DepartureRecordRepository:
 
         data_result = await self.session.execute(data_stmt)
         return list(data_result.scalars().all()), total
+
+    async def get_filter_options(
+        self, *, departments: set[str] | None = None
+    ) -> dict[str, list[str]]:
+        """聚合部门/离职类型的现有取值，作为筛选下拉选项（跟随飞书源表变化）。"""
+        stmt = (
+            select(DepartureRecord.department, DepartureRecord.offboarding_type)
+            .where(DepartureRecord.is_deleted.is_(False))
+        )
+        if departments:
+            stmt = stmt.where(DepartureRecord.department.in_(departments))
+        rows = (await self.session.execute(stmt)).all()
+        dept_values = {r.department for r in rows} - {None, ""}
+        type_values = {r.offboarding_type for r in rows} - {None, ""}
+        return {
+            "departments": sorted(dept_values),
+            "offboarding_types": sorted(type_values),
+        }
 
     async def create(self, record: DepartureRecord) -> DepartureRecord:
         self.session.add(record)
@@ -803,10 +998,17 @@ class TrainingLedgerPageRepository:
         return result.scalar_one_or_none()
 
     async def list_pages_with_department(self) -> list[tuple[TrainingLedgerPage, str | None]]:
-        """List all training ledger pages joined with employee department."""
+        """List all training ledger pages joined with roster department（培训名单口径）."""
+        from app.modules.hr.models import TrainingRosterProfile
         result = await self.session.execute(
-            select(TrainingLedgerPage, Employee.department)
-            .outerjoin(Employee, TrainingLedgerPage.employee_number == Employee.employee_number)
+            select(TrainingLedgerPage, TrainingRosterProfile.department)
+            .outerjoin(
+                TrainingRosterProfile,
+                and_(
+                    TrainingLedgerPage.employee_number == TrainingRosterProfile.employee_number,
+                    TrainingRosterProfile.is_deleted.is_(False),
+                ),
+            )
             .where(TrainingLedgerPage.is_deleted.is_(False))
         )
         return [(row[0], row[1]) for row in result.all()]
@@ -851,8 +1053,9 @@ class AnnualTrainingPlanRepository:
 
         if year is not None:
             stmt = stmt.where(AnnualTrainingPlan.year == year)
-        if departments:
+        if departments is not None:
             # 数据范围：授权部门 + 「厂级」（厂级培训所有部门可见）
+            # 空集合必须 fail-closed（in_([]) 生成恒假条件），不能退化为不过滤
             stmt = stmt.where(AnnualTrainingPlan.department.in_(departments))
         elif department:
             stmt = stmt.where(AnnualTrainingPlan.department.ilike(f"%{department}%"))
@@ -933,10 +1136,15 @@ class JobRequirementRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_all(self, *, status: str | None = None) -> list[JobRequirement]:
+    async def list_all(
+        self, *, status: str | None = None, departments: list[str] | None = None,
+    ) -> list[JobRequirement]:
         stmt = select(JobRequirement).where(JobRequirement.is_deleted.is_(False))
         if status:
             stmt = stmt.where(JobRequirement.status == status)
+        # 数据范围收敛（用人部门视角）：只看授权部门下的岗位需求
+        if departments is not None:
+            stmt = stmt.where(JobRequirement.department.in_(departments))
         stmt = stmt.order_by(desc(JobRequirement.created_at))
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -966,9 +1174,27 @@ class JobRequirementRepository:
         result = await self.session.execute(select(JobRequirement).where(JobRequirement.id == req.id))
         return result.scalar_one()
 
-    async def soft_delete(self, req_id: UUID) -> None:
+    async def soft_delete_with_candidates(self, req_id: UUID) -> dict:
+        """级联软删岗位及其名下候选人。
+
+        已入职候选人不清理——已生成员工档案与入职记录，需留作员工来源溯源。
+        返回 {candidates_removed, kept_hired} 供接口回显。
+        """
+        rows = list((await self.session.execute(
+            select(Candidate).where(
+                Candidate.job_requirement_id == req_id,
+                Candidate.is_deleted.is_(False),
+            )
+        )).scalars().all())
+        kept_hired = [c for c in rows if c.status == "已入职"]
+        removed = [c for c in rows if c.status != "已入职"]
+        if removed:
+            await self.session.execute(
+                update(Candidate).where(Candidate.id.in_([c.id for c in removed])).values(is_deleted=True)
+            )
         await self.session.execute(text("UPDATE hr.job_requirements SET is_deleted = true WHERE id = :id"), {"id": req_id})
         await self.session.flush()
+        return {"candidates_removed": len(removed), "kept_hired": len(kept_hired)}
 
     async def increment_hired_count(self, req_id: UUID) -> None:
         await self.session.execute(text("UPDATE hr.job_requirements SET hired_count = hired_count + 1 WHERE id = :id"), {"id": req_id})
@@ -990,6 +1216,7 @@ class CandidateRepository:
     async def list_all(
         self, *, job_requirement_id: UUID | None = None, status: str | None = None,
         keyword: str | None = None, candidate_type: str | None = None,
+        departments: list[str] | None = None, reviewer: str | None = None,
         page: int = 1, page_size: int = 100,
     ) -> tuple[list[Candidate], int]:
         stmt = select(Candidate).where(Candidate.is_deleted.is_(False))
@@ -1004,6 +1231,26 @@ class CandidateRepository:
                 Candidate.name.ilike(f"%{keyword}%"),
                 Candidate.phone.ilike(f"%{keyword}%"),
             ))
+        # 数据范围收敛（用人部门视角）：授权部门岗位下的候选人 ∪ 本人任审核人的候选人。
+        # departments 传空列表（self_only 等无部门范围）时仅剩 reviewer 条件。
+        scope_conds = []
+        if departments:
+            dept_jd_ids = select(JobRequirement.id).where(
+                JobRequirement.department.in_(departments),
+                JobRequirement.is_deleted.is_(False),
+            )
+            scope_conds.append(or_(
+                Candidate.department.in_(departments),
+                Candidate.job_requirement_id.in_(dept_jd_ids),
+            ))
+        if reviewer:
+            reviewed_ids = select(CandidateReview.candidate_id).where(
+                CandidateReview.reviewer == reviewer,
+                CandidateReview.is_deleted.is_(False),
+            )
+            scope_conds.append(Candidate.id.in_(reviewed_ids))
+        if scope_conds:
+            stmt = stmt.where(or_(*scope_conds))
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar() or 0
         data_stmt = stmt.order_by(desc(Candidate.created_at)).offset((page - 1) * page_size).limit(page_size)
@@ -1033,34 +1280,6 @@ class CandidateRepository:
         await self.session.flush()
         result = await self.session.execute(select(Candidate).where(Candidate.id == candidate.id))
         return result.scalar_one()
-
-    async def upsert(self, name: str, phone: str | None, email: str | None, data: dict) -> tuple[Candidate, bool]:
-        """按姓名+手机/邮箱查重 upsert，返回 (候选人, 是否新增)。
-
-        更新分支跳过 name/status/candidate_type：重复导入不重命名、不回退已有流程状态。
-        """
-        conditions = [Candidate.name == name, Candidate.is_deleted == False]
-        if phone:
-            conditions.append(Candidate.phone == phone)
-        if email:
-            conditions.append(Candidate.email == email)
-
-        rows = list((await self.session.execute(
-            select(Candidate).where(and_(*conditions)).order_by(Candidate.created_at)
-        )).scalars().all())
-        if len(rows) > 1:
-            raise ValueError("按姓名+手机/邮箱命中多条候选人记录，无法唯一定位，请补充电话或邮箱后重试")
-
-        if rows:
-            existing = rows[0]
-            for k, v in data.items():
-                if k in ("name", "status", "candidate_type"):
-                    continue
-                setattr(existing, k, v)
-            return await self.update(existing), False
-        else:
-            obj = Candidate(name=name, **data)
-            return await self.create(obj), True
 
     async def soft_delete(self, candidate_id: UUID) -> None:
         await self.session.execute(text("UPDATE hr.candidates SET is_deleted = true WHERE id = :id"), {"id": candidate_id})
@@ -1180,6 +1399,85 @@ class InterviewRepository:
         )
         return result.scalar_one_or_none()
 
+    async def find_time_conflicts(
+        self,
+        interviewer: str,
+        interview_date: date,
+        start_time: time,
+        end_time: time,
+        exclude_id: UUID | None = None,
+    ) -> list[Interview]:
+        """查同面试官同日时段重叠的未取消面试（双方起止时间齐全才参与判定）。"""
+        stmt = select(Interview).where(
+            Interview.is_deleted.is_(False),
+            Interview.interviewer == interviewer,
+            Interview.interview_date == interview_date,
+            Interview.status != "已取消",
+            Interview.start_time.isnot(None),
+            Interview.end_time.isnot(None),
+            # 区间重叠：起点早于对方结束 且 结点晚于对方开始（端点相接不算冲突）
+            Interview.start_time < end_time,
+            Interview.end_time > start_time,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Interview.id != exclude_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def search_overview(
+        self,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        candidate_name: str | None = None,
+        status: str | None = None,
+        candidate_id: UUID | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[tuple[Interview, str | None, str | None, InterviewFeedback | None, CandidateAnalysisReport | None]], int]:
+        """跨候选人面试总览：join 候选人姓名/岗位 + 人工评价 + AI 胜任度报告，返回 (行, 总数)。"""
+        conds = [Interview.is_deleted.is_(False)]
+        # 日期范围过滤：时间未定的面试（日期为空）始终保留——它们正需要在总览里被盯住
+        if date_from or date_to:
+            date_conds = []
+            if date_from:
+                date_conds.append(Interview.interview_date >= date_from)
+            if date_to:
+                date_conds.append(Interview.interview_date <= date_to)
+            conds.append(or_(Interview.interview_date.is_(None), and_(*date_conds)))
+        if candidate_name:
+            conds.append(Candidate.name.ilike(f"%{candidate_name}%"))
+        if status:
+            conds.append(Interview.status == status)
+        if candidate_id:
+            conds.append(Interview.candidate_id == candidate_id)
+
+        base = (
+            select(
+                Interview, Candidate.name, Candidate.position,
+                InterviewFeedback, CandidateAnalysisReport,
+            )
+            .outerjoin(Candidate, Interview.candidate_id == Candidate.id)
+            .outerjoin(InterviewFeedback, and_(
+                InterviewFeedback.interview_id == Interview.id,
+                InterviewFeedback.is_deleted.is_(False),
+            ))
+            .outerjoin(CandidateAnalysisReport, and_(
+                CandidateAnalysisReport.interview_id == Interview.id,
+                CandidateAnalysisReport.is_deleted.is_(False),
+            ))
+            .where(*conds)
+        )
+        total = (await self.session.execute(
+            select(func.count()).select_from(base.subquery())
+        )).scalar() or 0
+        rows = (await self.session.execute(
+            base.order_by(desc(Interview.interview_date), desc(Interview.start_time))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )).all()
+        return [(r[0], r[1], r[2], r[3], r[4]) for r in rows], int(total)
+
     async def create(self, interview: Interview) -> Interview:
         self.session.add(interview)
         await self.session.flush()
@@ -1191,8 +1489,25 @@ class InterviewRepository:
         return result.scalar_one()
 
     async def soft_delete(self, interview_id: UUID) -> None:
-        await self.session.execute(text("UPDATE hr.interviews SET is_deleted = true WHERE id = :id"), {"id": interview_id})
-        await self.session.flush()
+        """软删除（ORM 方式，随 UPDATE 触发 updated_at onupdate；取消面试已不走此方法，仅兜底保留）。"""
+        iv = await self.get_by_id(interview_id)
+        if iv:
+            iv.is_deleted = True
+            await self.session.flush()
+
+
+class InterviewFeedbackRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_by_interview(self, interview_id: UUID) -> InterviewFeedback | None:
+        result = await self.session.execute(
+            select(InterviewFeedback).where(
+                InterviewFeedback.interview_id == interview_id,
+                InterviewFeedback.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
 
 
 class CandidateAiEvaluationRepository:
@@ -1271,6 +1586,26 @@ class CandidateReviewRepository:
             .order_by(desc(CandidateReview.created_at))
         )
         return result.scalars().first()
+
+    async def exists_reviewer(self, candidate_id: UUID, reviewer: str | None) -> bool:
+        """该候选人是否存在指定审核人的审核记录（含已审结，用于详情访问校验）。"""
+        if not reviewer:
+            return False
+        result = await self.session.execute(
+            select(CandidateReview.id).where(
+                CandidateReview.candidate_id == candidate_id,
+                CandidateReview.reviewer == reviewer,
+                CandidateReview.is_deleted.is_(False),
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateReview]:
+        result = await self.session.execute(
+            select(CandidateReview).where(CandidateReview.candidate_id == candidate_id, CandidateReview.is_deleted.is_(False))
+            .order_by(desc(CandidateReview.created_at))
+        )
+        return list(result.scalars().all())
 
     async def get_by_id(self, review_id: UUID) -> CandidateReview | None:
         result = await self.session.execute(

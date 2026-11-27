@@ -176,7 +176,7 @@ class Department(BaseModel):
     name: Mapped[str] = mapped_column(String(200), nullable=False, comment="部门名称")
 
     # ── 负责人 & 自动提醒 ──
-    heads: Mapped[dict[str, Any] | None] = mapped_column(
+    heads: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB, default=list, server_default="'[]'::jsonb",
         comment="负责人列表 JSON: [{\"name\": \"张三\", \"feishu_open_id\": \"ou_xxx\"}]"
     )

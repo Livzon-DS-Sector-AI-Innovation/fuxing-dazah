@@ -9,6 +9,7 @@ import type {
   WorkOrderStatus,
   WorkOrderPriority,
   WorkOrderType,
+  WorkOrderPerspective,
   WorkOrderStatistics,
   SparePart,
   StockWarning,
@@ -86,6 +87,7 @@ export interface EquipmentStore {
   workOrderStatusFilter: WorkOrderStatus | ''
   workOrderPriorityFilter: WorkOrderPriority | ''
   workOrderTypeFilter: WorkOrderType | ''
+  workOrderPerspectiveFilter: WorkOrderPerspective | ''
   setWorkOrders: (orders: WorkOrder[]) => void
   setWorkOrderTotal: (total: number) => void
   setWorkOrderPage: (page: number) => void
@@ -95,6 +97,7 @@ export interface EquipmentStore {
   setWorkOrderStatusFilter: (status: WorkOrderStatus | '') => void
   setWorkOrderPriorityFilter: (priority: WorkOrderPriority | '') => void
   setWorkOrderTypeFilter: (type: WorkOrderType | '') => void
+  setWorkOrderPerspectiveFilter: (perspective: WorkOrderPerspective | '') => void
   workOrderDrawerOpen: boolean
   workOrderDetailOpen: boolean
   editingWorkOrder: WorkOrder | null
@@ -123,6 +126,8 @@ export interface EquipmentStore {
   sparePartPageSize: number
   sparePartLoading: boolean
   sparePartKeyword: string
+  sparePartStatusFilter: 'active' | 'inactive' | null
+  sparePartLowStockFilter: 'low' | null
   stockWarnings: StockWarning[]
   stockWarningsLoading: boolean
   setSpareParts: (parts: SparePart[]) => void
@@ -131,6 +136,8 @@ export interface EquipmentStore {
   setSparePartPageSize: (size: number) => void
   setSparePartLoading: (loading: boolean) => void
   setSparePartKeyword: (keyword: string) => void
+  setSparePartStatusFilter: (filter: 'active' | 'inactive' | null) => void
+  setSparePartLowStockFilter: (filter: 'low' | null) => void
   setStockWarnings: (warnings: StockWarning[]) => void
   setStockWarningsLoading: (loading: boolean) => void
   sparePartDrawerOpen: boolean
@@ -145,6 +152,18 @@ export interface EquipmentStore {
   stockInboundSparePartId: string | null
   openStockInboundDrawer: (sparePartId: string) => void
   closeStockInboundDrawer: () => void
+  stockOutboundDrawerOpen: boolean
+  stockOutboundSparePartId: string | null
+  openStockOutboundDrawer: (sparePartId: string) => void
+  closeStockOutboundDrawer: () => void
+  stockAdjustDrawerOpen: boolean
+  stockAdjustSparePartId: string | null
+  openStockAdjustDrawer: (sparePartId: string) => void
+  closeStockAdjustDrawer: () => void
+  stockSettingsDrawerOpen: boolean
+  stockSettingsSparePart: SparePart | null
+  openStockSettingsDrawer: (part: SparePart) => void
+  closeStockSettingsDrawer: () => void
 
   // ── 维护计划 ──
   maintenancePlans: MaintenancePlan[]
@@ -208,10 +227,6 @@ export interface EquipmentStore {
   repairEquipmentId: string | null
   openRepairDrawer: (equipmentId: string) => void
   closeRepairDrawer: () => void
-
-  // ── 超时配置 ──
-  claimTimeoutConfig: { emergency: number; high: number; medium: number; low: number }
-  setClaimTimeoutConfig: (config: { emergency: number; high: number; medium: number; low: number }) => void
 
   // ── 维修人员 ──
   maintainers: Maintainer[]

@@ -185,41 +185,45 @@ async def get_field_trend(
     node_code 兜底对齐；字段定义按家族归并（当前版本优先、旧版独有保留）。
     回流场景同批同节点有多条 completed 执行时取 finished_at 最新一条，
     与工段汇总/批次详情的取数口径保持一致；只返回至少有一个数据点的字段。
+    ``merged_routes`` 只列实际贡献数据点的前身路线，空结果不提示合并。
     """
     node = await repo.get_node_by_code(db, route_id, node_code)
     if node is None:
         return FieldTrendResponse(series=[], merged_routes=[])
 
     graph = await lineage_service.resolve_lineage(db, route_id)
-    family = next(
-        (f for f in (graph.families if graph else []) if f.rep.id == node.id), None,
-    )
+    if graph is None:
+        return FieldTrendResponse(series=[], merged_routes=[])
+    family = next((f for f in graph.families if f.rep.id == node.id), None)
     if family is None:
         return FieldTrendResponse(series=[], merged_routes=[])
-    merged_routes = graph.merged_route_names if graph else []
 
     numeric_defs = [
         d for d in graph.merged_defs.get(node.id, []) if d.data_type == "numeric"
     ]
+    # 当前版本把同名字段改成非数值类型时，旧版数值不进系列，也不提示合并
+    numeric_keys = {d.field_key for d in numeric_defs}
     executions = await exec_repo.list_completed_executions_by_nodes(db, family.node_ids)
     latest_by_batch = exec_repo.group_latest_completed_by_batch_node(executions)
     if not numeric_defs or not latest_by_batch:
-        return FieldTrendResponse(series=[], merged_routes=merged_routes)
+        return FieldTrendResponse(series=[], merged_routes=[])
 
     values = await exec_repo.get_field_values_by_executions(
         db, [e.id for e in latest_by_batch.values()]
     )
-    batch_no_by_id = {
-        b.id: b.batch_no
-        for b in await batch_repo.get_batches_by_ids(
-            db, sorted({e.batch_id for e in latest_by_batch.values()})
-        )
-    }
+    fetched_batches = await batch_repo.get_batches_by_ids(
+        db, sorted({e.batch_id for e in latest_by_batch.values()})
+    )
+    batch_no_by_id = {b.id: b.batch_no for b in fetched_batches}
     batch_by_exec = {e.id: e.batch_id for e in latest_by_batch.values()}
 
     points_by_field: dict[str, list[FieldTrendPoint]] = {}
+    contributing_route_ids: set[uuid.UUID] = set()
+    batch_route_by_id = {b.id: b.route_id for b in fetched_batches}
     for v in values:
         if v.value_numeric is None or v.filled_at is None:
+            continue
+        if v.field_key not in numeric_keys:
             continue
         batch_id = batch_by_exec.get(v.execution_id)
         if batch_id is None:
@@ -227,6 +231,7 @@ async def get_field_trend(
         batch_no = batch_no_by_id.get(batch_id)
         if batch_no is None:
             continue
+        contributing_route_ids.add(batch_route_by_id[batch_id])
         points_by_field.setdefault(v.field_key, []).append(
             FieldTrendPoint(batch_no=batch_no, filled_at=v.filled_at, value=v.value_numeric)
         )
@@ -240,6 +245,11 @@ async def get_field_trend(
         )
         for d in numeric_defs
         if d.field_key in points_by_field
+    ]
+    # 合并提示以实际贡献数据点的前身路线为准，与工段汇总口径一致
+    merged_routes = [
+        r.route_name for r in graph.chain[:-1]
+        if r.id in contributing_route_ids
     ]
     return FieldTrendResponse(series=series, merged_routes=merged_routes)
 
@@ -260,6 +270,7 @@ async def get_stage_summary(
     ``route_id=None`` 的全路线平铺模式不跨路线归并，保持每节点独立成列。
     ``start_date`` / ``end_date`` 为可选的日期范围筛选：取"首工序开始时间"
     落在范围内的批次，并连同它们的全部后序批次一并纳入汇总。
+    ``merged_routes`` 只列实际合并进结果行的前身路线，空结果不提示合并。
     """
     allowed: set[uuid.UUID] | None = None
     if not view_all:
@@ -286,13 +297,14 @@ async def get_stage_summary(
             f for f in graph.families
             if stage_name is None or f.rep.stage_name == stage_name
         ]
-        merged_route_names = graph.merged_route_names
 
-    # 权限锚定代表节点：授权随版本链延伸（当前路线有分配即可见前身路线的历史批次）
+    # 权限锚定家族成员：授权沿版本链双向延伸——当前路线或任一前身的同工序
+    # （家族成员）有分配即可见。只认代表节点会让克隆之后才加到前身路线的
+    # 授权"断代"，新版本视角下整个工序被过滤空。
     if allowed is not None:
-        families = [f for f in families if f.rep.id in allowed]
+        families = [f for f in families if f.member_id_set & allowed]
     if not families:
-        return StageSummaryOut(columns=[], rows=[], merged_routes=merged_route_names)
+        return StageSummaryOut(columns=[], rows=[])
 
     code_by_rep = {f.rep.id: f.rep.node_code for f in families}
     name_by_rep = {f.rep.id: f.rep.name for f in families}
@@ -401,9 +413,12 @@ async def get_stage_summary(
             if b.route_id in scope_route_ids
         ]
     else:
-        # ponytail: 以最近 500 个批次为汇总窗口，防全量历史扫描；批次量超窗口后改服务端分页
-        candidate_batches, _ = await batch_repo.list_batches(
-            db, None, None, None, page=1, page_size=500, order_by="created_at",
+        # 默认窗口：作用域路线（血缘链或平铺节点所属路线）内最近 500 个批次。
+        # 不能不按路线过滤——全系统批次量超窗口后，前身路线的历史批次会被
+        # 无关产品的批次挤出窗口，复刻路线的合并数据凭空清空。
+        # ponytail: 作用域批次量超窗口后改服务端分页
+        candidate_batches = await batch_repo.list_recent_batches_by_routes(
+            db, scope_route_ids, limit=500,
         )
     member_node_ids = [n.id for f in families for n in f.members]
     executions = await exec_repo.list_completed_executions_by_nodes(
@@ -462,4 +477,11 @@ async def get_stage_summary(
                 computed=computed_row,
             )
         )
+    # 合并提示以实际并进结果行的前身路线为准：一条批次都没进来时不提示，
+    # 避免"已合并历史版本批次"+空表的误导组合
+    if graph is not None:
+        row_route_ids = {b.route_id for b in batches}
+        merged_route_names = [
+            r.route_name for r in graph.chain[:-1] if r.id in row_route_ids
+        ]
     return StageSummaryOut(columns=columns, rows=rows, merged_routes=merged_route_names)

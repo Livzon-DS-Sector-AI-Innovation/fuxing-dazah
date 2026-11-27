@@ -6,6 +6,7 @@ import zhCN from 'antd/locale/zh_CN'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { antdTheme } from '@/lib/antd-theme'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { DemandPool } from './DemandPool'
 import { PlanOrderList } from './PlanOrderList'
 import { ScheduleView } from './ScheduleView'
@@ -26,7 +27,12 @@ function PlanningCenterInner() {
   return (
     <div className="h-full flex flex-col">
       {/* Header — 内容自适应高度，不参与 flex 伸缩 */}
-      <PageHeading className="shrink-0" title="计划中枢" subtitle="需求管理、计划制定与排程调度" />
+      <PageHeading
+        className="shrink-0"
+        title="计划中枢"
+        subtitle="需求管理、计划制定与排程调度"
+        actions={<PageGuideButton />}
+      />
 
       {/* Tabs — flex-1 填满剩余高度，CSS 全链路 flex 见 globals.css */}
       <Tabs

@@ -3,20 +3,19 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
-import { Employee } from '@/types/hr'
-import { fetchEmployeesAction, fetchPrejobTrainingPlan } from '@/actions/hr'
+import { fetchAllTrainingRoster, fetchPrejobTrainingPlan, type TrainingRosterRow } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 
 export default function PreJobPlanClient() {
   const { message } = App.useApp()
-  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employees, setEmployees] = useState<TrainingRosterRow[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     setLoading(true)
-    fetchEmployeesAction({ page_size: 200 })
+    fetchAllTrainingRoster()
       .then((res) => {
         setEmployees(res.data || [])
       })
@@ -28,7 +27,7 @@ export default function PreJobPlanClient() {
       })
   }, [])
 
-  const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId)
+  const selectedEmployee = employees.find((e) => e.employee_number === selectedEmployeeId)
 
   const handleExport = async () => {
     if (!selectedEmployee) {
@@ -37,7 +36,7 @@ export default function PreJobPlanClient() {
     }
     setDownloading(true)
     try {
-      const r = await fetchPrejobTrainingPlan(selectedEmployee.id, selectedEmployee.name)
+      const r = await fetchPrejobTrainingPlan(selectedEmployee.employee_number, selectedEmployee.name)
       downloadBase64File(r.base64, r.filename)
       message.success('岗前培训计划已导出')
     } catch (err: any) {
@@ -66,7 +65,7 @@ export default function PreJobPlanClient() {
             value={selectedEmployeeId || undefined}
             onChange={(value) => setSelectedEmployeeId(value)}
             options={employees.map((e) => ({
-              value: e.id,
+              value: e.employee_number,
               label: `${e.employee_number} - ${e.name} (${e.department})` }))}
             filterOption={(input, option) =>
               (option?.label ?? '').toLowerCase().includes(input.toLowerCase())

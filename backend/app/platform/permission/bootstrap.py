@@ -6,6 +6,7 @@
 3. 将配置的管理员工号绑定 super_admin 角色
 """
 
+import asyncio
 import logging
 
 from sqlalchemy import select as sa_select
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.platform.identity.models import User as IdentityUser
+from app.platform.permission.cache import invalidate_all_caches
 from app.platform.permission.models import Role
 from app.platform.permission.registry import PERMISSION_REGISTRY, sync_permissions
 from app.platform.permission.repository import PermissionRepository
@@ -57,6 +59,13 @@ async def bootstrap_permissions(db: AsyncSession, settings: Settings) -> None:
             )
 
     await db.commit()
+    # 权限定义可能刚新增（例如 system:feedback:manage），角色权限已重算。
+    # 清掉旧的用户权限缓存，避免前端 /me 已显示新权限、后端门禁仍按旧缓存 403。
+    try:
+        # Redis 不可达时不阻塞启动；最坏情况下旧缓存 5 分钟后自然过期。
+        await asyncio.wait_for(invalidate_all_caches(), timeout=5)
+    except Exception:
+        logger.warning("Permission cache invalidation failed", exc_info=True)
     logger.info(
         "Permission bootstrap: synced %d permissions, admin role ready",
         len(PERMISSION_REGISTRY),

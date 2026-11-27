@@ -48,6 +48,20 @@ export async function createTrainingLedger(
   })
 }
 
+/** 添加到台账前查重：返回「同工号 + 同培训日期 + 同培训主题」在库里已有未删除记录的工号 */
+export async function checkExistingTrainingLedgers(params: {
+  training_date: string
+  training_subject: string
+  employee_numbers: string[]
+}): Promise<{ data: { employee_numbers: string[] } }> {
+  const qs = new URLSearchParams({
+    training_date: params.training_date,
+    training_subject: params.training_subject,
+    employee_numbers: params.employee_numbers.join(','),
+  })
+  return fetchHrApi(`/hr/training-ledgers/check-existing?${qs.toString()}`, { errorMessage: '查重失败' })
+}
+
 export async function updateTrainingLedger(
   id: string,
   data: TrainingLedgerUpdateInput

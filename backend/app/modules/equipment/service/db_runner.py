@@ -1,4 +1,4 @@
-"""后台任务 DB 工具 — 在独立线程事件循环中运行为步 DB 操作。
+"""后台任务 DB 工具 — 在独立线程事件循环中运行异步 DB 操作。
 
 用于 WebSocket / 后台任务等不在 FastAPI 请求生命周期内的场景，
 绕开 ProactorEventLoop 下的 greenlet 上下文冲突。

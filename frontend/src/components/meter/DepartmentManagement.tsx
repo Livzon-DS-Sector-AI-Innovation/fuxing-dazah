@@ -16,9 +16,14 @@ import {
   updateMeterSettings,
 } from '@/actions/meter'
 import dayjs, { Dayjs } from 'dayjs'
+import { MeterPageHeader } from './MeterPageHeader'
+import { usePermission } from '@/hooks/usePermission'
+import styles from './MeterModule.module.css'
 
 export function DepartmentManagement() {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('meter:config:manage')
   const [departments, setDepartments] = useState<DepartmentItem[]>([])
   const [loading, setLoading] = useState(false)
   const [source, setSource] = useState<'instrument' | 'gas_detector'>('instrument')
@@ -217,7 +222,7 @@ export function DepartmentManagement() {
           {heads.map((h) => (
             <Tag
               key={h.feishu_open_id}
-              closable
+              closable={canManage}
               onClose={(e) => {
                 e.preventDefault()
                 removeHead(record, h)
@@ -226,14 +231,16 @@ export function DepartmentManagement() {
               {h.name}
             </Tag>
           ))}
-          <Button
-            size="small"
-            type="dashed"
-            icon={<UserAddOutlined />}
-            onClick={() => openPersonnelSelect(record)}
-          >
-            {heads.length === 0 ? '添加' : ''}
-          </Button>
+          {canManage && (
+            <Button
+              size="small"
+              type="dashed"
+              icon={<UserAddOutlined />}
+              onClick={() => openPersonnelSelect(record)}
+            >
+              {heads.length === 0 ? '添加' : ''}
+            </Button>
+          )}
         </Space>
       ),
     },
@@ -245,6 +252,7 @@ export function DepartmentManagement() {
       render: (v: boolean, record: DepartmentItem) => (
         <Switch
           checked={v}
+          disabled={!canManage}
           onChange={() => handleToggleAutoNotify(record)}
         />
       ),
@@ -253,7 +261,7 @@ export function DepartmentManagement() {
       title: '关联记录数', dataIndex: 'record_count', width: 100, align: 'center',
       render: (v: number) => v > 0 ? v : '-',
     },
-    {
+    ...(canManage ? [{
       title: '操作', width: 150,
       render: (_: unknown, record: DepartmentItem) => (
         <Space>
@@ -269,12 +277,13 @@ export function DepartmentManagement() {
           </Popconfirm>
         </Space>
       ),
-    },
+    }] : []),
   ]
 
   return (
-    <div style={{ padding: 24 }}>
-      <h2>部门管理</h2>
+    <div>
+      <MeterPageHeader title="部门与提醒规则" description="按台账来源维护责任部门、负责人和自动提醒策略。" eyebrow="ORGANIZATION CONTROL" />
+      <div className={styles.managementFrame}>
 
       <Tabs
         activeKey={source}
@@ -287,7 +296,7 @@ export function DepartmentManagement() {
 
       <div style={{ marginBottom: 16 }}>
         <Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增部门</Button>
+          {canManage && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增部门</Button>}
           <span style={{ color: '#888' }}>
             <span style={{ marginRight: 8 }}>每日提醒时间：</span>
             <TimePicker
@@ -296,6 +305,7 @@ export function DepartmentManagement() {
               onChange={handleTimeChange}
               minuteStep={5}
               allowClear={false}
+              disabled={!canManage}
             />
           </span>
         </Space>
@@ -387,6 +397,7 @@ export function DepartmentManagement() {
           )}
         </div>
       </Modal>
+      </div>
     </div>
   )
 }

@@ -359,8 +359,8 @@ async def generate_due_work_orders(
                     plan.frequency,
                     plan.frequency_unit,
                 )
-                # ponytail: line 337 already sets last_generated_date to the
-                # pre-advance value; don't overwrite with the future date.
+                # ponytail: last_generated_date 刚设为推进前的到期日，
+                # 不要在推进 next_maintenance_date 后回头覆盖成未来日期。
             await db.flush()
         else:
             # 全部设备生成失败时也更新防重日期，避免下次调度无限重试

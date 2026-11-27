@@ -21,6 +21,7 @@ import {
 } from '@/lib/api/production-client'
 import type { IntermediateType, MaterialMovement } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { PageHeading } from '@/components/shared/PageHeading'
 
 // ── 设计令牌（来自 DESIGN.md） ──
@@ -552,7 +553,11 @@ function MaterialsContent() {
   return (
     <div>
       {/* 页头 */}
-      <PageHeading title="产出物流水" subtitle="追踪批次库存与物料追溯" />
+      <PageHeading
+        title="产出物流水"
+        subtitle="追踪批次库存与物料追溯"
+        actions={<PageGuideButton />}
+      />
 
       {/* 双栏布局 */}
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>

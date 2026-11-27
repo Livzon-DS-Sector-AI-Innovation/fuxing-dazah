@@ -1,12 +1,14 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Card, Popconfirm, Space, Table, Tag } from 'antd'
-import { EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
+import { App, Button, Card, Popconfirm, Space, Table, Tag, Tooltip } from 'antd'
+import { EditOutlined, DeleteOutlined, SearchOutlined, BellOutlined } from '@ant-design/icons'
+import Link from 'next/link'
 import { fetchQaAssessments, fetchQaAssessmentDetail, downloadQaAssessmentRecord, deleteQaAssessment } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
 import { QaAssessment, QaAssessmentScore } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 export default function QaAssessmentClient() {
   const { message } = App.useApp()
@@ -21,6 +23,8 @@ export default function QaAssessmentClient() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailScores, setDetailScores] = useState<QaAssessmentScore[]>([])
   const [currentSubject, setCurrentSubject] = useState('')
+  // 行内「记录表」下载按钮的 loading，按记录 id 区分
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
 
   const loadList = useCallback(async (p = 1) => {
     setLoading(true)
@@ -46,12 +50,15 @@ export default function QaAssessmentClient() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">问答考核历史</h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          历史考核场次及成绩查询；新建考核请前往「培训通知」页
-        </p>
-      </div>
+      <PageHeader
+        title="考核历史"
+        description="历史考核场次及成绩查询"
+        actions={
+          <Link href="/hr/training/notification">
+            <Button type="primary" icon={<BellOutlined />}>去培训通知发起考核</Button>
+          </Link>
+        }
+      />
       <Card>
         <Table
           rowKey="id" loading={loading} dataSource={list}
@@ -67,8 +74,13 @@ export default function QaAssessmentClient() {
                 <Space size="small" wrap>
                   <Button size="small" icon={<SearchOutlined />} onClick={() => viewDetail(a)}>成绩</Button>
                   {canExport && (
-                    <Button size="small" icon={<EditOutlined />}
-                      onClick={async () => { try { const r = await downloadQaAssessmentRecord(a.id); downloadBase64File(r.base64, r.filename); message.success('已下载') } catch (err: any) { message.error(err.message || '下载失败') } }}>
+                    <Button size="small" icon={<EditOutlined />} loading={downloadingId === a.id}
+                      onClick={async () => {
+                        setDownloadingId(a.id)
+                        try { const r = await downloadQaAssessmentRecord(a.id); downloadBase64File(r.base64, r.filename); message.success('已下载') }
+                        catch (err: any) { message.error(err.message || '下载失败') }
+                        finally { setDownloadingId(null) }
+                      }}>
                       记录表
                     </Button>
                   )}
@@ -77,7 +89,9 @@ export default function QaAssessmentClient() {
                       try { await deleteQaAssessment(a.id); message.success('已删除'); loadList(page) }
                       catch (err: any) { message.error(err.message || '删除失败') }
                     }}>
-                      <Button size="small" danger icon={<DeleteOutlined />} />
+                      <Tooltip title="删除">
+                        <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+                      </Tooltip>
                     </Popconfirm>
                   )}
                 </Space>

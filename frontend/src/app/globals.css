@@ -19,6 +19,11 @@
   --color-brand-navy: #0a1530;
   --color-brand-navy-deep: #070f24;
   --color-brand-navy-mid: #1a2a52;
+  /* 主色浅底（antd colorPrimaryBg）与链接/强调色 */
+  --color-primary-bg: #ede9f8;
+  --color-link-blue: #0075de;
+  --color-brand-teal: #2a9d99;
+  --color-brand-purple: #7b3ff2;
 
   /* Surface */
   --color-canvas: #ffffff;
@@ -27,6 +32,19 @@
   --color-hairline: #e5e3df;
   --color-hairline-soft: #ede9e4;
   --color-hairline-strong: #c8c4be;
+  /* Pastel tints（DESIGN.md card-tint-*，状态/分类 pill 的底色） */
+  --color-tint-rose: #fde0ec;
+  --color-tint-peach: #ffe8d4;
+  --color-tint-gray: #f0eeec;
+  --color-tint-mint: #d9f3e1;
+  --color-tint-sky: #dcecfa;
+  --color-tint-lavender: #e6e0f5;
+  /* tint 加深一档：盖章/卡片需要比底色更实的一条轮廓线 */
+  --color-tint-rose-deep: #f3b6bb;
+  --color-tint-peach-deep: #f4cba6;
+  --color-tint-mint-deep: #b3e3c3;
+  /* 深一档的成功文字色：浅 mint 底上 --color-success 对比度不够 */
+  --color-success-deep: #12812a;
 
   /* Text */
   --color-ink-deep: #000000;
@@ -108,12 +126,26 @@
   --color-brand-navy: var(--color-brand-navy);
   --color-brand-navy-deep: var(--color-brand-navy-deep);
   --color-brand-navy-mid: var(--color-brand-navy-mid);
+  --color-primary-bg: var(--color-primary-bg);
+  --color-link-blue: var(--color-link-blue);
+  --color-brand-teal: var(--color-brand-teal);
+  --color-brand-purple: var(--color-brand-purple);
   --color-canvas: var(--color-canvas);
   --color-surface: var(--color-surface);
   --color-surface-soft: var(--color-surface-soft);
   --color-hairline: var(--color-hairline);
   --color-hairline-soft: var(--color-hairline-soft);
   --color-hairline-strong: var(--color-hairline-strong);
+  --color-tint-rose: var(--color-tint-rose);
+  --color-tint-peach: var(--color-tint-peach);
+  --color-tint-gray: var(--color-tint-gray);
+  --color-tint-mint: var(--color-tint-mint);
+  --color-tint-sky: var(--color-tint-sky);
+  --color-tint-lavender: var(--color-tint-lavender);
+  --color-tint-rose-deep: var(--color-tint-rose-deep);
+  --color-tint-peach-deep: var(--color-tint-peach-deep);
+  --color-tint-mint-deep: var(--color-tint-mint-deep);
+  --color-success-deep: var(--color-success-deep);
   --color-ink-deep: var(--color-ink-deep);
   --color-ink: var(--color-ink);
   --color-charcoal: var(--color-charcoal);
@@ -283,21 +315,31 @@ body {
   color: #1a1a1a;
 }
 
-/* 按钮样式 */
-.ant-btn-primary {
+/* 按钮样式（:not(...ghost) 排除幽灵按钮——ghost 是透明底描边样式，
+   实心背景覆盖会让 active 时紫底紫字文字消失，ghost 保持 antd 默认渲染） */
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous) {
   background: #5645d4;
   border-color: #5645d4;
   box-shadow: none;
 }
 
-.ant-btn-primary:hover {
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous):hover {
   background: #6b5ddb;
   border-color: #6b5ddb;
 }
 
-.ant-btn-primary:active {
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous):active {
   background: #4534b3;
   border-color: #4534b3;
+}
+
+/* 禁用态要压回灰底：上面的实心紫底会盖掉 antd 的 disabled 样式，
+   按钮看起来仍可点击（DESIGN.md button-primary-disabled）。
+   危险主按钮同样排除：否则会被压成主题紫，「一键清空全部」曾与「保存」同色 */
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous):disabled {
+  background: #e5e3df;
+  border-color: #e5e3df;
+  color: #bbb8b1;
 }
 
 /* 卡片样式 */
@@ -353,7 +395,13 @@ body {
 }
 
 /* 表格滚动条样式 */
-.ant-table-content {
+/* .ant-table-body 必须与 .ant-table-content 同样声明 thin：scroll.y 模式下
+   真正的滚动容器是 .ant-table-body，antd 按 thin 宽度（Chrome 11px）给表头
+   预留补偿列；若这里落到浏览器默认宽度（15px），固定右列会比表头缩进 4px，
+   并露出默认粗灰滚动条。注意不要再给 .ant-table-body 加 ::-webkit-scrollbar
+   宽度覆盖，那会让实际宽度小于补偿列，同样错位。 */
+.ant-table-content,
+.ant-table-body {
   scrollbar-width: thin;
   scrollbar-color: #c8c4be transparent;
 }
@@ -388,8 +436,9 @@ body {
 
 /* 产品列表项 hover */
 .product-sidebar-item:hover {
-  background: #f6f5f4 !important;
+  background: linear-gradient(145deg, #fbfaf9, #f3f2f6) !important;
   border-color: #e5e3df !important;
+  box-shadow: inset 0 1px 0 #fff, 0 2px 5px -4px rgba(40, 33, 91, 0.35);
 }
 
 /* 批次「生产中」状态 — 呼吸脉动，表现"开动中" */

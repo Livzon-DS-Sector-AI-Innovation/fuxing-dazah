@@ -28,6 +28,18 @@ from app.modules.energy.models import (
 )
 from app.platform.identity.models import Department
 
+
+def _soft_delete_rename(value: str, row_id: UUID, max_length: int) -> str:
+    """软删除前给唯一业务键让位。
+
+    唯一约束包含 is_deleted，所以「新增 → 删除 → 再新增 → 再删除」时，第二次删除
+    会与已存在的 (业务键, is_deleted=True) 冲突，必须先把旧值改名。
+    后缀取 id 十六进制前 12 位：同一业务键内足以唯一，且保证总长不超过列宽。
+    """
+    suffix = f"__del_{row_id.hex[:12]}"
+    return f"{value[: max_length - len(suffix)]}{suffix}"
+
+
 # ── 设备配置 ──
 
 
@@ -150,7 +162,11 @@ async def delete_device_config(db: AsyncSession, config_id: UUID) -> bool:
         await db.execute(
             sa_update(EnergyDeviceConfig)
             .where(EnergyDeviceConfig.id == existing_deleted.id)
-            .values(platform_device_code=f"{existing_deleted.platform_device_code}__del_{existing_deleted.id}")
+            .values(
+                platform_device_code=_soft_delete_rename(
+                    existing_deleted.platform_device_code, existing_deleted.id, 100
+                )
+            )
         )
 
     # 软删除当前设备
@@ -312,6 +328,9 @@ async def upsert_energy_data(
             "value": value,
             "platform_raw_data": platform_raw_data,
             "collected_at": func.now(),
+            # 唯一约束是 (device_config_id, timestamp)，不含 is_deleted：若命中一条被软删的
+            # 历史值，必须把它复活，否则「删除后重采」会更新了值却仍不可见，而采集器记成功。
+            "is_deleted": False,
         },
     )
     returning_stmt = stmt.returning(EnergyData)
@@ -1232,7 +1251,11 @@ async def delete_type_config(db: AsyncSession, config_id: UUID) -> bool:
         await db.execute(
             sa_update(EnergyTypeConfig)
             .where(EnergyTypeConfig.id == existing_deleted.id)
-            .values(type_code=f"{existing_deleted.type_code}__del_{existing_deleted.id}")
+            .values(
+                type_code=_soft_delete_rename(
+                    existing_deleted.type_code, existing_deleted.id, 50
+                )
+            )
         )
 
     await db.execute(
@@ -1357,7 +1380,11 @@ async def soft_delete_workshop_config(db: AsyncSession, config_id: UUID) -> bool
         await db.execute(
             sa_update(EnergyWorkshopConfig)
             .where(EnergyWorkshopConfig.id == existing_deleted.id)
-            .values(workshop=f"{existing_deleted.workshop}__del_{existing_deleted.id}")
+            .values(
+                workshop=_soft_delete_rename(
+                    existing_deleted.workshop, existing_deleted.id, 100
+                )
+            )
         )
 
     await db.execute(
@@ -1386,7 +1413,7 @@ async def get_workshop_daily_consumption(
     """
     cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
     query = (
-        select(func.coalesce(func.sum(EnergyData.value), 0))
+        select(func.sum(EnergyData.value))
         .join(
             EnergyDeviceConfig,
             EnergyData.device_config_id == EnergyDeviceConfig.id,
@@ -1402,7 +1429,9 @@ async def get_workshop_daily_consumption(
     )
     result = await db.execute(query)
     total = result.scalar()
-    return float(total) if total is not None and total > 0 else None
+    # SUM 为 NULL 才是「当天没有任何数据」；0.0 是「有数据但总耗为零」。
+    # 不能用 `total > 0` 把后者也并进 None，否则 less_than / equal 规则在真正的零消耗日永不触发。
+    return None if total is None else float(total)
 
 
 async def get_workshop_avg_consumption(
@@ -1436,7 +1465,9 @@ async def get_workshop_avg_consumption(
             EnergyDeviceConfig.workshop == workshop,
             EnergyDeviceConfig.energy_type == energy_type,
             cst_date >= cast(start_date.date(), Date),
-            cst_date <= cast(end_date.date(), Date),
+            # 上界排除 end_date 本身：调用方传的是被判定的那天，把它算进基线会
+            # 让尖峰自己抬高阈值（30 天数据 + 当天尖峰 → 分母变 31），告警反而不触发。
+            cst_date < cast(end_date.date(), Date),
             _total_preferred_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
         )

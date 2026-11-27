@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import {
+  App,
   Button,
   Card,
   DatePicker,
@@ -14,8 +15,8 @@ import {
   Space,
   Tag,
   TimePicker,
+  Tooltip,
   Upload,
-  message,
 } from 'antd'
 import {
   DownloadOutlined,
@@ -33,11 +34,12 @@ import {
 import dayjs from 'dayjs'
 import {
   fetchDepartmentsAction,
-  fetchEmployeesAction,
+  fetchAllTrainingRoster,
   fetchEmployeeVarieties,
   fetchTrainingLedgerPages,
   generateTrainingNotification,
   generateTrainingSignInSheet,
+  checkExistingTrainingLedgers,
   createTrainingLedger,
   createTrainingLedgerPage,
   exportQaRecord,
@@ -51,6 +53,7 @@ import {
   exportTrainingAssessmentScores,
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
+import { useUnsavedConfirm } from '@/hooks/hr'
 import { moduleMenus, type SubMenuItem } from '@/lib/menu-config'
 import EvaluationPreview from './EvaluationPreview'
 import AssessmentFlow from './AssessmentFlow'
@@ -101,6 +104,7 @@ async function getExistingLedgerNumbers(): Promise<Set<string>> {
 }
 
 export default function TrainingNotificationClient() {
+  const { message, modal } = App.useApp()
   const [form] = Form.useForm()
   const watchedNames = Form.useWatch('employee_names', form) as string[] | undefined
   const watchedTrainingMethod = Form.useWatch('training_method', form)
@@ -123,6 +127,8 @@ export default function TrainingNotificationClient() {
   const [scoreModalOpen, setScoreModalOpen] = useState(false)
   const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
   const [exportingScore, setExportingScore] = useState(false)
+  // 考核弹窗底部「保存考卷 / 导出成绩单 / 导出实操记录表」共用，防止重复提交
+  const [assessmentBusy, setAssessmentBusy] = useState(false)
   const [generatingAssessment, setGeneratingAssessment] = useState(false)
   const [assessmentFile, setAssessmentFile] = useState<File | null>(null)
   const [assessmentQuestions, setAssessmentQuestions] = useState<any>(null)
@@ -139,6 +145,17 @@ export default function TrainingNotificationClient() {
   const [traineePage, setTraineePage] = useState(1)
   const BANK_PAGE_SIZE = 50
   const TRAINEE_PAGE_SIZE = 15
+
+  // 考核弹窗：已出题或已标记错题/成绩时，关闭（含右上角 × / Esc）需先确认，避免误触清空结果
+  const assessmentDirty = !!assessmentQuestions || Object.keys(traineeScoreMap).length > 0
+  const guardCloseAssessment = useUnsavedConfirm(
+    assessmentDirty,
+    () => { setAssessmentModalOpen(false); setAssessmentQuestions(null); setTraineeScoreMap({}) },
+    {
+      title: '关闭后考题和错题标记会清空',
+      content: '已生成的考题、已标记的错题和成绩尚未保存，关闭后会全部清空，确定关闭吗？',
+    },
+  )
 
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -184,7 +201,7 @@ export default function TrainingNotificationClient() {
     if (dept) {
       const deptName = decodeURIComponent(dept)
       setTrainerDept(deptName)
-      fetchEmployeesAction({ department: deptName, page_size: 200 }).then(res => {
+      fetchAllTrainingRoster({ department: deptName }).then(res => {
         const emps = (res.data || []).map((e: any) => ({
           value: e.name, label: `${e.name} - ${e.department || deptName} (${e.employee_number})`,
           employee_number: e.employee_number,
@@ -232,7 +249,7 @@ export default function TrainingNotificationClient() {
     const deptMap: Record<string, string> = {}
     for (const dept of depts) {
       try {
-        const res = await fetchEmployeesAction({ department: dept, page_size: 200 })
+        const res = await fetchAllTrainingRoster({ department: dept })
         // 病假/产假员工自动过滤，不进入出席名单
         const activeList = (res.data || []).filter((e: any) => e.status !== '病假' && e.status !== '产假')
         allFull.push(...activeList)
@@ -404,20 +421,63 @@ export default function TrainingNotificationClient() {
     }
 
     // 检查哪些员工还没有专属培训台账菜单页面
-    const existingNumbers = await getExistingLedgerNumbers()
-    const noPage = targets.filter((t) => !existingNumbers.has(t.number))
+    // 查询期间先置 loading，避免等待时重复点击弹出多个确认框
+    let existingNumbers: Set<string>
+    setAddingToLedger(true)
+    try {
+      existingNumbers = await getExistingLedgerNumbers()
+    } finally {
+      setAddingToLedger(false)
+    }
+    // 双模式：台账取面授日期与面授时段；单模式：取 time_slots 首个日期与全部时段
+    const trainingDate = isDualMode
+      ? (values.face_date ? values.face_date.format('YYYY-MM-DD') : '')
+      : (values.time_slots?.[0]?.date ? values.time_slots[0].date.format('YYYY-MM-DD') : '')
+    const subject = values.subject
 
-    Modal.confirm({
+    // 写入前查重：同工号 + 同培训日期 + 同培训主题已有记录的不再创建。
+    // 创建接口本身不查重，此前重试或再点一次「添加到培训台账」就会产生重复记录。
+    let dupSet = new Set<string>()
+    setAddingToLedger(true)
+    try {
+      const check = await checkExistingTrainingLedgers({
+        training_date: trainingDate,
+        training_subject: subject,
+        employee_numbers: targets.map((t) => t.number),
+      })
+      dupSet = new Set(check.data?.employee_numbers || [])
+    } catch {
+      // 查重失败不阻断流程（按「无重复」继续），创建接口照常执行
+    } finally {
+      setAddingToLedger(false)
+    }
+
+    const freshTargets = targets.filter((t) => !dupSet.has(t.number))
+    const dupNames = targets.filter((t) => dupSet.has(t.number)).map((t) => t.name)
+    if (freshTargets.length === 0) {
+      message.info('所选人员当天均已有同主题的培训台账记录，无需重复添加')
+      return
+    }
+
+    const noPage = targets.filter((t) => !existingNumbers.has(t.number) && !dupSet.has(t.number))
+
+    modal.confirm({
       title: '确认添加到培训台账',
-      content: `是否给 ${targets.map((t) => t.name).join('、')} 添加本次培训记录到培训台账？`,
+      content: (
+        <div>
+          <div>是否给 {freshTargets.map((t) => t.name).join('、')} 添加本次培训记录到培训台账？</div>
+          {dupNames.length > 0 && (
+            <div className="mt-1" style={{ color: 'var(--color-warning)' }}>
+              其中 {dupNames.join('、')} 当天已有同主题记录，将跳过（{dupNames.length} 人）。
+            </div>
+          )}
+        </div>
+      ),
+      okText: '确定',
+      cancelText: '取消',
       onOk: async () => {
         setAddingToLedger(true)
         try {
-          // 双模式：台账取面授日期与面授时段；单模式：取 time_slots 首个日期与全部时段
-          const trainingDate = isDualMode
-            ? (values.face_date ? values.face_date.format('YYYY-MM-DD') : '')
-            : (values.time_slots?.[0]?.date ? values.time_slots[0].date.format('YYYY-MM-DD') : '')
-          const subject = values.subject
           const method = values.training_method || ''
           const department = values.department || ''
           const trainerVal = values.trainer || ''
@@ -440,7 +500,7 @@ export default function TrainingNotificationClient() {
             if (totalMin > 0) durationHours = Math.round(totalMin / 30) / 2
           }
 
-          for (const target of targets) {
+          for (const target of freshTargets) {
             await createTrainingLedger({
               employee_number: target.number,
               training_date: trainingDate,
@@ -456,21 +516,23 @@ export default function TrainingNotificationClient() {
             await upsertTrainingEvaluation({
               training_content: subject,
               department,
-              expected_count: targets.length,
+              expected_count: freshTargets.length,
               training_method: method,
               trainer_name: trainerVal,
               assessment_method: values.assessment_method || '',
             })
           } catch { message.warning('评估补录同步失败，请手动录入') }
           message.success(
-            `已成功为 ${targets.map((t) => t.name).join('、')} 添加培训台账记录`
+            `已成功为 ${freshTargets.map((t) => t.name).join('、')} 添加培训台账记录${dupNames.length ? `，跳过 ${dupNames.length} 名当天已有同主题记录的人员` : ''}`
           )
 
           // 对没有专属菜单页面的员工，询问是否新建页面
           if (noPage.length > 0) {
-            Modal.confirm({
+            modal.confirm({
               title: '新建培训台账页面',
               content: `当前没有 ${noPage.map((n) => n.name).join('、')} 的培训台账页面，是否新建？`,
+              okText: '确定',
+              cancelText: '取消',
               onOk: async () => {
                 const created: string[] = []
                 for (const p of noPage) {
@@ -489,6 +551,17 @@ export default function TrainingNotificationClient() {
                     `已为 ${created.join('、')} 新建培训台账页面，刷新页面后可在左侧菜单查看`
                   )
                 }
+              },
+            })
+          } else {
+            // 台账页面齐全时顺势引导去台账查看（跨页衔接）
+            modal.confirm({
+              title: '已添加培训台账记录',
+              content: `已为 ${targets.map((t) => t.name).join('、')} 写入台账，是否前往台账页查看？`,
+              okText: '去台账查看',
+              cancelText: '留在本页',
+              onOk: () => {
+                router.push(`/hr/training/ledger?employee_number=${targets[0].number}`)
               },
             })
           }
@@ -676,7 +749,7 @@ export default function TrainingNotificationClient() {
                   if (!dept) return
                   // 自动加载该部门员工作为受训人员
                   try {
-                    const res = await fetchEmployeesAction({ department: dept, page_size: 200 })
+                    const res = await fetchAllTrainingRoster({ department: dept })
                     const emps = (res.data || []).map((e: any) => ({
                       value: e.name, label: `${e.name} - ${e.department || dept} (${e.employee_number})`,
                       employee_number: e.employee_number,
@@ -769,13 +842,16 @@ export default function TrainingNotificationClient() {
                           <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
                         </Form.Item>
                         {fields.length > 1 && (
-                          <Button
-                            type="text"
-                            icon={<MinusCircleOutlined />}
-                            onClick={() => remove(name)}
-                            style={{ marginTop: 30 }}
-                            danger
-                          />
+                          <Tooltip title="删除该时段">
+                            <Button
+                              type="text"
+                              aria-label="删除该时段"
+                              icon={<MinusCircleOutlined />}
+                              onClick={() => remove(name)}
+                              style={{ marginTop: 30 }}
+                              danger
+                            />
+                          </Tooltip>
                         )}
                       </Space>
                     ))}
@@ -926,6 +1002,7 @@ export default function TrainingNotificationClient() {
           >
             <Select
               mode="multiple"
+              maxTagCount="responsive"
               placeholder="选择应出席受训人员"
               options={employees}
               className="w-full"
@@ -1268,7 +1345,8 @@ export default function TrainingNotificationClient() {
         title={assessmentMethodWatch === '笔试' ? '生成笔试试卷' : '生成问答实操'}
         open={assessmentModalOpen}
         footer={null}
-        onCancel={() => { setAssessmentModalOpen(false); setAssessmentQuestions(null); setTraineeScoreMap({}) }}
+        mask={{ closable: false }}
+        onCancel={guardCloseAssessment}
         width={900}
       >
         <div className="space-y-4">
@@ -1473,9 +1551,10 @@ export default function TrainingNotificationClient() {
             {/* 底部操作 */}
             {assessmentQuestions && (
               <Space wrap className="w-full justify-end">
-                <Button onClick={() => { setAssessmentModalOpen(false); setAssessmentQuestions(null); setTraineeScoreMap({}) }}>关闭</Button>
+                <Button onClick={guardCloseAssessment}>关闭</Button>
                 {assessmentMethodWatch === '笔试' && (
-                  <Button onClick={async () => {
+                  <Button loading={assessmentBusy} onClick={async () => {
+                    setAssessmentBusy(true)
                     try {
                       const v = form.getFieldsValue()
                       const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ type: q.type || 'choice', question: q.question || q.content || '', options: q.options || [], answer: q.answer || '', score: q.score || 5 }))
@@ -1484,9 +1563,11 @@ export default function TrainingNotificationClient() {
                       await saveExamPaper({ subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷', department: v.department || undefined, training_date: getTrainingDate(v), training_method: v.training_method, questions, full_score: assessmentQuestions?.total_score || 100, choice_count: counts.choice || 0, true_false_count: counts.true_false || 0, multi_choice_count: counts.multi_choice || 0, fill_blank_count: counts.fill_blank || 0 })
                       message.success('考卷已保存，可在资料下载中查看')
                     } catch (err: any) { message.error(err.message || '保存考卷失败') }
+                    finally { setAssessmentBusy(false) }
                   }}>保存考卷</Button>
                 )}
-                <Button onClick={async () => {
+                <Button loading={assessmentBusy} onClick={async () => {
+                  setAssessmentBusy(true)
                   const v = form.getFieldsValue()
                   const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ file_no: q.file_no || '', question: q.question || q.content || '', answer: q.answer || '', score: q.score || 10 }))
                   const traineeNames = v.employee_names || []
@@ -1505,8 +1586,10 @@ export default function TrainingNotificationClient() {
                     downloadBase64File(r.base64, r.filename)
                     message.success('成绩单已导出')
                   } catch (err: any) { message.error(err.message || '导出失败') }
+                  finally { setAssessmentBusy(false) }
                 }}>导出成绩单</Button>
-                <Button type="primary" onClick={async () => {
+                <Button type="primary" loading={assessmentBusy} onClick={async () => {
+                  setAssessmentBusy(true)
                   const v = form.getFieldsValue()
                   const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ file_no: q.file_no || '', question: q.question || q.content || '', answer: q.answer || '', score: q.score || 10 }))
                   const traineeNames = v.employee_names || []
@@ -1529,6 +1612,7 @@ export default function TrainingNotificationClient() {
                     downloadBase64File(r.base64, r.filename)
                     message.success('导出成功')
                   } catch (err: any) { message.error(err.message || '导出失败') }
+                  finally { setAssessmentBusy(false) }
                 }}>
                   导出实操记录表（含错题）
                 </Button>
@@ -1544,6 +1628,7 @@ export default function TrainingNotificationClient() {
         title="导出考核成绩单"
         open={scoreModalOpen}
         onCancel={() => setScoreModalOpen(false)}
+        mask={{ closable: false }}
         width={500}
         footer={[
           <Button key="cancel" onClick={() => setScoreModalOpen(false)}>取消</Button>,

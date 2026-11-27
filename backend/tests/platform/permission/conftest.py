@@ -1,13 +1,24 @@
 """权限模块测试夹具：将 Redis 权限缓存替换为 no-op，测试不依赖 Redis。"""
 
+from __future__ import annotations
+
 import json
 import uuid
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from unittest.mock import patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
+from app.main import app
+from app.platform.identity.deps import get_current_user
 from app.platform.identity.models import Department, User
 from app.platform.permission.models import Permission, Role
+
+ApiFactory = Callable[[User, set[str]], AbstractAsyncContextManager[AsyncClient]]
 
 
 @pytest.fixture(autouse=True)
@@ -62,12 +73,14 @@ async def make_role(db_session: AsyncSession):
         code: str | None = None,
         data_scope: str = "department",
         is_system: bool = False,
+        group_feishu_department_id: str | None = None,
     ) -> Role:
         role = Role(
             code=code or f"role_{uuid.uuid4().hex[:8]}",
             name="测试角色",
             data_scope=data_scope,
             is_system=is_system,
+            group_feishu_department_id=group_feishu_department_id,
         )
         db_session.add(role)
         await db_session.flush()
@@ -115,3 +128,41 @@ async def make_department(db_session: AsyncSession):
         return dept
 
     return _make
+
+
+@pytest.fixture
+async def api(db_session: AsyncSession) -> ApiFactory:
+    """以「指定用户 + 指定权限集合」换取 API client；与 db_session 同事务，工厂造的数据端点可见。
+
+    注意：该夹具只 patch 端点门禁用的 `deps.get_user_permissions`；
+    service 层的范围守卫直接读数据库，相关用例需给操作者真实授予角色/权限。
+    """
+
+    @asynccontextmanager
+    async def _client(
+        user: User, perms: set[str],
+    ) -> AsyncGenerator[AsyncClient, None]:
+        async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
+            yield db_session
+
+        async def _override_user() -> User:
+            return user
+
+        async def _perms(user_id: str, db: object) -> set[str]:
+            return set(perms)
+
+        app.dependency_overrides[get_db] = _override_get_db
+        app.dependency_overrides[get_current_user] = _override_user
+        try:
+            with patch(
+                "app.platform.permission.deps.get_user_permissions", new=_perms
+            ):
+                transport = ASGITransport(app=app)
+                async with AsyncClient(
+                    transport=transport, base_url="http://test"
+                ) as ac:
+                    yield ac
+        finally:
+            app.dependency_overrides.clear()
+
+    return _client

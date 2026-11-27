@@ -1,21 +1,25 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Button, Card, DatePicker, InputNumber, Space, Table, message } from 'antd'
+import { App, Button, Card, DatePicker, InputNumber, Space, Table } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { fetchPerformanceEvaluations, fetchPerformanceCategories, fetchCategoryScores, saveCategoryScores } from '@/actions/hr'
 
 export default function PerformanceCategoryScoreClient({ initialMonth }: { initialMonth?: string }) {
+  const { message } = App.useApp()
   const [month, setMonth] = useState(initialMonth || dayjs().format('YYYY-MM'))
   const [evaluations, setEvaluations] = useState<any[]>([])
   const [categories, setCategories] = useState<any[]>([])
   const [scores, setScores] = useState<Record<string, Record<string, { score: number | null; weight: number }>>>({})
   // 可编辑状态按「考核 × 项目」维度保存（同一项目在不同考核的负责人权限可能不同）
   const [editableByEval, setEditableByEval] = useState<Record<string, Record<string, boolean>>>({})
-  const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(false)
+  // 正在保存的考核 id（按行记录，避免点一行全部转圈）
+  const [savingIds, setSavingIds] = useState<string[]>([])
 
   const load = async () => {
+    setLoading(true)
     try {
       const [catsRes, evalsRes] = await Promise.all([
         fetchPerformanceCategories(),
@@ -25,23 +29,25 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
       setCategories(cats)
       const evals = (evalsRes.data?.items || [])
       setEvaluations(evals)
-      // 加载所有考核的评分 + 各项目是否可编辑（负责人校验由后端返回）
+      // 加载所有考核的评分 + 各项目是否可编辑（负责人校验由后端返回）；
+      // 各考核互不依赖，并发请求（此前 for…await 串行，考核多时逐个等待）
+      const scoreResList = await Promise.all(evals.map((ev) => fetchCategoryScores(ev.id)))
       const scoreMap: Record<string, Record<string, { score: number | null; weight: number }>> = {}
       const editMap: Record<string, Record<string, boolean>> = {}
-      for (const ev of evals) {
-        const sRes = await fetchCategoryScores(ev.id)
+      evals.forEach((ev, idx) => {
         const entry: Record<string, { score: number | null; weight: number }> = {}
         const editEntry: Record<string, boolean> = {}
-        for (const s of sRes.data || []) {
+        for (const s of scoreResList[idx].data || []) {
           entry[s.category_id] = { score: s.score, weight: s.weight || (cats.find((c: any) => c.id === s.category_id)?.weight || 0) }
           editEntry[s.category_id] = s.can_edit !== false
         }
         scoreMap[ev.id] = entry
         editMap[ev.id] = editEntry
-      }
+      })
       setScores(scoreMap)
       setEditableByEval(editMap)
     } catch (e: any) { message.error('加载失败: ' + (e?.message || String(e))) }
+    finally { setLoading(false) }
   }
   useEffect(() => { load() }, [month])
 
@@ -59,7 +65,7 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
   }
 
   const handleSave = async (evalId: string) => {
-    setSaving(true)
+    setSavingIds(prev => [...prev, evalId])
     try {
       const batch = categories
         .filter(c => editableByEval[evalId]?.[c.id] !== false)
@@ -72,7 +78,7 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
       await saveCategoryScores(evalId, batch)
       message.success('已保存')
     } catch { message.error('保存失败') }
-    finally { setSaving(false) }
+    finally { setSavingIds(prev => prev.filter(id => id !== evalId)) }
   }
 
   // 用于表格的列定义：部门 + 各考核项目列（非负责人项目禁用输入）
@@ -84,16 +90,16 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
         const editable = editableByEval[record.id]?.[c.id] !== false
         const v = scores[record.id]?.[c.id]
         return (
-          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={2} style={{ width: '100%' }}>
             <InputNumber size="small" min={0} max={100} placeholder="分数"
               value={v?.score ?? null} disabled={!editable}
               onChange={(val) => handleScore(record.id, c.id, val)}
               style={{ width: '100%' }}
             />
-            <InputNumber size="small" min={0} max={100} placeholder="权重%"
+            {/* 单位写进占位文案：antd 6 已弃用 InputNumber 的 addonAfter */}
+            <InputNumber size="small" min={0} max={100} placeholder="权重 %"
               value={v?.weight ?? c.weight} disabled
               style={{ width: '100%' }}
-              addonAfter="%"
             />
           </Space>
         )
@@ -107,7 +113,7 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
     ...catCols,
     {
       title: '操作', width: 80, fixed: 'right' as const,
-      render: (_: any, record: any) => <Button size="small" icon={<SaveOutlined />} loading={saving} onClick={() => handleSave(record.id)}>保存</Button>,
+      render: (_: any, record: any) => <Button size="small" icon={<SaveOutlined />} loading={savingIds.includes(record.id)} onClick={() => handleSave(record.id)}>保存</Button>,
     },
   ]
 
@@ -119,12 +125,12 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
         <Button onClick={load}>刷新</Button>
       </Space>
     }>
-      {categories.length === 0 ? (
+      {!loading && categories.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
           <p>暂无考核项目配置，请先在「考核项目配置」中添加项目（环保/安全/质量/人才/生产/综合等）</p>
         </div>
       ) : (
-        <Table rowKey="id" dataSource={evaluations} columns={columns} pagination={false} scroll={{ x: 200 + categories.length * 120 }} bordered size="small" />
+        <Table rowKey="id" loading={loading} dataSource={evaluations} columns={columns} pagination={false} scroll={{ x: 200 + categories.length * 120 }} bordered size="small" />
       )}
     </Card>
   )

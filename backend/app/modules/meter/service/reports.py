@@ -14,7 +14,7 @@ from app.core.exceptions import DuplicateException, NotFoundException
 from app.core.storage import delete_object, get_object, is_enabled, upload_object
 from app.modules.meter import repository as repo
 from app.modules.meter.models import CalibrationReport
-from app.modules.meter.service.common import MODULE_CODE
+from app.modules.meter.service.common import MODULE_CODE, normalize_report_content_type
 
 
 def _build_report_path(record_id: UUID, filename: str) -> str:
@@ -54,7 +54,7 @@ async def upload_report(
     # 读取文件内容
     file_data = await file.read()
     file_size = len(file_data)
-    content_type = file.content_type or "application/octet-stream"
+    content_type = normalize_report_content_type(file.content_type)
     filename = file.filename or "report.pdf"
 
     # 上传到 MinIO

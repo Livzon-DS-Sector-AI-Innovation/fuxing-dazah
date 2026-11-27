@@ -1,0 +1,253 @@
+/* 导入单据：来源 → 归属 → 检测项目，三段靠留白分隔，不再叠卡片。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  /* 抽屉 body 自己不留 padding：滚动条贴抽屉边，内容与它保持 32px */
+  padding: 24px 32px 32px;
+}
+
+.modalTitle {
+  color: var(--color-ink);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  line-height: 1.35;
+}
+
+.modalSubtitle {
+  margin-block-start: 2px;
+  color: var(--color-steel);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+/* 来源条：文件名是主信息，匹配结果降为它的状态行 */
+.sourceCard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-lg);
+}
+
+.sourceIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: 36px;
+  block-size: 36px;
+  background: var(--color-tint-sky);
+  border-radius: var(--rounded-md);
+  color: var(--color-link-blue);
+  font-size: 18px;
+}
+
+.sourceBody {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+.sourceName {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-block-start: 1px;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sourceMatched {
+  color: var(--color-success-deep);
+}
+
+.unmatchedIcon {
+  color: var(--color-warning);
+}
+
+/* 空态：拖放区是唯一入口，虚线保留「可投放」语义 */
+.dropzone:global(.ant-upload-drag) {
+  padding-block: 24px;
+  background: var(--color-surface-soft);
+  border-color: var(--color-hairline-strong);
+  border-radius: var(--rounded-lg);
+  transition: border-color .15s ease, background-color .15s ease;
+}
+
+.dropzone:global(.ant-upload-drag):hover {
+  background: var(--color-canvas);
+  border-color: var(--color-primary);
+}
+
+.dropIcon {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--color-steel);
+  font-size: 26px;
+}
+
+.dropTitle {
+  display: block;
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.dropHint {
+  display: block;
+  margin: 3px 0 0;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 归属产品 + 三个头部字段都在表单里，两组之间留 16px */
+.formBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.productItem:global(.ant-form-item) {
+  margin-block-end: 0;
+}
+
+/* 底栏：12px 间距（antd 默认 8px 对两个主次按钮偏紧） */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* 保存去向的勾选项占住左侧空白，把按钮推到右边 */
+.footerOption {
+  margin-inline-end: auto;
+  color: var(--color-ink);
+}
+
+/* 整条标签都能点，点按区撑到 44px 高 */
+.footerOption:global(.ant-checkbox-wrapper) {
+  min-block-size: 44px;
+  align-items: center;
+}
+
+.sectionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+/* 项目计数：与标题同排的小 pill，比括号数字更好扫读 */
+.count {
+  margin-inline-start: 6px;
+  padding: 1px 6px;
+  background: var(--color-primary-bg);
+  border-radius: var(--rounded-xs);
+  color: var(--color-primary-deep);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
+.sectionHint {
+  margin: 2px 0 0;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* 已匹配产品的字段同步开关：与表格留出间距 */
+.syncFields {
+  margin-bottom: 10px;
+  color: var(--color-steel);
+  font-size: 12.5px;
+}
+
+.productGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* antd 的 Radio.Button 默认是连体组（相邻 -1px 重叠 + 竖线分隔）；
+   这里每个产品是独立选项，拆开间距并去掉分隔线 */
+.productGroup :global(.ant-radio-button-wrapper) {
+  border-radius: var(--rounded-md);
+}
+
+.productGroup :global(.ant-radio-button-wrapper)::before {
+  display: none;
+}
+
+.productGroup :global(.ant-radio-button-wrapper:not(:last-child)) {
+  margin-inline-end: 0;
+}
+
+/* 选中项给浅紫底：只靠描边时，多选项相邻很难一眼看出选了哪个 */
+.productGroup :global(.ant-radio-button-wrapper-checked) {
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary);
+  color: var(--color-primary-deep);
+}
+
+/* 三个头部字段横排：文档里的信息本来就是一行的，竖排是在浪费弹窗高度 */
+.form {
+  display: grid;
+  grid-template-columns: minmax(150px, .75fr) minmax(240px, 1.9fr) minmax(150px, .8fr);
+  gap: 0 12px;
+}
+
+.form :global(.ant-form-item) {
+  margin-block-end: 0;
+}
+
+@media (max-width: 760px) {
+  .root {
+    gap: 20px;
+    padding: 20px 20px 24px;
+  }
+
+  .form {
+    grid-template-columns: 1fr;
+  }
+
+  .form :global(.ant-form-item) {
+    margin-block-end: 16px;
+  }
+}

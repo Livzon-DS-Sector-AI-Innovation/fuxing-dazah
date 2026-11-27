@@ -3,7 +3,7 @@
 import { Table, Space, Select } from 'antd'
 import { EditOutlined, EyeOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { WorkOrder, WorkOrderStatus, WorkOrderPriority, WorkOrderType } from '@/types/equipment'
+import { WorkOrder, WorkOrderStatus, WorkOrderPriority, WorkOrderType, WorkOrderPerspective } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { statusPill, pillSuccess, pillError, pillWarning, pillPurple, pillNeutral, pillInfo, actionLink, linkPrimary, linkPurple } from '@/components/equipment/shared/shared-styles'
 import { usePermission } from '@/hooks/usePermission'
@@ -33,6 +33,11 @@ const typeOptions: { label: string; value: WorkOrderType }[] = [
   { label: '校准', value: '校准' },
   { label: '异常处理', value: '异常处理' }, { label: '日常维护', value: '日常维护' },
 ]
+const perspectiveOptions: { label: string; value: WorkOrderPerspective }[] = [
+  { label: '我报修的', value: 'reporter' },
+  { label: '我维修的', value: 'assignee' },
+  { label: '我负责的', value: 'responsible' },
+]
 
 interface Props { onRefresh?: () => void }
 
@@ -40,8 +45,10 @@ export function WorkOrderTable({ onRefresh }: Props) {
   const {
     workOrders, workOrderTotal, workOrderPage, workOrderPageSize, workOrderLoading,
     workOrderStatusFilter, workOrderPriorityFilter, workOrderTypeFilter,
+    workOrderPerspectiveFilter,
     setWorkOrderPage, setWorkOrderPageSize,
     setWorkOrderStatusFilter, setWorkOrderPriorityFilter, setWorkOrderTypeFilter,
+    setWorkOrderPerspectiveFilter,
     openWorkOrderDrawer, openWorkOrderDetail,
   } = useEquipmentStore()
 
@@ -101,6 +108,9 @@ export function WorkOrderTable({ onRefresh }: Props) {
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <Select placeholder="全部工单" allowClear style={{ width: 110 }}
+          value={workOrderPerspectiveFilter || undefined}
+          onChange={v => setWorkOrderPerspectiveFilter(v || '')} options={perspectiveOptions} />
         <Select placeholder="工单状态" allowClear style={{ width: 120 }}
           value={workOrderStatusFilter || undefined} onChange={v => setWorkOrderStatusFilter(v || '')} options={statusOptions} />
         <Select placeholder="优先级" allowClear style={{ width: 100 }}

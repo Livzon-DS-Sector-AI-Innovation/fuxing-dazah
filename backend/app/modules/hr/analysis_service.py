@@ -208,10 +208,13 @@ class TurnoverAnalysisService:
         reason_result = await self.session.execute(reason_stmt)
         reason_counter: Counter[str] = Counter()
         for row in reason_result.all():
-            if row[0]:
-                reason_counter[row[0]] += 1
-            if row[1]:
-                reason_counter[row[1]] += 1
+            # 离职原因是 JSON 多选列（list），逐项计数；兼容历史数据里的纯字符串
+            for col in (row[0], row[1]):
+                if isinstance(col, str):
+                    if col:
+                        reason_counter[col] += 1
+                elif isinstance(col, (list, tuple)):
+                    reason_counter.update(str(r) for r in col if r)
 
         return {
             "departure_count": total,

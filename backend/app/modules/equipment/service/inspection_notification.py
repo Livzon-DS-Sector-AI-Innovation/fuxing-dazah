@@ -74,7 +74,7 @@ async def _get_template_items(
     优先使用已加载的 template.items 关系；若未加载则查询数据库。
     """
     # 线路巡检：从 route → locations → equipment → templates 链获取
-    # 设备巡检：从 task.template_ids JSON 列表获取
+    # 设备巡检：优先 task.equipment_templates 逐设备映射，兼容旧 task.template_ids
     template_id_set: set[uuid.UUID] = set()
 
     if task.route_id:

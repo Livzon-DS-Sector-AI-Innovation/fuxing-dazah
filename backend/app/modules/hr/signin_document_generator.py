@@ -170,8 +170,21 @@ def _fill_employee_rows(table, employee_names: list[str], employee_departments: 
     table._tbl.remove(template_row._tr)
 
 
+def _set_word_field(run, instr: str) -> None:
+    """把静态页码 run 换成 Word 域（PAGE / NUMPAGES），多页共用页眉也能显示各自页码。"""
+    run.text = ""
+    fld = OxmlElement("w:fldSimple")
+    fld.set(qn("w:instr"), instr)
+    inner_r = OxmlElement("w:r")
+    inner_t = OxmlElement("w:t")
+    inner_t.text = "1"
+    inner_r.append(inner_t)
+    fld.append(inner_r)
+    run._r.addnext(fld)
+
+
 def _update_section_header_page_numbers(section, page: int, total_pages: int) -> None:
-    """Update page numbers in a single section's header."""
+    """把页眉中的「第X页，共Y页」占位数字替换为 Word 页码域。"""
     header = section.header
     if header is None:
         return
@@ -186,9 +199,9 @@ def _update_section_header_page_numbers(section, page: int, total_pages: int) ->
                 if runs[i + 4].text.strip() == "，共" and runs[i + 6].text.strip() == "页":
                     total_run_idx = i + 5
         if page_run_idx is not None:
-            runs[page_run_idx].text = str(page)
+            _set_word_field(runs[page_run_idx], " PAGE ")
         if total_run_idx is not None:
-            runs[total_run_idx].text = str(total_pages)
+            _set_word_field(runs[total_run_idx], " NUMPAGES ")
 
 
 def _add_page_break(doc: Document) -> None:
@@ -252,19 +265,9 @@ def generate_training_sign_in_sheet(data: TrainingSignInSheetInput) -> BytesIO:
             last_row = temp_table.rows[-1]
             temp_table._tbl.remove(last_row._tr)
 
-        # Save temp doc to BytesIO, then re-open and extract the table's XML properly
-        temp_buf = BytesIO()
-        temp_doc.save(temp_buf)
-        temp_buf.seek(0)
-
-        # Now open the temp doc and copy its table into output
-        # We use a fresh load to ensure all XML namespaces are properly handled
-        reloaded = Document(temp_buf)
-        reloaded_table = reloaded.tables[0]
-
         body = output_doc.element.body
         sect_pr = body.find(qn("w:sectPr"))
-        imported = copy.deepcopy(reloaded_table._tbl)
+        imported = copy.deepcopy(temp_table._tbl)
         if sect_pr is not None:
             body.insert(list(body).index(sect_pr), imported)
         else:

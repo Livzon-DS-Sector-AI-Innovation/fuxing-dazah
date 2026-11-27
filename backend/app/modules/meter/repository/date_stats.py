@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import exists as sa_exists
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import today as time_today
-from app.modules.meter.models import GasDetectorRecord, InstrumentRecord
+from app.modules.meter.models import (
+    CalibrationReport,
+    GasDetectorRecord,
+    InstrumentRecord,
+)
 from app.modules.meter.repository._utils import _escape_like, _parse_multi
 
 
@@ -30,6 +35,7 @@ async def get_instrument_date_stats(
     calibration_result: str | None = None,
     color_marking: str | None = None,
     keyword: str | None = None,
+    has_report: bool | None = None,
     like_filters: dict[str, str] | None = None,
 ) -> list[dict[str, int]]:
     """按日期字段的年/月/日三级聚合统计标准计量器具数量。
@@ -102,13 +108,23 @@ async def get_instrument_date_stats(
                     conditions.append(InstrumentRecord.status == s)
             query = query.where(or_(*conditions))
     if keyword:
+        # 与 list_instruments 的 keyword 同列集合同转义，保证统计数与列表数一致
+        kw = f"%{_escape_like(keyword)}%"
         query = query.where(
-            InstrumentRecord.asset_number.ilike(f"%{keyword}%")
-            | InstrumentRecord.instrument_name.ilike(f"%{keyword}%")
-            | InstrumentRecord.model_spec.ilike(f"%{keyword}%")
-            | InstrumentRecord.serial_number.ilike(f"%{keyword}%")
-            | InstrumentRecord.location.ilike(f"%{keyword}%")
+            InstrumentRecord.asset_number.ilike(kw, escape="\\")
+            | InstrumentRecord.instrument_name.ilike(kw, escape="\\")
+            | InstrumentRecord.model_spec.ilike(kw, escape="\\")
+            | InstrumentRecord.serial_number.ilike(kw, escape="\\")
+            | InstrumentRecord.location.ilike(kw, escape="\\")
+            | InstrumentRecord.manufacturer.ilike(kw, escape="\\")
         )
+    if has_report is not None:
+        # 与 list_instruments 的「报告」筛选同口径，保证统计数与列表数一致
+        sub = select(CalibrationReport.id).where(
+            CalibrationReport.instrument_id == InstrumentRecord.id,
+            CalibrationReport.is_deleted == False,  # noqa: E712
+        )
+        query = query.where(sa_exists(sub) if has_report else ~sa_exists(sub))
 
     query = query.group_by(
         func.extract("year", date_col),
@@ -146,6 +162,7 @@ async def get_gas_detector_date_stats(
     manufacturer: str | None = None,
     status: str | None = None,
     keyword: str | None = None,
+    has_report: bool | None = None,
     like_filters: dict[str, str] | None = None,
 ) -> list[dict[str, int]]:
     """按日期字段的年/月/日三级聚合统计探测器数量。
@@ -220,12 +237,22 @@ async def get_gas_detector_date_stats(
                     conditions.append(GasDetectorRecord.status == s)
             query = query.where(or_(*conditions))
     if keyword:
+        # 与 list_gas_detectors 的 keyword 同列集合同转义，保证统计数与列表数一致
+        kw = f"%{_escape_like(keyword)}%"
         query = query.where(
-            GasDetectorRecord.instrument_name.ilike(f"%{keyword}%")
-            | GasDetectorRecord.detection_model.ilike(f"%{keyword}%")
-            | GasDetectorRecord.product_number.ilike(f"%{keyword}%")
-            | GasDetectorRecord.installation_location.ilike(f"%{keyword}%")
+            GasDetectorRecord.instrument_name.ilike(kw, escape="\\")
+            | GasDetectorRecord.detection_model.ilike(kw, escape="\\")
+            | GasDetectorRecord.product_number.ilike(kw, escape="\\")
+            | GasDetectorRecord.installation_location.ilike(kw, escape="\\")
+            | GasDetectorRecord.manufacturer.ilike(kw, escape="\\")
         )
+    if has_report is not None:
+        # 与 list_gas_detectors 的「报告」筛选同口径，保证统计数与列表数一致
+        sub = select(CalibrationReport.id).where(
+            CalibrationReport.gas_detector_id == GasDetectorRecord.id,
+            CalibrationReport.is_deleted == False,  # noqa: E712
+        )
+        query = query.where(sa_exists(sub) if has_report else ~sa_exists(sub))
 
     query = query.group_by(
         func.extract("year", date_col),

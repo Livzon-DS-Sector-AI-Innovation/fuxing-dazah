@@ -14,6 +14,7 @@ import {
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import type { SopTrainingRecord } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 const COLOR_MAP: Record<string, { tag: string; bg: string }> = {
   新增: { tag: 'gold', bg: '#FFFBE6' },
@@ -22,7 +23,7 @@ const COLOR_MAP: Record<string, { tag: string; bg: string }> = {
 }
 
 export default function SopMasterClient() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const { hasPermission } = usePermission()
   const canGenerateDoc = hasPermission('hr:training:document')
   const canManage = hasPermission('hr:training:manage')
@@ -36,6 +37,7 @@ export default function SopMasterClient() {
   const [submitting, setSubmitting] = useState<string | null>(null)
   const [generating, setGenerating] = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<SopTrainingRecord | null>(null)
   const [form] = Form.useForm()
   const [deptOptions, setDeptOptions] = useState<{ label: string; value: string }[]>([])
@@ -130,6 +132,7 @@ export default function SopMasterClient() {
       complete_date: undefined,
       complete_range: undefined,
     }
+    setSaving(true)
     try {
       if (editing) {
         await updateSopTrainingRecord(editing.id, payload)
@@ -141,6 +144,7 @@ export default function SopMasterClient() {
       setModalOpen(false)
       load()
     } catch (e: any) { message.error(e.message || '保存失败') }
+    finally { setSaving(false) }
   }
 
   const handleDelete = async (id: string) => {
@@ -157,7 +161,7 @@ export default function SopMasterClient() {
       // 先取涉及的培训管理员清单，确认后发送
       const adminsRes = await fetchSopTrainingAdmins(r.id)
       const admins: string[] = adminsRes.data?.admins || []
-      Modal.confirm({
+      modal.confirm({
         title: '确认转培训',
         content: (
           <div>
@@ -176,7 +180,7 @@ export default function SopMasterClient() {
         onOk: async () => {
           const res = await submitSopTrainingRecord(r.id)
           const notified: string[] = res.data?.notified_admins || []
-          Modal.success({
+          modal.success({
             title: '已转培训',
             content: notified.length
               ? `内容已收录到各部门二级表，已通知：${notified.join('、')}`
@@ -264,19 +268,17 @@ export default function SopMasterClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-[22px] font-semibold">SOP培训文件登记表</h1>
-          <p className="text-[13px] text-[var(--color-steel)]">
-            每年一张登记表；提交后自动生成各部门二级表并通知培训管理员
-          </p>
-        </div>
-        <Space>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出登记表</Button>
-          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-          {canManage && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增登记</Button>}
-        </Space>
-      </div>
+      <PageHeader
+        title="SOP培训登记表"
+        description="每年一张登记表；提交后自动生成各部门二级表并通知培训管理员"
+        actions={
+          <Space>
+            <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出登记表</Button>
+            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+            {canManage && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增登记</Button>}
+          </Space>
+        }
+      />
       <Card>
         <Space className="mb-3" wrap>
           <Select style={{ width: 120 }} value={year} onChange={(v) => setYear(v)}
@@ -285,14 +287,20 @@ export default function SopMasterClient() {
             options={[{ label: '新增', value: '新增' }, { label: '撤销', value: '撤销' }, { label: '修改', value: '修改' }]} />
           <Input.Search allowClear style={{ width: 240 }} placeholder="文件名称/编号"
             onSearch={(v) => setKeyword(v)} onChange={(e) => { if (!e.target.value) setKeyword('') }} />
-          <span className="text-[12px] text-[var(--color-stone)]">图例：🟨新增　⬜撤销　🟥修改</span>
+          {/* 图例与表格「状态」列同源取色（COLOR_MAP） */}
+          <span className="text-[12px] text-[var(--color-stone)]">
+            图例：
+            {Object.entries(COLOR_MAP).map(([name, v]) => (
+              <Tag key={name} color={v.tag}>{name}</Tag>
+            ))}
+          </span>
         </Space>
         <Table rowKey="id" columns={columns} dataSource={data} loading={loading} size="small"
           scroll={{ x: 1600 }} pagination={{ pageSize: 20 }}
           onRow={(r) => ({ style: { background: COLOR_MAP[r.color]?.bg } })} />
       </Card>
       <Modal title={editing ? '编辑登记' : '新增培训文件登记'} open={modalOpen}
-        onCancel={() => setModalOpen(false)} onOk={handleSave} width={640}>
+        onCancel={() => setModalOpen(false)} onOk={handleSave} confirmLoading={saving} width={640}>
         <Form form={form} layout="vertical" className="mt-2">
           <div className="grid grid-cols-3 gap-3">
             <Form.Item name="year" label="年份" rules={[{ required: true, message: '请填写年份' }]}>
@@ -343,7 +351,7 @@ export default function SopMasterClient() {
             </Form.Item>
           </div>
           <Form.Item name="involved_departments" label="培训涉及部门（提交后自动生成各部二级表）" rules={[{ required: true, message: '请选择涉及部门' }]}>
-            <Select mode="multiple" showSearch options={deptOptions}
+            <Select mode="multiple" showSearch options={deptOptions} maxTagCount="responsive"
               onChange={(vals: string[]) => loadDeptTrainers(vals || [])}
               filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
           </Form.Item>

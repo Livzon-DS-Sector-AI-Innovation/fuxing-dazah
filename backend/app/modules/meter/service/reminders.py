@@ -34,6 +34,9 @@ async def get_calibration_alerts(
     alerts: list[dict[str, Any]] = []
 
     for obj in instruments:
+        # 与 reminder_notify 发送口径一致：停用、检定单位为计量室的记录不提醒
+        if obj.status == "停用" or obj.calibration_unit == "计量室":
+            continue
         days = (obj.next_calibration_date - today).days if obj.next_calibration_date else None
         dept = _normalize_department(obj.department)
         if department and (not dept or department not in dept):
@@ -50,6 +53,9 @@ async def get_calibration_alerts(
         })
 
     for det in detectors:
+        # 与 reminder_notify 发送口径一致：停用、检测单位为计量室的记录不提醒
+        if det.status == "停用" or det.detection_unit == "计量室":
+            continue
         days = (det.next_calibration_date - today).days if det.next_calibration_date else None
         dept = _normalize_department(det.department)
         if department and (not dept or department not in dept):
@@ -143,6 +149,7 @@ async def get_instrument_date_stats(
         calibration_result=filters.calibration_result,
         color_marking=filters.color_marking,
         keyword=filters.keyword,
+        has_report=filters.has_report,
         like_filters=_instrument_like_filters(filters),
     )
     return {"field": field, "years": _build_date_stats_tree(rows)}
@@ -170,6 +177,7 @@ async def get_gas_detector_date_stats(
         manufacturer=filters.manufacturer,
         status=filters.status,
         keyword=filters.keyword,
+        has_report=filters.has_report,
         like_filters=_gas_detector_like_filters(filters),
     )
     return {"field": field, "years": _build_date_stats_tree(rows)}

@@ -130,13 +130,14 @@ export function SparePartEquipmentDrawer({ onRefresh }: Props) {
             mode="multiple"
             placeholder="搜索设备编号或名称"
             allowClear
-            showSearch
+            showSearch={{
+              onSearch: (v) => handleSearch(v),
+              filterOption: false,
+            }}
             style={{ width: '100%' }}
             value={selectedIds}
             onChange={(v) => setSelectedIds(v)}
             onClear={() => setSearchKeyword('')}
-            onSearch={(v) => handleSearch(v)}
-            filterOption={false}
             loading={searchLoading}
             notFoundContent={searchLoading ? '搜索中...' : searchKeyword ? '无匹配设备' : '输入关键词搜索'}
             options={options.filter(

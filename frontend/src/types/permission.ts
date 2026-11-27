@@ -28,6 +28,7 @@ export interface Role {
   data_scope_overrides: Record<string, DataScope>
   user_count: number
   department_count: number
+  group_feishu_department_id?: string | null
 }
 
 export type DataScope = 'all' | 'department' | 'department_and_children' | 'self_only'
@@ -39,6 +40,7 @@ export interface CreateRoleInput {
   data_scope: DataScope
   permission_ids: string[]
   data_scope_overrides?: Record<string, DataScope>
+  group_feishu_department_id?: string | null
 }
 
 export interface UpdateRoleInput {
@@ -47,6 +49,7 @@ export interface UpdateRoleInput {
   data_scope?: DataScope
   permission_ids?: string[]
   data_scope_overrides?: Record<string, DataScope>
+  group_feishu_department_id?: string | null
 }
 
 export interface UserRole {
@@ -105,6 +108,16 @@ export interface DepartmentItem {
   feishu_department_id: string
   name: string
   member_count: number | null
+}
+
+export interface DepartmentTreeNode {
+  id: string
+  feishu_department_id: string
+  name: string
+  member_count: number | null
+  leader_user_id: string | null
+  order: number | null
+  children: DepartmentTreeNode[]
 }
 
 export interface DepartmentRole {

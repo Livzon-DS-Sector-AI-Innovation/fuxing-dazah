@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Input, Tag, Spin, Empty, App, Button, Modal, Select, Avatar,
 } from 'antd'
@@ -9,8 +10,9 @@ import {
   SafetyCertificateOutlined, KeyOutlined, CloseOutlined, SwapOutlined,
 } from '@ant-design/icons'
 import { startImpersonate } from '@/actions/auth'
-import { fetchPersonnel, fetchDepartments, fetchUserPermissions } from '@/lib/api/permission'
+import { fetchPersonnel, fetchDepartments, fetchUserPermissions, fetchRoles } from '@/lib/api/permission'
 import { assignRoleToUser, removeRoleFromUser } from '@/actions/permission'
+import { usePermission } from '@/hooks/usePermission'
 import type {
   PersonnelItem, DepartmentItem, UserPermissionDetail,
   Role,
@@ -24,13 +26,31 @@ const SCOPE_LABELS: Record<string, string> = {
   self_only: '仅自己',
 }
 
+const NO_ROLES: Role[] = []
+
 interface Props {
   apiToken: string
-  availableRoles: Role[]
 }
 
-export function UserPermissionView({ apiToken, availableRoles }: Props) {
+export function UserPermissionView({ apiToken }: Props) {
   const { message, modal } = App.useApp()
+  const { hasPermission } = usePermission()
+  // permission:role:manage 是总开关，恒包含其余两项
+  const canAssign = hasPermission('permission:user:assign', 'permission:role:manage')
+  // 切换视角是以对方身份真实操作（能替对方提交数据），不只读，故只留给「管理角色」
+  const canImpersonate = hasPermission('permission:role:manage')
+
+  // 角色目录只在分配角色时用得上，按需加载
+  const {
+    data: roles = NO_ROLES,
+    isLoading: rolesLoading,
+    isError: rolesError,
+    refetch: refetchRoles,
+  } = useQuery({
+    queryKey: ['permission', 'roles'],
+    queryFn: () => fetchRoles(apiToken),
+    enabled: canAssign,
+  })
 
   // ── User list state ──
   const [allUsers, setAllUsers] = useState<PersonnelItem[]>([])
@@ -108,6 +128,16 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
   }
 
   // ── Assign role ──
+  const openAssign = () => {
+    if (rolesError) {
+      // 角色目录没取到时打开弹窗只会显示「所有角色已分配」，误导
+      message.error('获取角色列表失败')
+      void refetchRoles()
+      return
+    }
+    setAssignOpen(true)
+  }
+
   const handleAssign = async () => {
     if (!userDetail || !selectedRoleId) return
     setAssigning(true)
@@ -118,8 +148,8 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
       setSelectedRoleId(undefined)
       const detail = await fetchUserPermissions(apiToken, userDetail.user_id)
       setUserDetail(detail)
-    } catch {
-      message.error('分配角色失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '分配角色失败')
     } finally {
       setAssigning(false)
     }
@@ -133,8 +163,8 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
       message.success('角色已移除')
       const detail = await fetchUserPermissions(apiToken, userDetail.user_id)
       setUserDetail(detail)
-    } catch {
-      message.error('移除角色失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '移除角色失败')
     }
   }
 
@@ -158,7 +188,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
     })
   }
 
-  const assignableRoles = availableRoles.filter(
+  const assignableRoles = roles.filter(
     (r) => !userDetail?.roles.some((ur) => ur.role_id === r.id),
   )
 
@@ -203,21 +233,24 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
             <span className="text-[13px] font-medium text-[var(--color-charcoal)]">
               已分配角色
             </span>
-            <Button
-              type="link"
-              icon={<PlusOutlined />}
-              size="small"
-              onClick={() => setAssignOpen(true)}
-            >
-              分配角色
-            </Button>
+            {canAssign && (
+              <Button
+                type="link"
+                icon={<PlusOutlined />}
+                size="small"
+                onClick={openAssign}
+              >
+                分配角色
+              </Button>
+            )}
           </div>
           {userDetail.roles.length > 0 ? (
             <div className="flex flex-wrap gap-2">
               {userDetail.roles.map((r) => (
                 <Tag
                   key={r.role_id}
-                  closable
+                  // 目录已按操作者范围过滤：范围外的角色不显示移除按钮（后端会 403）
+                  closable={canAssign && roles.some((role) => role.id === r.role_id)}
                   closeIcon={<CloseOutlined style={{ fontSize: 10 }} />}
                   onClose={() => handleRemove(r.role_id)}
                   style={{ borderRadius: 6, fontSize: 12, margin: 0 }}
@@ -234,7 +267,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
             </div>
           ) : (
             <p className="text-[13px] text-[var(--color-muted)]">
-              暂无角色，点击「分配角色」开始配置
+              {canAssign ? '暂无角色，点击「分配角色」开始配置' : '暂无角色'}
             </p>
           )}
         </div>
@@ -366,21 +399,23 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
                     {user.department || '—'} · {user.employee_no || '—'}
                   </div>
                 </div>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<SwapOutlined />}
-                  title="以此用户身份浏览"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleImpersonate(user)
-                  }}
-                  style={{
-                    marginLeft: 'auto',
-                    flexShrink: 0,
-                    color: 'var(--color-steel)',
-                  }}
-                />
+                {canImpersonate && (
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<SwapOutlined />}
+                    title="以此用户身份浏览"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleImpersonate(user)
+                    }}
+                    style={{
+                      marginLeft: 'auto',
+                      flexShrink: 0,
+                      color: 'var(--color-steel)',
+                    }}
+                  />
+                )}
               </div>
             ))}
           </div>
@@ -391,8 +426,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
   return (
     <div
-      className={`${styles.shell} ${styles.users} h-full flex flex-col gap-4 sm:gap-5 p-4 sm:p-5 overflow-hidden`}
-      style={{ backgroundColor: 'var(--color-surface)' }}
+      className={`${styles.users} h-full flex flex-col gap-4 sm:gap-5 overflow-hidden`}
     >
       {/* ═══ Layer 1: Header Card ═══ */}
       <div
@@ -502,7 +536,11 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
           }))}
           showSearch
         />
-        {assignableRoles.length === 0 && (
+        {rolesLoading ? (
+          <p className="text-[13px] text-[var(--color-muted)] mt-3">
+            角色列表加载中…
+          </p>
+        ) : assignableRoles.length === 0 && (
           <p className="text-[13px] text-[var(--color-muted)] mt-3">
             所有角色已分配给该用户
           </p>

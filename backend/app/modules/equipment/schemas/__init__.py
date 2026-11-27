@@ -94,6 +94,13 @@ from app.modules.equipment.schemas.personnel import (
     RoleResponse,
     RoleUpdate,
 )
+from app.modules.equipment.schemas.reference import (
+    EquipmentReferenceGrantRequest,
+    EquipmentReferenceGrantResponse,
+    EquipmentReferenceResponse,
+    EquipmentReferenceRevokeRequest,
+    EquipmentReferenceTargetModuleResponse,
+)
 from app.modules.equipment.schemas.spare_part import (
     EquipmentConsumptionRecord,
     OutboundTransactionResponse,
@@ -101,11 +108,16 @@ from app.modules.equipment.schemas.spare_part import (
     EquipmentSparePartExtended,
     EquipmentSparePartResponse,
     SparePartCreate,
+    SparePartBatchDeleteFailure,
+    SparePartBatchDeleteRequest,
+    SparePartBatchDeleteResult,
     SparePartResponse,
     SparePartUpdate,
     StockAdjustRequest,
     StockInboundRequest,
+    StockOutboundRequest,
     StockResponse,
+    StockSettingsRequest,
     StockWarningResponse,
 )
 from app.modules.equipment.schemas.status_log import (
@@ -200,10 +212,15 @@ __all__ = [
     "MaterialConsumeResponse",
     # spare part
     "SparePartCreate",
+    "SparePartBatchDeleteFailure",
+    "SparePartBatchDeleteRequest",
+    "SparePartBatchDeleteResult",
     "SparePartUpdate",
     "SparePartResponse",
     "StockResponse",
+    "StockSettingsRequest",
     "StockInboundRequest",
+    "StockOutboundRequest",
     "StockAdjustRequest",
     "StockWarningResponse",
     "EquipmentConsumptionRecord",
@@ -236,4 +253,10 @@ __all__ = [
     "RoleCreate",
     "RoleResponse",
     "RoleUpdate",
+    # cross-module equipment references
+    "EquipmentReferenceGrantRequest",
+    "EquipmentReferenceGrantResponse",
+    "EquipmentReferenceResponse",
+    "EquipmentReferenceRevokeRequest",
+    "EquipmentReferenceTargetModuleResponse",
 ]

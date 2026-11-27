@@ -1,13 +1,15 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { App, Button, Table, Space, Popconfirm, Input, Modal, Tag, Descriptions } from 'antd'
-import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, UserOutlined } from '@ant-design/icons'
 import { Department, Employee } from '@/types/hr'
 import { fetchDepartmentsAction, fetchEmployeesAction, deleteDepartment } from '@/actions/hr'
+import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
+import { useDebouncedCallback } from '@/hooks/hr'
 import DepartmentForm from './DepartmentForm'
-import TeamClient from './TeamClient'
+import PageHeader from './PageHeader'
 
 interface DepartmentClientProps {
   initialDepartments: Department[]
@@ -28,9 +30,21 @@ export default function DepartmentClient({
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null)
   const [loading, setLoading] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
+  // 输入框即时回显值；防抖后才写入 searchKeyword 触发查询（此前每敲一个字发一次请求）
+  const [keywordInput, setKeywordInput] = useState('')
+  const loadSeq = useRef(0)
   const router = useRouter()
-  const [teamModalOpen, setTeamModalOpen] = useState(false)
-  const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null)
+
+  const { run: debouncedSetKeyword, cancel: cancelKeywordDebounce } = useDebouncedCallback((val: string) => {
+    setPage(1)
+    setSearchKeyword(val)
+  }, 300)
+
+  const commitKeyword = (val: string) => {
+    cancelKeywordDebounce()
+    setPage(1)
+    setSearchKeyword(val.trim())
+  }
 
   // 展开行：部门员工列表
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
@@ -41,20 +55,23 @@ export default function DepartmentClient({
   const doFetch = fetchAction || fetchDepartmentsAction
 
   const loadData = useCallback(async () => {
+    // 请求序号守卫：慢响应回来时若已有更新的查询，丢弃旧结果，避免覆盖新结果
+    const seq = ++loadSeq.current
     setLoading(true)
     try {
       const res = await doFetch({
         keyword: searchKeyword || undefined,
         page,
         page_size: pageSize })
+      if (seq !== loadSeq.current) return
       setDepartments(res.data)
       setTotal(res.meta?.total || 0)
     } catch (err: any) {
-      message.error(err.message || '加载数据失败')
+      if (seq === loadSeq.current) message.error(err.message || '加载数据失败')
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
-  }, [searchKeyword, page, pageSize, doFetch])
+  }, [searchKeyword, page, pageSize, doFetch, message])
 
   const handlePageChange = (newPage: number, newPageSize: number) => {
     setPage(newPage)
@@ -89,11 +106,6 @@ export default function DepartmentClient({
     } catch (err: any) {
       message.error(err.message || '删除失败')
     }
-  }
-
-  const handleOpenTeams = (department: Department) => {
-    setSelectedDepartment(department)
-    setTeamModalOpen(true)
   }
 
   // 加载部门下的员工
@@ -150,7 +162,7 @@ export default function DepartmentClient({
     { title: '职级', dataIndex: 'level', width: 80 },
     { title: '岗位类别', dataIndex: 'job_category', width: 80 },
     { title: '状态', dataIndex: 'status', width: 80,
-      render: (s: string) => <Tag color={s === '在职' ? 'green' : s === '离职' ? 'red' : 'default'}>{s}</Tag> },
+      render: (s: string) => <Tag color={EMPLOYEE_STATUS_TAG_COLORS[s] || 'default'}>{s}</Tag> },
     { title: '入职日期', dataIndex: 'hire_date', width: 110 },
     { title: '手机', dataIndex: 'phone', width: 120, ellipsis: true },
     { title: '员工性质', dataIndex: 'status_category', width: 90 },
@@ -178,6 +190,18 @@ export default function DepartmentClient({
         </a>
       ) },
     {
+      title: '部门负责人',
+      dataIndex: 'department_manager_name',
+      key: 'department_manager_name',
+      width: 110,
+      render: (v: string | null) => v || '-' },
+    {
+      title: '分管领导',
+      dataIndex: 'supervising_leader_name',
+      key: 'supervising_leader_name',
+      width: 110,
+      render: (v: string | null) => v || '-' },
+    {
       title: '描述',
       dataIndex: 'description',
       key: 'description',
@@ -185,17 +209,9 @@ export default function DepartmentClient({
     {
       title: '操作',
       key: 'action',
-      width: 220,
+      width: 160,
       render: (_: any, record: Department) => (
         <Space size="small">
-          <Button
-            type="text"
-            size="small"
-            icon={<TeamOutlined />}
-            onClick={() => handleOpenTeams(record)}
-          >
-            班组
-          </Button>
           <Button
             type="text"
             size="small"
@@ -205,11 +221,15 @@ export default function DepartmentClient({
             编辑
           </Button>
           <Popconfirm
-            title="确认删除"
-            description={`确定要删除部门 ${record.name} 吗？`}
+            title="确认删除部门"
+            // 有员工的部门删除后在确认里写明人数，避免误以为人员会随之处理
+            description={record.employee_count
+              ? `「${record.name}」下现有 ${record.employee_count} 名员工，删除部门不会改动这些人员的档案。确定删除？`
+              : `确定要删除部门 ${record.name} 吗？`}
             onConfirm={() => handleDelete(record.id)}
             okText="确定"
             cancelText="取消"
+            okButtonProps={{ danger: true }}
           >
             <Button
               type="text"
@@ -226,22 +246,25 @@ export default function DepartmentClient({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
-          部门管理
-        </h1>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
-          新增部门
-        </Button>
-      </div>
+      <PageHeader
+        title="部门管理"
+        description="维护组织架构；部门负责人与分管领导是转正评估第二、三级审批人"
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+            新增部门
+          </Button>
+        }
+      />
 
       <div className="flex flex-wrap gap-3 items-center">
         <Input
           placeholder="搜索部门名称或编码"
-          value={searchKeyword}
-          onChange={(e) => setSearchKeyword(e.target.value)}
+          value={keywordInput}
+          onChange={(e) => { setKeywordInput(e.target.value); debouncedSetKeyword(e.target.value.trim()) }}
+          onPressEnter={(e) => commitKeyword((e.target as HTMLInputElement).value)}
           prefix={<SearchOutlined />}
-          className="w-64"
+          // antd 输入框自带 width:100%，Tailwind 的 w-64 会被覆盖成整行宽，宽度须走 style
+          style={{ width: 260 }}
           allowClear
         />
       </div>
@@ -292,20 +315,6 @@ export default function DepartmentClient({
         onSuccess={handleFormSuccess}
       />
 
-      <Modal
-        open={teamModalOpen}
-        onCancel={() => setTeamModalOpen(false)}
-        footer={null}
-        width={800}
-      >
-        {selectedDepartment && (
-          <TeamClient
-            departmentId={selectedDepartment.id}
-            departmentName={selectedDepartment.name}
-          />
-        )}
-      </Modal>
-
       <Modal title={`${detailEmployee?.name || ''} - 详细资料`} open={!!detailEmployee}
         onCancel={() => setDetailEmployee(null)} footer={null} width={700}>
         {detailEmployee && (
@@ -326,7 +335,6 @@ export default function DepartmentClient({
             <Descriptions.Item label="状态">{detailEmployee.status}</Descriptions.Item>
             <Descriptions.Item label="手机">{detailEmployee.phone}</Descriptions.Item>
             <Descriptions.Item label="域账号">{detailEmployee.domain_account}</Descriptions.Item>
-            <Descriptions.Item label="部门管理者">{detailEmployee.dept_manager}</Descriptions.Item>
             <Descriptions.Item label="报表用职级">{detailEmployee.report_grade}</Descriptions.Item>
             <Descriptions.Item label="出生年月">{detailEmployee.birth_year}/{detailEmployee.birth_month}/{detailEmployee.birth_day}</Descriptions.Item>
           </Descriptions>
