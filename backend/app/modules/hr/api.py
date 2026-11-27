@@ -5942,15 +5942,15 @@ async def upload_sop_catalog(
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """上传 Excel SOP 目录，按 SOP编号 自动新增或更新。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    """上传 SOP 目录（Excel 或 GMP 文件目录 Word 文档），按 SOP编号 自动新增或更新。"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls", ".doc", ".docx")):
+        raise HTTPException(400, "仅支持 .xlsx / .xls / .doc / .docx 格式")
     allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     if not hr_scope.is_unrestricted and not allowed:
         raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
     try:
         content = await file.read()
-        result = await service.upload_sop_catalog(content, allowed_departments=allowed)
+        result = await service.upload_sop_catalog(content, allowed_departments=allowed, filename=file.filename)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")

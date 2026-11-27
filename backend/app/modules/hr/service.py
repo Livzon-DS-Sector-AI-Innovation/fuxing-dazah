@@ -470,9 +470,18 @@ class EmployeeService:
 
     async def upload_sop_catalog(
         self, file_bytes: bytes, allowed_departments: set[str] | None = None,
+        filename: str = "",
     ) -> dict:
-        """上传 SOP 目录 Excel，按 SOP 编号 + 部门 upsert。"""
-        from app.modules.hr.models import PositionTraining, SopCatalog
+        """上传 SOP 目录：Excel 或 GMP 文件目录 Word（.doc/.docx），按 SOP 编号 + 部门 upsert。"""
+        from app.modules.hr.sop_catalog_doc_parser import looks_like_word_document
+
+        if looks_like_word_document(file_bytes):
+            from app.modules.hr.sop_catalog_doc_parser import parse_catalog_document
+
+            entries = await asyncio.to_thread(parse_catalog_document, file_bytes, filename)
+            items = [{**e, "row_label": f"第{i}条"} for i, e in enumerate(entries, 1)]
+            return await self._import_catalog_rows(items, allowed_departments)
+
         from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
         rows = await asyncio.to_thread(read_first_sheet_rows, file_bytes)
@@ -486,25 +495,37 @@ class EmployeeService:
                         "职位": "position_name", "岗位名称": "position_name", "培训内容": "file_name"}
         for idx, h in enumerate(header):
             if h in col_name_map: col_map[idx] = col_name_map[h]
-
-        created, updated, errors = 0, 0, []
+        items = []
         for row_idx, row in enumerate(rows[1:], start=2):
             if all(c is None for c in row):
                 continue
+            data = {}
+            for ci, fn in col_map.items():
+                v = row[ci] if ci < len(row) else None
+                if v is None or (isinstance(v, str) and v.strip() == ""):
+                    continue
+                if isinstance(v, str):
+                    v = v.strip()
+                data[fn] = v
+            items.append({**data, "row_label": f"第{row_idx}行"})
+        return await self._import_catalog_rows(items, allowed_departments)
+
+    async def _import_catalog_rows(
+        self, items: list[dict], allowed_departments: set[str] | None,
+    ) -> dict:
+        """逐条 upsert SOP 目录（Excel 行与 Word 目录解析条目共用）。"""
+        from app.modules.hr.models import PositionTraining, SopCatalog
+
+        created, updated, errors = 0, 0, []
+        for item in items:
+            label = item["row_label"]
+            data = {k: v for k, v in item.items() if k != "row_label"}
             row_created = row_updated = 0
             try:
                 # SQLAlchemy 原生 SAVEPOINT：flush 失败只回滚本行，不毒化整个导入
                 async with self.repo.session.begin_nested():
-                    data = {}
-                    for ci, fn in col_map.items():
-                        v = row[ci] if ci < len(row) else None
-                        if v is None or (isinstance(v, str) and v.strip() == ""):
-                            continue
-                        if isinstance(v, str):
-                            v = v.strip()
-                        data[fn] = v
-                    if "file_name" not in data:
-                        errors.append(f"第{row_idx}行: 缺少文件名称")
+                    if not data.get("file_name"):
+                        errors.append(f"{label}: 缺少文件名称")
                         continue
                     # 行级数据范围：受限用户只导入授权部门
                     if (
@@ -518,7 +539,7 @@ class EmployeeService:
                     raw_names = str(data["file_name"])
                     split_names = [n.strip() for n in raw_names.replace("，", ",").split(",") if n.strip()]
                     # 没有培训类别时，用拆分后的值作为类别
-                    has_category = "category" in data
+                    has_category = bool(data.get("category"))
 
                     for name in split_names:
                         row_data = {**data, "file_name": name}
@@ -572,7 +593,7 @@ class EmployeeService:
                                 ))
                     await self.repo.session.flush()
             except Exception as e:
-                errors.append(f"第{row_idx}行: {e}")
+                errors.append(f"{label}: {e}")
                 continue
             created += row_created
             updated += row_updated
