@@ -60,11 +60,11 @@ export default function SopCatalogPage() {
 
   useEffect(() => { loadAll() }, [selectedDept])
 
-  // 按岗位分组
+  // 按岗位分组；Word 目录解析的行没有岗位、只有部门（大分类冒号推导），归到部门分组下
   const grouped = useMemo(() => {
     const groups: Record<string, PositionGroup> = {}
     for (const item of allData) {
-      const posName = item.position_name || '未分类'
+      const posName = item.position_name || item.department || '未分类'
       if (!groups[posName]) {
         groups[posName] = { name: posName, categories: {} }
       }
