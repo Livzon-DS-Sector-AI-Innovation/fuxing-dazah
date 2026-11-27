@@ -1,15 +1,18 @@
-"""五金库报废 service（三期 M7，制度 5.6 四条件，设计 §十一 三期）。
+"""五金库报废 service（三期 M7，制度 5.6 四条件；2026-11-25 并入申领出库全路径）。
 
-报废闭环（两步审批，manual 通道默认；feishu 通道制度定稿后切配置）：
+报废出库与领料单走同一条出库路径（状态名对齐；审批不动库存，出库才实扣）：
 
-    draft（发起：四条件单选+留证照片+明细行）
-      → submit → pending_dept（①待部门主管确认）
-      → dept_confirm → pending_final（②待仓储负责人终审）
-      → final_approve → approved【唯一动账点】：
-          逐行 preferred_lot 优先扣（校验有效+余额足），未指定按 FIFO
-          （_consume_fifo 复用）；逐批写 movements scrap（outbound 恒正，
-          ref=hardware_scraps）；批次 remaining 扣减。
-    驳回（任一步）/取消：零动账。
+    draft（发起：四条件单选+留证照片+明细行+指定审批人）
+      → submit → pending（待审批；预扣生效。飞书分支已配置=代发起「福兴电子
+        领/退料单审批」报废分支给所选审批人；未配置=审批人在平台点通过。
+        实例创建失败→上抛，停在 draft 不降级，同申领）
+      → approve → approved（待出库；审批人通过：飞书 APPROVED 回流（WS 事件/
+        轮询/对账）或平台「通过」，两条路都可走，预扣保持）
+      → execute → issued【唯一动账点】：仓管点「出库」——逐行 preferred_lot
+        优先扣（校验有效+余额足），未指定按 FIFO（_consume_fifo 复用）；
+        逐批写 movements scrap（outbound 恒正，ref=hardware_scraps）；
+        批次 remaining 扣减。
+    驳回（pending）/ 取消（draft/pending）：释放预扣，零动账。
 
 红线：无单据不动账（收口原则不变）；报废只对 stocked 物料（direct 不占
 库存无报废概念）；AI 不参与审批决策。
@@ -21,7 +24,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -30,7 +33,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.warehouse.hardware import service as hw
 from app.modules.warehouse.hardware.models import (
     HardwareMaterial,
-    HardwareMovement,
     HardwareReceipt,
     HardwareReceiptItem,
     HardwareScrap,
@@ -51,6 +53,8 @@ SCRAP_REASON_LABELS = {
     "appraisal": "技术鉴定失效",
 }
 
+SCRAP_MANAGE_PERM = "warehouse:hardware:scrap:manage"
+
 
 def _now() -> datetime:
     return datetime.now(CN_TZ)
@@ -58,6 +62,19 @@ def _now() -> datetime:
 
 def _qty(value: Any) -> Decimal:
     return Decimal(str(value))
+
+
+def can_user_approve_scrap(scrap: HardwareScrap, *, user: Any, perms: set[str]) -> bool:
+    """平台「通过 / 驳回」资格：持「报废管理」权限，或被选为该单审批人。
+
+    审批人是发起人自选的（飞书 user_id），登录用户的 identity.feishu_user_id
+    与之一致即可在平台审批——与飞书审批单两条路任选其一。
+    """
+    if SCRAP_MANAGE_PERM in perms:
+        return True
+    if user is None or not scrap.approver_user_id:
+        return False
+    return str(getattr(user, "feishu_user_id", "") or "") == str(scrap.approver_user_id)
 
 
 # ── 发起与状态机 ──
@@ -74,8 +91,11 @@ async def create_scrap(
     items: list[dict[str, Any]],
     attachments: list[dict[str, Any]] | None = None,
     remark: str | None = None,
+    approver_user_id: str | None = None,
+    approver_name: str | None = None,
+    user: Any = None,
 ) -> HardwareScrap:
-    """报废草稿：行快照校验（仅 stocked；数量>0；批次可选）。"""
+    """报废草稿：行快照校验（仅 stocked；数量>0；批次可选）+ 指定审批人。"""
     if scrap_reason not in SCRAP_REASON_LABELS:
         raise hw.HardwareError(
             f"未知报废条件: {scrap_reason}（须为 {'/'.join(SCRAP_REASON_LABELS)}）",
@@ -109,11 +129,15 @@ async def create_scrap(
         dept_name=dept_name,
         requested_by=requested_by,
         requested_by_open_id=requested_by_open_id,
+        requested_by_user_id=getattr(user, "id", None) if user is not None else None,
+        approver_user_id=approver_user_id,
+        approver_name=approver_name,
         scrap_reason=scrap_reason,
         reason_note=reason_note,
         attachments=attachments,
         status="draft",
         remark=remark,
+        created_by=getattr(user, "id", None) if user is not None else None,
     )
     db.add(scrap)
     await db.flush()
@@ -185,23 +209,17 @@ async def list_scraps(
     return list(rows), int(total or 0)
 
 
-async def submit_scrap(
-    db: AsyncSession, scrap_id: UUID, *, user: Any = None
-) -> HardwareScrap:
-    """draft → pending_dept：提交审批（复用 ApprovalChannel 工厂，未配置=manual 两步）。"""
-    from app.modules.warehouse.hardware.approval_channel import (
-        ApprovalChannelError,
-        get_scrap_approval_channel,
-    )
+async def _mark_scrap_stock_dirty(db: AsyncSession, scrap_id: UUID) -> None:
+    """报废预扣口径变化（提交/驳回/撤回/出库）→ 登记镜像三值刷新。"""
+    from app.modules.warehouse.hardware.mirror_sync import mark_stock_dirty
 
-    scrap = await get_scrap(db, scrap_id)
-    if scrap.status != "draft":
-        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可提交（仅 draft 可提交）")
     items = await list_scrap_items(db, scrap_id)
-    if not items:
-        raise hw.HardwareError("报废单无明细行")
-    channel = get_scrap_approval_channel()
-    payload = [
+    mark_stock_dirty(*(i.material_id for i in items))
+
+
+async def _approval_payload(db: AsyncSession, scrap_id: UUID) -> list[dict[str, Any]]:
+    items = await list_scrap_items(db, scrap_id)
+    return [
         {
             "material_id": str(i.material_id),
             "material_name": i.name,
@@ -211,73 +229,144 @@ async def submit_scrap(
         }
         for i in items
     ]
-    try:
-        ref = await channel.submit_scrap(db, scrap, payload)
-        scrap.approval_channel = channel.name
+
+
+async def submit_scrap(
+    db: AsyncSession, scrap_id: UUID, *, user: Any = None
+) -> HardwareScrap:
+    """draft → pending：提交即预扣（可领量校验，防审批期间被领走）。
+
+    飞书分支已配置：代发起「福兴电子领/退料单审批」报废分支给所选审批人，
+    失败上抛（调用方转 502），单据留在 draft 不降级（同申领 2026-11-19 口径）；
+    未配置：approval_channel=manual，审批人在平台点通过。
+    """
+    from app.modules.warehouse.hardware.approval_channel import (
+        ApprovalChannelError,
+        get_scrap_approval_channel,
+    )
+
+    scrap = await get_scrap(db, scrap_id)
+    if scrap.status != "draft":
+        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可提交（仅草稿可提交）")
+    items = await list_scrap_items(db, scrap_id)
+    if not items:
+        raise hw.HardwareError("报废单无明细行")
+    # 预扣校验：同物料聚合后逐项对可领量（本单尚为 draft，未计入预扣）
+    need_by_material: dict[UUID, Decimal] = {}
+    for i in items:
+        need_by_material[i.material_id] = need_by_material.get(i.material_id, ZERO) + i.quantity
+    for material_id, need in need_by_material.items():
+        available = await hw.available_of_material(db, material_id)
+        if available < need:
+            material = await db.get(HardwareMaterial, material_id)
+            raise hw.HardwareError(
+                f"可报废量不足：{material.name if material else material_id} "
+                f"可领 {available.normalize()}，报废 {need.normalize()}"
+            )
+
+    channel = get_scrap_approval_channel()
+    if channel is not None:
+        if not str(scrap.approver_user_id or "").strip():
+            raise hw.HardwareError(
+                "未选择审批人（主管及以上），请重新发起并选择审批人", status_code=422
+            )
+        try:
+            ref = await channel.submit_scrap(db, scrap, await _approval_payload(db, scrap_id))
+        except ApprovalChannelError as exc:
+            logger.exception("五金报废审批发起失败: scrap=%s", scrap.scrap_no)
+            raise hw.HardwareError(
+                f"飞书审批发起失败，单据已留在草稿可重试：{exc}", status_code=502
+            ) from exc
+        logger.info("五金报废审批已提交: scrap=%s channel=feishu ref=%s", scrap.scrap_no, ref)
+    else:
+        scrap.approval_channel = "manual"
         scrap.approval_status = "pending"
-        logger.info(
-            "五金报废审批已提交: scrap=%s channel=%s ref=%s", scrap.scrap_no, channel.name, ref
-        )
-    except ApprovalChannelError:
-        # feishu 通道故障 → manual 两步兜底（与领料同款降级口径）
-        if channel.name == "feishu":
-            logger.warning("feishu 报废审批提交失败，降级 manual 通道: %s", scrap.scrap_no)
-            scrap.approval_channel = "manual"
-            scrap.approval_status = "pending"
-        else:
-            raise
-    scrap.status = "pending_dept"
+        logger.info("五金报废审批走平台通过: scrap=%s", scrap.scrap_no)
+
+    scrap.status = "pending"
+    if user is not None and hasattr(user, "id"):
+        scrap.updated_by = user.id
+    await db.flush()
+    await _mark_scrap_stock_dirty(db, scrap_id)
+    return scrap
+
+
+async def approve_scrap(
+    db: AsyncSession,
+    scrap_id: UUID,
+    *,
+    approved_by: str,
+    user: Any = None,
+    withdraw_instance: bool = False,
+) -> HardwareScrap:
+    """pending → approved（待出库）：审批人通过，预扣保持不动账。
+
+    飞书回流与平台「通过」共用。平台先通过时（withdraw_instance=True）尽力
+    撤回还没处理的飞书审批单，审批人之后在飞书再点也不会重复处理。
+    """
+    from app.modules.warehouse.hardware.approval_channel import cancel_scrap_approval
+
+    scrap = await get_scrap(db, scrap_id)
+    if scrap.status != "pending":
+        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可审批通过（仅待审批可通过）")
+    if withdraw_instance and scrap.approval_status == "pending":
+        await cancel_scrap_approval(db, scrap)
+    scrap.status = "approved"
+    scrap.approval_status = "approved"
+    scrap.approved_by = approved_by
+    scrap.approved_at = _now()
     if user is not None and hasattr(user, "id"):
         scrap.updated_by = user.id
     await db.flush()
     return scrap
 
 
-async def dept_confirm_scrap(
-    db: AsyncSession, scrap_id: UUID, *, confirmed_by: str, note: str | None = None
-) -> HardwareScrap:
-    """pending_dept → pending_final：①部门主管确认（manual 通道第一步）。"""
-    scrap = await get_scrap(db, scrap_id)
-    if scrap.status != "pending_dept":
-        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可部门确认（仅 pending_dept 可确认）")
-    scrap.status = "pending_final"
-    scrap.dept_confirmed_by = confirmed_by
-    scrap.dept_confirmed_at = _now()
-    if note:
-        scrap.remark = note
-    await db.flush()
-    return scrap
-
-
 async def reject_scrap(
-    db: AsyncSession, scrap_id: UUID, *, rejected_by: str, reason: str
+    db: AsyncSession,
+    scrap_id: UUID,
+    *,
+    rejected_by: str,
+    reason: str,
+    withdraw_instance: bool = False,
 ) -> HardwareScrap:
-    """pending_dept/pending_final → rejected：驳回零动账。"""
+    """pending → rejected：驳回释放预扣，零动账。
+
+    平台驳回（withdraw_instance=True）尽力撤回未决飞书审批单；飞书回流
+    驳回时实例已有结论，不再撤回。
+    """
+    from app.modules.warehouse.hardware.approval_channel import cancel_scrap_approval
+
     scrap = await get_scrap(db, scrap_id)
-    if scrap.status not in ("pending_dept", "pending_final"):
-        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可驳回（仅审批中两态可驳回）")
+    if scrap.status != "pending":
+        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可驳回（仅待审批可驳回）")
+    if withdraw_instance and scrap.approval_status == "pending":
+        await cancel_scrap_approval(db, scrap)
     scrap.status = "rejected"
     scrap.approval_status = "rejected"
     scrap.rejected_by = rejected_by
     scrap.rejected_reason = reason
     scrap.rejected_at = _now()
     await db.flush()
+    await _mark_scrap_stock_dirty(db, scrap_id)
     return scrap
 
 
 async def cancel_scrap(db: AsyncSession, scrap_id: UUID) -> HardwareScrap:
-    """draft/pending_dept/pending_final → cancelled：发起人撤回（零动账）。"""
+    """draft/pending → cancelled：撤回释放预扣，零动账。"""
+    from app.modules.warehouse.hardware.approval_channel import cancel_scrap_approval
+
     scrap = await get_scrap(db, scrap_id)
-    if scrap.status == "approved":
-        raise hw.HardwareError("已销账的报废单不可撤回")
-    if scrap.status == "cancelled":
-        raise hw.HardwareError("报废单已是取消状态")
+    if scrap.status not in ("draft", "pending"):
+        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可撤回（仅草稿/待审批可撤回）")
+    if scrap.approval_status == "pending":
+        await cancel_scrap_approval(db, scrap)
     scrap.status = "cancelled"
     await db.flush()
+    await _mark_scrap_stock_dirty(db, scrap_id)
     return scrap
 
 
-# ── 销账（唯一动账点）──
+# ── 出库（唯一动账点）──
 
 
 async def _consume_scrap_lots(
@@ -318,22 +407,21 @@ async def _consume_scrap_lots(
     return allocs
 
 
-async def final_approve_scrap(
-    db: AsyncSession, scrap_id: UUID, *, approved_by: str, user: Any = None
+async def execute_scrap(
+    db: AsyncSession, scrap_id: UUID, *, executed_by: str, user: Any = None
 ) -> HardwareScrap:
-    """pending_final → approved：终审通过即销账（唯一动账点，同事务）。
+    """approved → issued：仓管出库实扣（唯一动账点，同事务）。
 
     - 逐行扣批次（preferred 优先/FIFO 兜底）+ 逐批 scrap 流水（outbound 恒正）；
-    - 单头 approved + scrapped_at + lot_allocations 结果留档。
+    - 单头 issued + executed_by + scrapped_at + lot_allocations 结果留档。
     """
     scrap = await get_scrap(db, scrap_id)
-    if scrap.status != "pending_final":
-        raise hw.HardwareError(
-            f"报废单状态 {scrap.status} 不可终审（部门主管确认后才可终审）"
-        )
+    if scrap.status != "approved":
+        raise hw.HardwareError(f"报废单状态 {scrap.status} 不可出库（审批通过后才可出库）")
     items = await list_scrap_items(db, scrap_id)
     if not items:
         raise hw.HardwareError("报废单无明细行")
+    operator = (getattr(user, "display_name", None) or executed_by) if user is not None else executed_by
     now = _now()
     allocations: list[dict[str, Any]] = []
 
@@ -352,11 +440,11 @@ async def final_approve_scrap(
                 unit=row.unit,
                 quantity=take,
                 lot=lot,
-                operator=approved_by,
+                operator=operator,
                 dept_name=scrap.dept_name,
                 ref_table="hardware_scraps",
                 ref_id=scrap.id,
-                remark=f"报废销账（{scrap.scrap_no}）：{SCRAP_REASON_LABELS.get(scrap.scrap_reason, scrap.scrap_reason)}",
+                remark=f"报废出库（{scrap.scrap_no}）：{SCRAP_REASON_LABELS.get(scrap.scrap_reason, scrap.scrap_reason)}",
             )
             allocations.append({
                 "material": row.name,
@@ -367,17 +455,16 @@ async def final_approve_scrap(
                 "qty": float(take),
             })
 
-    scrap.status = "approved"
-    scrap.approval_status = "approved"
-    scrap.approved_by = approved_by
-    scrap.approved_at = now
+    scrap.status = "issued"
+    scrap.executed_by = operator
     scrap.scrapped_at = now
     scrap.lot_allocations = allocations
     if user is not None and hasattr(user, "id"):
         scrap.updated_by = user.id
     await db.flush()
+    await _mark_scrap_stock_dirty(db, scrap_id)
     logger.info(
-        "五金报废已销账: scrap=%s rows=%d 批次扣减=%d", scrap.scrap_no, len(items), len(allocations)
+        "五金报废已出库: scrap=%s rows=%d 批次扣减=%d", scrap.scrap_no, len(items), len(allocations)
     )
     return scrap
 

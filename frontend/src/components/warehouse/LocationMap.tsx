@@ -152,7 +152,7 @@ export function LocationMap() {
         <Drawer
           title={`库位 ${selectedLoc.code} ${selectedLoc.name}`}
           open
-          width={480}
+          size={480}
           onClose={() => setSelectedLoc(null)}
           destroyOnHidden
         >

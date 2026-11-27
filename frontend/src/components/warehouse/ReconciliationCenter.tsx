@@ -207,7 +207,7 @@ export function ReconciliationCenter() {
           detailRunId && detailDate ? ` · ${dayjs(detailDate).format('YYYY-MM-DD HH:mm')}` : ''
         }`}
         open={!!detailRunId}
-        width={720}
+        size={720}
         onClose={() => setDetailRunId(null)}
         destroyOnHidden
       >

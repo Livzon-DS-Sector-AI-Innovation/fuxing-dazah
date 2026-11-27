@@ -6,7 +6,7 @@ import { HardwareInoutBoard } from './HardwareInoutBoard'
 import { renderWithQuery } from '@/test/utils'
 
 const receiptsMock = vi.hoisted(() => vi.fn())
-const requisitionsMock = vi.hoisted(() => vi.fn())
+const docsMock = vi.hoisted(() => vi.fn())
 const returnsMock = vi.hoisted(() => vi.fn())
 const stockMock = vi.hoisted(() => vi.fn())
 const summaryMock = vi.hoisted(() => vi.fn())
@@ -15,7 +15,7 @@ const currentUserMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api/warehouse-hardware', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   fetchHardwareReceiptsClient: receiptsMock,
-  fetchHardwareRequisitionsClient: requisitionsMock,
+  fetchHardwareOutboundDocsClient: docsMock,
   fetchHardwareReturnsClient: returnsMock,
   fetchHardwareStockClient: stockMock,
   fetchHardwareStockSummaryClient: summaryMock,
@@ -45,7 +45,8 @@ beforeEach(() => {
     page: 1,
     page_size: 20,
   })
-  requisitionsMock.mockResolvedValue({ items: [], total: 7, page: 1, page_size: 20 })
+  // 领料单 + 报废单合并统计（两类单据同一条出库路径）
+  docsMock.mockResolvedValue({ items: [], total: 7, page: 1, page_size: 20 })
   returnsMock.mockResolvedValue({ items: [], total: 1, page: 1, page_size: 20 })
   stockMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
   summaryMock.mockResolvedValue({
@@ -80,7 +81,8 @@ describe('五金出入库工作台三段化', () => {
     renderWithQuery(<HardwareInoutBoard />)
 
     await user.click(await screen.findByText('待发料'))
-    expect(await screen.findByText('领用申请单')).toBeInTheDocument()
+    // 页签名与卡片标题都是「申请单据」
+    expect((await screen.findAllByText('申请单据')).length).toBeGreaterThanOrEqual(2)
     expect(screen.queryByText('RK-20261120-001')).not.toBeInTheDocument()
   })
 

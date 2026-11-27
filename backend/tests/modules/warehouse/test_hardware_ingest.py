@@ -34,9 +34,18 @@ APPROVAL_CODE = "6FECD1F4-TEST-CODE"
 
 @pytest.fixture
 def approval_code(monkeypatch):
-    from app.core.config import get_settings
+    """审批定义编码：审批配置已迁系统配置（2026-11-26），patch runtime_store
+    单例（DB>env>默认链中 DB 层被替身固定，env/settings patch 不再生效）。"""
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
 
-    monkeypatch.setattr(get_settings(), "HARDWARE_APPROVAL_CODE", APPROVAL_CODE, raising=False)
+    original = runtime_store.get_value
+
+    def _get_value(key: str):
+        if key == "hardware_approval_code":
+            return APPROVAL_CODE
+        return original(key)
+
+    monkeypatch.setattr(runtime_store, "get_value", _get_value)
     return APPROVAL_CODE
 
 
@@ -126,6 +135,31 @@ def test_parse_form_both_shapes():
 def test_parse_form_rejects_unknown_kind():
     with pytest.raises(ai.IngestError):
         ai.parse_form(json.dumps([{"id": ai.KIND_WIDGET_ID, "value": "乱值"}]))
+
+
+def test_parse_form_scrap_kind():
+    """报废分支（2026-11-25）：分流键识别为报废，不建单（系统代发起专用）。"""
+    parsed = ai.parse_form(
+        json.dumps([{"id": ai.KIND_WIDGET_ID, "value": "五金库报废"}])
+    )
+    assert parsed.kind == "报废"
+
+
+async def test_ingest_scrap_kind_skipped(db_session, approval_code):
+    """报废分支自建实例不摄取（v1 口径：报废必须从系统发起走留证流程）。"""
+    form = json.dumps(
+        [
+            {"id": ai.KIND_WIDGET_ID, "type": "radioV2", "value": "五金库报废"},
+            {"id": "widgetX", "type": "input", "value": "WJK-BF-261125-0001"},
+        ],
+        ensure_ascii=False,
+    )
+    result = await ai.ingest_instance(
+        db_session,
+        "INST_SCRAP_SELF_1",
+        instance={"approval_code": approval_code, "status": "PENDING", "form": form},
+    )
+    assert result["action"] == "skip"
 
 
 def test_extract_instance_code_shapes():
@@ -529,8 +563,14 @@ async def test_reconcile_ingests_and_syncs(db_session, approval_code, monkeypatc
 
 
 async def test_reconcile_disabled_without_code(db_session, monkeypatch, approval_code):
-    from app.core.config import get_settings
+    # 覆写编码为空（runtime 层，审批配置已迁系统配置）
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
 
-    monkeypatch.setattr(get_settings(), "HARDWARE_APPROVAL_CODE", "", raising=False)
+    original = runtime_store.get_value
+    monkeypatch.setattr(
+        runtime_store,
+        "get_value",
+        lambda key: "" if key == "hardware_approval_code" else original(key),
+    )
     stats = await ai.reconcile_recent_instances(db_session)
     assert stats == {"enabled": 0, "codes": 0, "ingested": 0, "synced": 0, "skipped": 0}

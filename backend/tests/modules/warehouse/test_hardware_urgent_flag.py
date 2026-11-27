@@ -32,9 +32,17 @@ KEEPER = "ou_keeper_001"
 
 @pytest.fixture
 def approval_code(monkeypatch):
-    monkeypatch.setattr(
-        get_settings(), "HARDWARE_APPROVAL_CODE", APPROVAL_CODE, raising=False
-    )
+    # 审批配置已迁系统配置（2026-11-26）：patch runtime_store 的 DB 层
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    original = runtime_store.get_value
+
+    def _get_value(key: str):
+        if key == "hardware_approval_code":
+            return APPROVAL_CODE
+        return original(key)
+
+    monkeypatch.setattr(runtime_store, "get_value", _get_value)
     return APPROVAL_CODE
 
 

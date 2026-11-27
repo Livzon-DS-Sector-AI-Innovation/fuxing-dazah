@@ -214,8 +214,14 @@ class RuntimeConfigStore:
     def _resolve(
         self, info: runtime_registry.RuntimeKeyInfo, row: Any | None
     ) -> tuple[Any, RuntimeSource]:
-        """回退链解析：DB 活行（值非空）→ env → registry 默认。"""
-        if row is not None and not row.is_deleted and row.value is not None:
+        """回退链解析：DB 活行（值非空）→ env → registry 默认。
+
+        DB 值为空串/None 视同未设置（继续走 env 兜底）——2026-11-26 审批
+        配置迁入后播种的是空默认行，env 里的现值须继续生效；管理员在页面
+        写入真值才覆盖 env。前端「留空=清空覆盖（回退 env/默认）」的语义
+        也依赖这一行为。
+        """
+        if row is not None and not row.is_deleted and row.value not in (None, ""):
             return self._coerce(info, row.value), "db"
         if info.env_var:
             env_value = getattr(get_settings(), info.env_var, None)

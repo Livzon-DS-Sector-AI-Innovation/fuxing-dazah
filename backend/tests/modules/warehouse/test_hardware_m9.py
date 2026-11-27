@@ -274,5 +274,6 @@ async def test_existing_m6_push_executors_are_naturally_auto(db_session):
         source = inspect.getsource(getattr(ex, fn_name))
         assert "accept_receipt" not in source
         assert "issue_requisition" not in source
-        assert "final_approve_scrap" not in source
+        assert "approve_scrap" not in source
+        assert "execute_scrap" not in source
         assert "_write_movement" not in source

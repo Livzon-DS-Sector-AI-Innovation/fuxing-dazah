@@ -64,6 +64,8 @@ export interface HardwareMaterialRecord {
   spec: string | null
   unit: string
   category: string
+  /** 位号（默认存放位，目录级；批次级库位以入库上架为准） */
+  location_no: string | null
   managed_class: HardwareManagedClass
   direct_dept?: string | null
   safety_stock: number
@@ -197,7 +199,12 @@ export interface HardwareRequisitionItemRecord {
   unit: string | null
   need_qty: number
   issued_qty: number | null
-  fifo_lot_allocations?: Array<{ lot_no: string; location_id: string | null; qty: number }> | null
+  fifo_lot_allocations?: Array<{
+    lot_id?: string
+    lot_no: string
+    location_id: string | null
+    qty: number
+  }> | null
 }
 
 export interface HardwareRequisitionRecord {
@@ -417,12 +424,23 @@ export interface HardwareStocktakeRecord {
   items?: HardwareStocktakeItemRecord[]
 }
 
-export type HardwareReturnStatus = 'draft' | 'accepted' | 'rejected'
+/** 平台发起链路：draft 待提交 → pending 待审批 → approved 待验收 → accepted 已回加；
+ * 老登记/飞书自建链路：draft=待签收验收。channel 为空即老链路。 */
+export type HardwareReturnStatus =
+  | 'draft'
+  | 'pending'
+  | 'approved'
+  | 'accepted'
+  | 'rejected'
+  | 'cancelled'
 
 export const HARDWARE_RETURN_STATUS_LABEL: Record<HardwareReturnStatus, string> = {
-  draft: '待验收',
+  draft: '待提交',
+  pending: '待审批',
+  approved: '待验收',
   accepted: '已回加',
-  rejected: '已拒退',
+  rejected: '已驳回',
+  cancelled: '已撤回',
 }
 
 export interface HardwareReturnItemRecord {
@@ -438,6 +456,13 @@ export interface HardwareReturnItemRecord {
 export interface HardwareReturnRecord {
   id: string
   return_no: string
+  requisition_id: string | null
+  requisition_instance_code: string | null
+  approver_user_id: string | null
+  approver_name: string | null
+  approval_channel: string | null
+  approval_instance_code: string | null
+  approval_status: string | null
   dept_name: string
   returned_by: string
   items: HardwareReturnItemRecord[]
@@ -447,6 +472,7 @@ export interface HardwareReturnRecord {
   status: HardwareReturnStatus
   accepted_by: string | null
   accepted_at: string | null
+  rejected_by: string | null
   rejected_reason: string | null
   lot_adjustments: Array<{
     material: string
@@ -456,6 +482,28 @@ export interface HardwareReturnRecord {
   }> | null
   remark: string | null
   created_at: string
+  /** 当前用户能否在平台点通过/驳回（退料管理权限或所选审批人） */
+  can_approve?: boolean
+}
+
+/** 领料单可退额度行（退料弹窗逐行上限） */
+export interface HardwareReturnableRow {
+  material_id: string
+  name: string | null
+  spec: string | null
+  unit: string | null
+  issued: number
+  returned: number
+  returnable: number
+}
+
+export interface HardwareReturnFromRequisitionInput {
+  requisition_id: string
+  returned_by?: string
+  approver_user_id?: string
+  approver_name?: string
+  reason_note?: string
+  items: Array<{ material_id: string; quantity: number; preferred_lot_id?: string }>
 }
 
 export interface HardwarePlanItemRecord {
@@ -498,11 +546,12 @@ export interface HardwareEnvLogRecord {
 }
 
 export type HardwareScrapReason = 'expired' | 'damaged' | 'obsolete' | 'appraisal'
+/** 报废单状态与领料单同名同义：待审批 → 待出库 → 已出库（走同一条出库路径） */
 export type HardwareScrapStatus =
   | 'draft'
-  | 'pending_dept'
-  | 'pending_final'
+  | 'pending'
   | 'approved'
+  | 'issued'
   | 'rejected'
   | 'cancelled'
 
@@ -515,9 +564,9 @@ export const HARDWARE_SCRAP_REASON_LABEL: Record<HardwareScrapReason, string> = 
 
 export const HARDWARE_SCRAP_STATUS_LABEL: Record<HardwareScrapStatus, string> = {
   draft: '草稿',
-  pending_dept: '待部门主管确认',
-  pending_final: '待仓储负责人终审',
-  approved: '已销账',
+  pending: '待审批',
+  approved: '待出库',
+  issued: '已出库',
   rejected: '已驳回',
   cancelled: '已撤回',
 }
@@ -541,12 +590,14 @@ export interface HardwareScrapRecord {
   scrap_reason: HardwareScrapReason
   reason_note: string | null
   attachments: Array<Record<string, unknown>> | null
+  approver_user_id: string | null
+  approver_name: string | null
   approval_channel: string | null
+  approval_instance_code: string | null
   approval_status: string | null
-  dept_confirmed_by: string | null
-  dept_confirmed_at: string | null
   approved_by: string | null
   approved_at: string | null
+  executed_by: string | null
   rejected_by: string | null
   rejected_reason: string | null
   status: HardwareScrapStatus
@@ -555,11 +606,23 @@ export interface HardwareScrapRecord {
   remark: string | null
   created_at: string
   items?: HardwareScrapItemRecord[]
+  /** 当前用户能否在平台点通过/驳回（报废管理权限或所选审批人） */
+  can_approve?: boolean
+}
+
+/** 「申请单据」合并列表的一行：领料单或报废单（doc_kind 指明），另一侧为 null */
+export interface HardwareOutboundDocRow {
+  doc_kind: 'requisition' | 'scrap'
+  id: string
+  requisition: HardwareRequisitionRecord | null
+  scrap: HardwareScrapRecord | null
 }
 
 export interface HardwareScrapCreateInput {
   dept_name: string
   requested_by: string
+  approver_user_id?: string
+  approver_name?: string
   scrap_reason: HardwareScrapReason
   reason_note?: string
   remark?: string

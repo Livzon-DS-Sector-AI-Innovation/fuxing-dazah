@@ -84,12 +84,12 @@ ERP_STATUSES = ("pending", "entered")
 # 报废条件四选一（制度 5.6）
 SCRAP_REASONS = ("expired", "damaged", "obsolete", "appraisal")
 SCRAP_STATUSES = (
-    "draft",         # 发起草稿（不动账）
-    "pending_dept",  # 已提交，待部门主管确认
-    "pending_final", # 部门主管已确认，待仓储负责人终审
-    "approved",      # 终审通过=销账（唯一动账点）
-    "rejected",      # 驳回（任一步可驳，零动账）
-    "cancelled",     # 发起人撤回
+    "draft",      # 发起草稿（不动账）
+    "pending",    # 待审批（提交即预扣；飞书审批单或平台通过）
+    "approved",   # 待出库（审批人通过，预扣保持）
+    "issued",     # 已出库（仓管出库实扣，唯一动账点）
+    "rejected",   # 驳回（释放预扣，零动账）
+    "cancelled",  # 撤回（释放预扣）
 )
 # OCR↔ERP 并存对账状态（M8：erp_import 单匹配轴，独立于 status）
 RECONCILE_STATUSES = ("none", "unmatched", "matched", "verified", "discrepancy")
@@ -137,6 +137,10 @@ class HardwareMaterial(BaseModel):
     spec: Mapped[str | None] = mapped_column(String(200), comment="规格型号")
     unit: Mapped[str] = mapped_column(String(20), nullable=False, comment="计量单位")
     category: Mapped[str] = mapped_column(String(20), nullable=False, comment="类别（7 大类+沉淀类）")
+    location_no: Mapped[str | None] = mapped_column(
+        String(100),
+        comment="位号（默认存放位，目录级展示/检索用；批次级库位仍以入库上架为准）",
+    )
     managed_class: Mapped[str] = mapped_column(
         String(10), nullable=False, default="stocked", server_default="stocked",
         comment="stocked 共用类占库存 / direct 车间单独需求类不占库存",
@@ -706,7 +710,14 @@ class HardwareStocktakeItem(BaseModel):
 
 
 class HardwareReturn(BaseModel):
-    """五金库退库单（设计 §2.6）：退库人 → 部门负责人签 → 仓管员验收（不合格拒退）。
+    """五金库退库单（设计 §2.6；2026-11-26 平台发起链路并入审批）。
+
+    两条链路共表：
+    - 平台发起（从已发料领料单退料）：draft（待提交，暂不落库——提交即发起审批）
+      → pending（待审批：飞书审批单发给所选审批人）→ approved（审批人同意，待
+      仓管验收）→ accepted（仓管验收回加，物料回库存）；任一环节可驳回/撤回。
+    - 飞书自建/平台登记（原链路不变）：draft（待签收验收）→ accepted/rejected；
+      approval_channel 为空即老链路。
 
     明细=行式 JSON items（[{material 快照, qty, preferred_lot_id}]）——退库单
     行数少（单部门少量物料），不建子表。accepted 时批次回加（优先回原 lot 增
@@ -722,7 +733,7 @@ class HardwareReturn(BaseModel):
             postgresql_where=text("is_deleted = false"),
         ),
         CheckConstraint(
-            "status IN ('draft', 'accepted', 'rejected')",
+            "status IN ('draft', 'pending', 'approved', 'accepted', 'rejected', 'cancelled')",
             name="ck_hardware_returns_status",
         ),
         Index("ix_hardware_returns_status", "status"),
@@ -734,11 +745,27 @@ class HardwareReturn(BaseModel):
     )
     approval_instance_code: Mapped[str | None] = mapped_column(
         String(100),
-        comment="飞书领/退料审批实例 code（退料摄取幂等键；系统内建退库单为 NULL）",
+        comment="飞书领/退料审批实例 code（幂等键：平台代发起与自建摄取同源去重）",
     )
     requisition_instance_code: Mapped[str | None] = mapped_column(
         String(100),
-        comment="关联领料审批实例 code（退料货对板校验锚点；系统内建退库单为 NULL）",
+        comment="关联领料审批实例 code（退料货对板校验锚点；无关联的登记退库为 NULL）",
+    )
+    requisition_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        comment="平台发起：源领料单 id（额度校验锚点；飞书自建/登记退库为 NULL）",
+    )
+    approver_user_id: Mapped[str | None] = mapped_column(
+        String(100), comment="指定审批人飞书 user_id（发起人自选，建实例时传节点）"
+    )
+    approver_name: Mapped[str | None] = mapped_column(
+        String(100), comment="指定审批人姓名"
+    )
+    approval_channel: Mapped[str | None] = mapped_column(
+        String(10), comment="审批通道：feishu（飞书审批单）/ manual（平台点通过）；空=老登记链路"
+    )
+    approval_status: Mapped[str | None] = mapped_column(
+        String(20), comment="审批结果映射：pending/approved/rejected/cancelled"
     )
     dept_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="退库部门")
     returned_by: Mapped[str] = mapped_column(String(100), nullable=False, comment="退库人")
@@ -749,22 +776,24 @@ class HardwareReturn(BaseModel):
         JSONB,
         nullable=False,
         comment="明细行：[{material_id, code, name, spec, unit, quantity,"
-                " preferred_lot_id}]（仅 stocked）",
+                " preferred_lot_id}]（仅 stocked；平台发起行含 linked_code）",
     )
     leader_signed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false",
-        comment="部门负责人已签",
+        comment="部门负责人已签（平台发起链路：审批人同意视同签收）",
     )
     leader_signed_by: Mapped[str | None] = mapped_column(String(100), comment="签收负责人")
     leader_signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="draft", server_default="draft",
-        comment="draft 待验收 / accepted 已回加 / rejected 拒退",
+        comment="draft 待提交（老链路=待签收验收）/ pending 待审批 / approved 待验收"
+                " / accepted 已回加 / rejected 已驳回或拒退 / cancelled 已撤回",
     )
     accepted_by: Mapped[str | None] = mapped_column(String(100), comment="验收仓管员")
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejected_by: Mapped[str | None] = mapped_column(String(100), comment="驳回人（审批驳回/拒退）")
     rejected_reason: Mapped[str | None] = mapped_column(
-        String(500), comment="不合格拒退原因（留证）"
+        String(500), comment="驳回/拒退原因（留证）"
     )
     lot_adjustments: Mapped[list[Any] | None] = mapped_column(
         JSONB, comment="批次回加结果 [{material, lot_no, mode: preferred/new, qty}]"
@@ -904,11 +933,17 @@ class HardwareEnvLog(BaseModel):
 
 
 class HardwareScrap(BaseModel):
-    """五金库报废单（三期 M7，制度 5.6 四条件）：发起 → 部门主管确认 →
-    仓储负责人终审 → approved 即销账（唯一动账点）；任一步驳回零动账。
+    """五金库报废单（三期 M7，制度 5.6 四条件；2026-11-25 并入申领出库全路径）。
 
-    审批复用 ApprovalChannel（feishu definition key 配置化，未配置自动
-    manual 两步系统内确认）；销账 FIFO/指定批次扣 remaining + scrap 流水。
+    状态名与领料单对齐，走同一条出库路径：
+    draft（发起，自选审批人）→ pending（待审批，提交即预扣）→ approved
+    （待出库，审批人通过：飞书审批单或平台「通过」，预扣保持）→ issued
+    （已出库，仓管点「出库」才实扣：FIFO/指定批次扣 remaining + scrap 流水）；
+    rejected / cancelled 释放预扣。审批不动库存，出库是唯一动账点。
+
+    审批复用「福兴电子领/退料单审批」报废分支（ApprovalChannel，配置化）；
+    未配置分支时审批人在平台点通过。dept_confirmed_* 为旧两级流程遗留列，
+    新流程不再写入。
     """
 
     __tablename__ = "hardware_scraps"
@@ -924,7 +959,7 @@ class HardwareScrap(BaseModel):
             name="ck_hardware_scraps_reason",
         ),
         CheckConstraint(
-            "status IN ('draft', 'pending_dept', 'pending_final', 'approved',"
+            "status IN ('draft', 'pending', 'approved', 'issued',"
             " 'rejected', 'cancelled')",
             name="ck_hardware_scraps_status",
         ),
@@ -944,6 +979,15 @@ class HardwareScrap(BaseModel):
     requested_by_open_id: Mapped[str | None] = mapped_column(
         String(100), comment="发起人飞书 open_id"
     )
+    requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), comment="发起人 identity.users.id（飞书实例发起人锚点）"
+    )
+    approver_user_id: Mapped[str | None] = mapped_column(
+        String(100), comment="指定审批人飞书 user_id（发起人自选，建实例时传节点）"
+    )
+    approver_name: Mapped[str | None] = mapped_column(
+        String(100), comment="指定审批人姓名"
+    )
     scrap_reason: Mapped[str] = mapped_column(
         String(20), nullable=False,
         comment="报废条件（制度5.6）：expired 超有效期/damaged 破损污染变质/"
@@ -954,34 +998,37 @@ class HardwareScrap(BaseModel):
         JSONB, comment="留证照片 file tokens"
     )
     approval_channel: Mapped[str | None] = mapped_column(
-        String(10), comment="审批通道：feishu / manual（两步系统内确认）"
+        String(10), comment="审批通道：feishu（飞书审批单）/ manual（平台点通过）"
     )
     approval_instance_code: Mapped[str | None] = mapped_column(
         String(100), comment="飞书审批实例 code（feishu 通道）"
     )
     approval_status: Mapped[str | None] = mapped_column(
-        String(20), comment="审批结果映射：approved/rejected/cancelled"
+        String(20), comment="审批结果映射：pending/approved/rejected/cancelled"
     )
     dept_confirmed_by: Mapped[str | None] = mapped_column(
-        String(100), comment="①部门主管确认"
+        String(100), comment="旧两级流程遗留（部门主管确认），新流程不再写入"
     )
     dept_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approved_by: Mapped[str | None] = mapped_column(
-        String(100), comment="②仓储负责人终审（通过即销账）"
+        String(100), comment="审批通过人（所选审批人；飞书回流或平台通过）"
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    executed_by: Mapped[str | None] = mapped_column(
+        String(100), comment="出库操作人（仓管，唯一动账点执行者）"
+    )
     rejected_by: Mapped[str | None] = mapped_column(String(100), comment="驳回人")
     rejected_reason: Mapped[str | None] = mapped_column(String(500))
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="draft", server_default="draft",
-        comment="draft/pending_dept/pending_final/approved/rejected/cancelled",
+        comment="draft/pending/approved/issued/rejected/cancelled（与领料单同名同义）",
     )
     scrapped_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="销账时间"
+        DateTime(timezone=True), comment="出库（实扣）时间"
     )
     lot_allocations: Mapped[list[Any] | None] = mapped_column(
-        JSONB, comment="销账批次扣减结果 [{material, lot_no, mode: preferred/fifo, qty}]"
+        JSONB, comment="出库批次扣减结果 [{material, lot_no, mode: preferred/fifo, qty}]"
     )
     remark: Mapped[str | None] = mapped_column(Text)
 

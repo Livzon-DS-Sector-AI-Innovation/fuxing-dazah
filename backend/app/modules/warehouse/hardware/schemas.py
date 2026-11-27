@@ -40,6 +40,9 @@ class MaterialCreate(BaseModel):
     spec: str | None = Field(default=None, max_length=200, description="规格型号")
     unit: str = Field(..., min_length=1, max_length=20, description="计量单位")
     category: str = Field(..., max_length=20, description="类别")
+    location_no: str | None = Field(
+        default=None, max_length=100, description="位号（默认存放位，目录级）"
+    )
     managed_class: ManagedClass = Field(default="stocked", description="共用类/车间单独需求类")
     code: str | None = Field(default=None, max_length=50, description="物料编码（采购编码表回填）")
     direct_dept: str | None = Field(default=None, max_length=100)
@@ -58,6 +61,7 @@ class MaterialUpdate(BaseModel):
     spec: str | None = Field(default=None, max_length=200)
     unit: str | None = Field(default=None, min_length=1, max_length=20)
     category: str | None = Field(default=None, max_length=20)
+    location_no: str | None = Field(default=None, max_length=100)
     code: str | None = Field(default=None, max_length=50)
     direct_dept: str | None = Field(default=None, max_length=100)
     inspect_class: str | None = Field(default=None, max_length=20)
@@ -78,6 +82,7 @@ class MaterialResponse(ORMResponse):
     spec: str | None
     unit: str
     category: str
+    location_no: str | None
     managed_class: str
     direct_dept: str | None
     inspect_class: str | None
@@ -536,12 +541,25 @@ class ReturnCreate(BaseModel):
     items: list[ReturnItemIn] = Field(..., min_length=1)
 
 
+class ReturnFromRequisitionCreate(BaseModel):
+    """从已发料领料单发起退料（2026-11-26）：提交即发起审批（额度校验双卡点）。"""
+
+    requisition_id: StrUUID
+    returned_by: str = Field(default="", max_length=100, description="留空=取领料单申请人")
+    approver_user_id: str | None = Field(
+        default=None, max_length=100, description="指定审批人飞书 user_id（主管及以上）"
+    )
+    approver_name: str | None = Field(default=None, max_length=100)
+    reason_note: str | None = Field(default=None, max_length=500)
+    items: list[ReturnItemIn] = Field(..., min_length=1)
+
+
 class ReturnSign(BaseModel):
     leader: str = Field(..., min_length=1, max_length=100)
 
 
 class ReturnAcceptBody(BaseModel):
-    accepted_by: str = Field(..., min_length=1, max_length=100)
+    accepted_by: str = Field(default="web", max_length=100)
 
 
 class ReturnReject(BaseModel):
@@ -551,6 +569,13 @@ class ReturnReject(BaseModel):
 class ReturnResponse(ORMResponse):
     id: StrUUID
     return_no: str
+    requisition_id: StrUUID | None
+    requisition_instance_code: str | None
+    approver_user_id: str | None
+    approver_name: str | None
+    approval_channel: str | None
+    approval_instance_code: str | None
+    approval_status: str | None
     dept_name: str
     returned_by: str
     items: list[dict[str, Any]]
@@ -560,10 +585,14 @@ class ReturnResponse(ORMResponse):
     status: str
     accepted_by: str | None
     accepted_at: datetime | None
+    rejected_by: str | None
     rejected_reason: str | None
     lot_adjustments: list[dict[str, Any]] | None
     remark: str | None
     created_at: datetime
+    can_approve: bool = Field(
+        default=False, description="当前用户能否在平台点通过/驳回（退料管理权限或所选审批人）"
+    )
 
 
 # ── 月度采购计划（二期 M5）──
@@ -650,6 +679,11 @@ class ScrapCreate(BaseModel):
     dept_name: str = Field(..., min_length=1, max_length=100)
     requested_by: str = Field(..., min_length=1, max_length=100)
     requested_by_open_id: str | None = Field(default=None, max_length=100)
+    approver_user_id: str | None = Field(
+        default=None, max_length=100,
+        description="指定审批人飞书 user_id（主管及以上，发起人自选）",
+    )
+    approver_name: str | None = Field(default=None, max_length=100)
     scrap_reason: str = Field(
         ..., description="报废条件（制度5.6）：expired/damaged/obsolete/appraisal"
     )
@@ -659,17 +693,16 @@ class ScrapCreate(BaseModel):
     items: list[ScrapItemIn] = Field(..., min_length=1)
 
 
-class ScrapDeptConfirm(BaseModel):
-    confirmed_by: str = Field(..., min_length=1, max_length=100)
-    note: str | None = Field(default=None, max_length=500)
-
-
 class ScrapApprove(BaseModel):
-    approved_by: str = Field(..., min_length=1, max_length=100)
+    approved_by: str = Field(default="", max_length=100, description="留空=取当前登录用户姓名")
+
+
+class ScrapExecute(BaseModel):
+    executed_by: str = Field(..., min_length=1, max_length=100)
 
 
 class ScrapReject(BaseModel):
-    rejected_by: str = Field(..., min_length=1, max_length=100)
+    rejected_by: str = Field(default="", max_length=100, description="留空=取当前登录用户姓名")
     reason: str = Field(..., min_length=1, max_length=500)
 
 
@@ -692,6 +725,8 @@ class ScrapResponse(ORMResponse):
     scrap_reason: str
     reason_note: str | None
     attachments: list[dict[str, Any]] | None
+    approver_user_id: str | None
+    approver_name: str | None
     approval_channel: str | None
     approval_instance_code: str | None
     approval_status: str | None
@@ -699,6 +734,7 @@ class ScrapResponse(ORMResponse):
     dept_confirmed_at: datetime | None
     approved_by: str | None
     approved_at: datetime | None
+    executed_by: str | None
     rejected_by: str | None
     rejected_reason: str | None
     status: str
@@ -707,6 +743,9 @@ class ScrapResponse(ORMResponse):
     remark: str | None
     created_at: datetime
     items: list[ScrapItemResponse] = Field(default_factory=list)
+    can_approve: bool = Field(
+        default=False, description="当前用户能否在平台点通过/驳回（报废管理权限或所选审批人）"
+    )
 
 
 class PhotoScreeningBody(BaseModel):

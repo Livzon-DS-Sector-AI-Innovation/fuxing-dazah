@@ -351,3 +351,58 @@ def export_requisitions_excel(
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def export_stock_excel(rows: list[dict[str, Any]]) -> bytes:
+    """库存明细全量导出（单 sheet，一物料一物理行）。
+
+    rows 为 service.list_stock_rows 的返回项：
+    {"material": HardwareMaterial, "on_hand", "reserved", "available",
+     "is_low", "low_gap"}。列与五金库存页表格保持一致。
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "五金库存"
+    headers = [
+        "编码", "类别", "物资名称", "规格型号", "单位", "位号",
+        "在手", "预扣", "可用", "安全库存", "状态",
+    ]
+    ws.append(headers)
+    head_fill = PatternFill("solid", fgColor="1F4E79")
+    head_font = Font(color="FFFFFF", bold=True)
+    for c, _ in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = head_fill
+        cell.font = head_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for r in rows:
+        m = r["material"]
+        is_low = bool(r["is_low"])
+        ws.append(
+            [
+                m.code or "待回填",
+                m.category,
+                m.name,
+                m.spec or "",
+                m.unit,
+                getattr(m, "location_no", None) or "",
+                float(r["on_hand"]),
+                float(r["reserved"]),
+                float(r["available"]),
+                float(m.safety_stock),
+                f"缺 {float(r['low_gap'])}" if is_low else "正常",
+            ]
+        )
+
+    widths = [14, 10, 24, 30, 6, 8, 10, 10, 10, 10, 14]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()

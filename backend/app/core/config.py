@@ -149,17 +149,28 @@ class Settings(BaseSettings):
     # manual=部门主管在领用中心点确认（审批结果代录）。状态机对通道无感。
     HARDWARE_APPROVAL_CHANNEL: str = "manual"
     HARDWARE_APPROVAL_CODE: str = ""
+    # 审批实例对账任务开关（每小时拉近 2h 实例补摄取）：本地联调置 false——
+    # 防生产真实实例被摄取进本地库污染测试数据（轮询/WS 事件不受影响）。
+    HARDWARE_APPROVAL_RECONCILE_ENABLED: bool = True
     # 「主管及以上审批」节点 id（发起人自选）：定义改版后节点 id 变化时覆盖；
     # 空=使用 approval_channel.APPROVER_NODE_ID 默认值。
     HARDWARE_APPROVAL_NODE_ID: str = ""
     # 发起人口径（已弃用）：2026-11-19 起统一按 identity.users.feishu_user_id
     # 解析创建审批实例的 user_id；此键保留仅为兼容历史 env。
     HARDWARE_APPROVAL_USER_KEY: str = "user_id"
-    # 五金库报废审批通道（M7，制度 5.6 定稿后切 feishu）：feishu=对接「五金库
-    # 报废申请」定义（需配 HARDWARE_SCRAP_APPROVAL_CODE，未配置自动落 manual
-    # 两步系统内确认：部门主管确认→仓储负责人终审）。
-    HARDWARE_SCRAP_APPROVAL_CHANNEL: str = "manual"
-    HARDWARE_SCRAP_APPROVAL_CODE: str = ""
+    # 五金库报废审批（2026-11-25：报废出库并入申领出库路径，发起自选审批人）：
+    # 复用「福兴电子领/退料单审批」的报废分支——业务部门在飞书后台给定义加
+    # 分流选项「报废」+五个控件（发起部门/发起人/报废条件及说明/报废明细/
+    # 报废单号）后，把选项 value 填 KIND_VALUE、控件 id 填 WIDGETS，提交时即把
+    # 飞书审批单发给所选审批人；未配置=审批人在平台「申请单据 → 待审批」点通过。
+    HARDWARE_SCRAP_KIND_VALUE: str = ""
+    HARDWARE_SCRAP_FORM_WIDGETS: str = ""
+    # 五金库退料审批（2026-11-26：从已发料领料单发起退料）：复用同一审批定义的
+    # 「五金库退料-平台」分支（退料部门/退料人/原领料单号/退料明细/退库单号/
+    # 退料说明六个普通控件——明细表 fieldList API 不可写，同领料平台分支口径）。
+    # 配齐即启用：提交退料单时把飞书审批单发给所选审批人；未配置=平台点通过。
+    HARDWARE_RETURN_KIND_VALUE: str = ""
+    HARDWARE_RETURN_FORM_WIDGETS: str = ""
     # 五金库 direct 类高置信自动入账（M9 observe→auto 阶段1，默认关；§9.3
     # 红线：仅 direct 类、全部行置信≥阈值、无照片初筛异常标记才自动 accepted；
     # stocked 类永不自动。env/runtime 双通道——runtime_configs 键优先）。

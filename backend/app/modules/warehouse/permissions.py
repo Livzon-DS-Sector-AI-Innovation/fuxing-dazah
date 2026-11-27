@@ -395,7 +395,7 @@ PERMISSIONS: list[PermissionDef] = [
         module="warehouse",
         resource="hardware",
         action="manage",
-        description="报废发起/提交/部门主管确认/仓储负责人终审销账/驳回撤回",
+        description="报废发起/提交/出库实扣/撤回；平台通过或驳回（被选为审批人者亦可）",
     ),
     PermissionDef(
         code="warehouse:hardware:erp:read",

@@ -41,7 +41,7 @@ from app.modules.warehouse.bitable_cells import unwrap
 
 logger = logging.getLogger(__name__)
 
-# 镜像表九列（2026-11-17 list_fields 实测字段名）
+# 镜像表列（2026-11-17 list_fields 实测字段名；2026-11-25 清单翻新增「位号」）
 F_NAME = "物资名称"
 F_PLATFORM_ID = "平台ID"
 F_SPEC = "规格型号"
@@ -51,6 +51,9 @@ F_ON_HAND = "库存量"
 F_RESERVED = "预扣量"
 F_AVAILABLE = "可领量"
 F_CODE = "编码"
+F_LOCATION_NO = "位号"
+# 位号列位（文本类型）；表里缺列时由 ensure_location_no_field 补建
+FIELD_TYPE_TEXT = 1
 
 ZERO = Decimal("0")
 
@@ -100,7 +103,8 @@ def build_material_fields(
     """平台行 → 镜像 fields dict（纯函数，测试直接断言）。
 
     编码列空值不写键（留空语义与静态快照一致；引用控件「被引用字段空值→
-    该记录检索不到」，表单引用字段不勾编码即可兼容无码物资）。
+    该记录检索不到」，表单引用字段不勾编码即可兼容无码物资）；
+    位号是普通文本列，空值写空串（无引用控件检索问题）。
     """
     available = (on_hand or ZERO) - (reserved or ZERO)
     fields: dict[str, Any] = {
@@ -112,10 +116,39 @@ def build_material_fields(
         F_ON_HAND: float(on_hand or ZERO),
         F_RESERVED: float(reserved or ZERO),
         F_AVAILABLE: float(available),
+        F_LOCATION_NO: getattr(material, "location_no", None) or "",
     }
     if material.code:
         fields[F_CODE] = material.code
     return fields
+
+
+async def ensure_location_no_field() -> bool:
+    """镜像表缺「位号」列时补建（幂等；列已存在/建成功=True，未配置镜像=False）。
+
+    镜像表由仓储应用创建且许康福已授 full_access，可 API 加列（2026-11-25
+    清单翻新配套）。翻新脚本/运维在首次同步前调用一次即可。
+    """
+    target = _mirror_target()
+    if target is None:
+        return False
+    base, table = target
+    app_id, app_secret = _credentials()
+    if not (app_id and app_secret):
+        return False
+    from app.platform.integrations.feishu.bitable import create_field, list_fields
+
+    existing = await list_fields(
+        base, table, app_id=app_id, app_secret=app_secret
+    )
+    if any(f.get("field_name") == F_LOCATION_NO for f in existing):
+        return True
+    field = await create_field(
+        base, table, F_LOCATION_NO, FIELD_TYPE_TEXT,
+        app_id=app_id, app_secret=app_secret,
+    )
+    logger.info("镜像表补建「位号」列: %s", field.get("field_id") or "失败")
+    return bool(field)
 
 
 def build_stock_fields(on_hand: Decimal, reserved: Decimal) -> dict[str, Any]:
@@ -294,6 +327,7 @@ async def reconcile_mirror(db: AsyncSession) -> dict[str, int]:
     孤儿行 = 镜像平台ID不在平台在册集合（软删/停用/direct 的行，表单不可选）。
     """
     from app.platform.integrations.feishu.bitable import (
+        BitableAPIError,
         batch_create_records,
         delete_record,
         list_all_records,
@@ -336,10 +370,18 @@ async def reconcile_mirror(db: AsyncSession) -> dict[str, int]:
             continue
         record_id, current = mirror_rows[pid]
         if _fields_diff(current, fields):
-            await update_record(
-                base, table, record_id, fields, app_id=app_id, app_secret=app_secret
-            )
-            stats["updated"] += 1
+            try:
+                await update_record(
+                    base, table, record_id, fields, app_id=app_id, app_secret=app_secret
+                )
+                stats["updated"] += 1
+            except BitableAPIError as exc:
+                if "1254043" not in str(exc):  # RecordIdNotFound
+                    raise
+                # 并发窗口：对账期间该行被外部删除（如另一实例同时在对账）——
+                # 映射已失真，降级为新建（下轮全量对账收敛）
+                to_create.append(fields)
+                logger.warning("镜像行已被并发删除，转新建: pid=%s", pid)
     if to_create:
         created_ids = await batch_create_records(
             base, table, to_create, app_id=app_id, app_secret=app_secret

@@ -38,6 +38,7 @@ from app.core.config import get_settings
 from app.modules.warehouse.hardware.models import (
     HardwareMaterial,
     HardwareRequisition,
+    HardwareReturn,
     HardwareScrap,
 )
 
@@ -46,6 +47,40 @@ logger = logging.getLogger(__name__)
 
 class ApprovalChannelError(Exception):
     """审批通道错误（提交/轮询失败）。"""
+
+
+# ── 审批配置读取（2026-11-26 由 env 迁系统配置；runtime_configs > env > 默认）──
+
+#: runtime 键（runtime_registry 注册；env 兜底通道=原 Settings 字段）
+APPROVAL_CHANNEL_KEY = "hardware_approval_channel"
+APPROVAL_CODE_KEY = "hardware_approval_code"
+APPROVAL_NODE_ID_KEY = "hardware_approval_node_id"
+SCRAP_KIND_VALUE_KEY = "hardware_scrap_kind_value"
+SCRAP_FORM_WIDGETS_KEY = "hardware_scrap_form_widgets"
+RETURN_KIND_VALUE_KEY = "hardware_return_kind_value"
+RETURN_FORM_WIDGETS_KEY = "hardware_return_form_widgets"
+
+
+def _runtime_str(key: str) -> str:
+    """runtime 键 → 去空白字符串（TTL 60s 缓存，页面改值即时→60s 内生效）。"""
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    return str(runtime_store.get_value(key) or "").strip()
+
+
+def get_approval_code() -> str:
+    """审批定义编码（单点收口：本模块工厂/cancel 家族 + approval_ingest 共用）。"""
+    return _runtime_str(APPROVAL_CODE_KEY)
+
+
+def get_approval_channel_conf() -> tuple[str, str]:
+    """（channel, approval_code）——领料通道工厂与就绪判定共用。"""
+    return _runtime_str(APPROVAL_CHANNEL_KEY).lower() or "manual", get_approval_code()
+
+
+def get_approver_node_id() -> str:
+    """「主管及以上审批」节点 id（覆盖值；空=代码默认 APPROVER_NODE_ID）。"""
+    return _runtime_str(APPROVAL_NODE_ID_KEY)
 
 
 class ApprovalChannel(ABC):
@@ -221,9 +256,7 @@ class FeishuApprovalChannel(ApprovalChannel):
         approver_uid = str(req.approver_user_id or "").strip()
         if not approver_uid:
             raise ApprovalChannelError("未选择审批人（主管及以上），请重新提交并选择审批人")
-        node_id = str(
-            getattr(get_settings(), "HARDWARE_APPROVAL_NODE_ID", "") or APPROVER_NODE_ID
-        )
+        node_id = get_approver_node_id() or APPROVER_NODE_ID
         # uuid 幂等：req.id 派生（重试不重单）
         idempotency = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"hardware-requisition:{req.id}"))
         try:
@@ -297,52 +330,98 @@ class ManualApprovalChannel(ApprovalChannel):
 
 
 def get_approval_channel() -> ApprovalChannel:
-    """按配置选择通道：HARDWARE_APPROVAL_CHANNEL != feishu 或 definition
-    code 未配置 → manual（业务部门建好定义+配置 code 后自动切 feishu）。"""
-    settings = get_settings()
-    channel = str(getattr(settings, "HARDWARE_APPROVAL_CHANNEL", "manual") or "manual").lower()
-    code = str(getattr(settings, "HARDWARE_APPROVAL_CODE", "") or "").strip()
+    """按配置选择通道：通道 != feishu 或定义编码未配置 → manual（业务部门
+    建好定义+配好编码后自动切 feishu；配置走系统配置运行参数，60s 内热生效）。"""
+    channel, code = get_approval_channel_conf()
     if channel == "feishu" and code:
         return FeishuApprovalChannel(code)
     return ManualApprovalChannel()
 
 
 def feishu_channel_configured() -> bool:
-    """feishu 通道是否已就绪（definition code 已配置）。"""
-    settings = get_settings()
-    return bool(
-        str(getattr(settings, "HARDWARE_APPROVAL_CHANNEL", "") or "").lower() == "feishu"
-        and str(getattr(settings, "HARDWARE_APPROVAL_CODE", "") or "").strip()
-    )
+    """feishu 通道是否已就绪（通道=feishu 且定义编码已配置）。"""
+    channel, code = get_approval_channel_conf()
+    return channel == "feishu" and bool(code)
 
 
-# ── 报废审批（三期 M7：复用双通道抽象，新 definition key 配置化；不改领料语义）──
+# ── 报废审批（2026-11-25：复用「福兴电子领/退料单审批」报废分支；
+#    与领料共用 definition code/仓储凭证/「主管及以上审批」节点，不改领料语义）──
+
+# 报废分支配置就绪判定键（kind_value + 五控件 id 全齐 = 分支可用）
+_SCRAP_FORM_KEYS = ("kind_value", "dept", "starter", "reason", "items", "doc_no")
 
 
-class _ScrapManualApprovalChannel(ManualApprovalChannel):
-    """报废 manual 通道：两步系统内确认的载体标记（dept_confirm→final_approve
-    由人操作直写状态机，submit 只登记通道）。"""
+def _scrap_form_config() -> dict[str, str]:
+    """报废分支配置（env → 控件 id 映射）。
 
-    name = "manual"
+    - HARDWARE_SCRAP_KIND_VALUE：分流键「报废」选项 value（写接口口径）
+    - HARDWARE_SCRAP_FORM_WIDGETS：五控件 id JSON
+      {"dept":..,"starter":..,"reason":..,"items":..,"doc_no":..}
+      （发起部门/发起人/报废条件及说明/报废明细/报废单号回溯键）
+    业务部门在飞书后台给定义加好报废分支并填 env 后自动启用。
+    """
+    import json as _json
 
-    async def submit_scrap(
-        self, db: AsyncSession, scrap: HardwareScrap, items: list[dict[str, Any]]
-    ) -> str:
-        scrap.approval_channel = "manual"
-        scrap.approval_status = "pending"
-        await db.flush()
-        return f"manual:{scrap.scrap_no}"
+    raw = _runtime_str(SCRAP_FORM_WIDGETS_KEY)
+    try:
+        cfg: dict[str, Any] = dict(_json.loads(raw)) if raw else {}
+    except ValueError:
+        logger.warning("HARDWARE_SCRAP_FORM_WIDGETS 非法 JSON，按未配置处理")
+        cfg = {}
+    cfg["kind_value"] = _runtime_str(SCRAP_KIND_VALUE_KEY)
+    return {k: str(v).strip() for k, v in cfg.items()}
+
+
+def scrap_branch_configured() -> bool:
+    """报废 feishu 分支是否就绪（领料通道已配置 + 分流键/控件 id 全齐）。"""
+    if not feishu_channel_configured():
+        return False
+    cfg = _scrap_form_config()
+    return all(cfg.get(k) for k in _SCRAP_FORM_KEYS)
+
+
+async def _resolve_scrap_starter_user_id(db: AsyncSession, scrap: HardwareScrap) -> str:
+    """报废发起人 → 飞书 user_id（实例发起人锚点，口径同领料
+    _resolve_starter_user_id）：requested_by_user_id → identity.users
+    .feishu_user_id 优先，缺则按 requested_by_open_id 反查，仍缺原值兜底。"""
+    from sqlalchemy import text
+
+    if scrap.requested_by_user_id is not None:
+        row = (
+            await db.execute(
+                text(
+                    "select feishu_user_id from identity.users "
+                    "where id = :uid and is_deleted = false limit 1"
+                ),
+                {"uid": scrap.requested_by_user_id},
+            )
+        ).first()
+        if row and row[0]:
+            return str(row[0])
+    if scrap.requested_by_open_id:
+        row = (
+            await db.execute(
+                text(
+                    "select feishu_user_id from identity.users "
+                    "where feishu_open_id = :oid and is_deleted = false limit 1"
+                ),
+                {"oid": scrap.requested_by_open_id},
+            )
+        ).first()
+        if row and row[0]:
+            return str(row[0])
+        return str(scrap.requested_by_open_id)
+    return ""
 
 
 class _ScrapFeishuApprovalChannel(FeishuApprovalChannel):
-    """报废 feishu 通道：definition key 独立配置（HARDWARE_SCRAP_APPROVAL_CODE），
-    表单照领料同构（部门/发起人/原因/明细汇总/单号回溯键）。制度定稿业务部门
-    建好定义后只改配置切换，代码零改动。"""
+    """报废 feishu 审批通道：共用领料 definition + 「主管及以上审批」节点。
+
+    表单走报废分支（分流键选项 value + 五个顶层普通控件）；指定审批人必传
+    node_approver_user_id_list；uuid 幂等；发起人按 identity 解析（不再拿
+    open_id 充当 user_id）。"""
 
     name = "feishu"
-
-    def __init__(self, approval_code: str) -> None:
-        super().__init__(approval_code)
 
     async def submit_scrap(
         self, db: AsyncSession, scrap: HardwareScrap, items: list[dict[str, Any]]
@@ -352,28 +431,51 @@ class _ScrapFeishuApprovalChannel(FeishuApprovalChannel):
             create_instance,
         )
 
+        cfg = _scrap_form_config()
+        missing = [k for k in _SCRAP_FORM_KEYS if not cfg.get(k)]
+        if missing:
+            raise ApprovalChannelError(
+                f"报废分支未配置（缺 {','.join(missing)}）：请在飞书后台为"
+                "「福兴电子领/退料单审批」添加报废分支，并将选项 value/控件 id 填入"
+                " env（HARDWARE_SCRAP_KIND_VALUE / HARDWARE_SCRAP_FORM_WIDGETS）后重试"
+            )
+
         app_id, app_secret = self._credentials()
         if not app_id or not app_secret:
             raise ApprovalChannelError(
                 "仓储应用审批凭证未配置（WAREHOUSE_FEISHU_APP_ID/SECRET）"
             )
 
+        user_id = await _resolve_scrap_starter_user_id(db, scrap)
+        if not user_id:
+            raise ApprovalChannelError(
+                "发起人飞书 user_id 未解析（identity.users.feishu_user_id 缺失），无法代发起审批"
+            )
+
+        # 审批人为发起人自选（主管及以上）：必须随实例指定，否则节点无人可批
+        approver_uid = str(scrap.approver_user_id or "").strip()
+        if not approver_uid:
+            raise ApprovalChannelError("未选择审批人（主管及以上），请重新提交并选择审批人")
+        node_id = get_approver_node_id() or APPROVER_NODE_ID
+
         from app.modules.warehouse.hardware.scrap import SCRAP_REASON_LABELS
 
         form = [
-            {"id": "widget1", "type": "input", "value": scrap.dept_name},  # 发起部门
-            {"id": "widget2", "type": "input", "value": scrap.requested_by},  # 发起人
+            # 分流键指向报废分支（value=选项 value，写接口口径）
+            {"id": KIND_WIDGET_ID, "type": "radioV2", "value": cfg["kind_value"]},
+            {"id": cfg["dept"], "type": "input", "value": scrap.dept_name},
+            {"id": cfg["starter"], "type": "input", "value": scrap.requested_by},
             {
-                "id": "widget3",
+                "id": cfg["reason"],
                 "type": "textarea",
                 "value": (
                     f"{SCRAP_REASON_LABELS.get(scrap.scrap_reason, scrap.scrap_reason)}"
                     f"：{scrap.reason_note or '-'}"
                 ),
-            },  # 报废条件+说明
-            # 物料明细（多行控件以 markdown 汇总；定义建好后按实际控件 id 调整）
+            },
+            # 物料明细（多行汇总；报废支持一单多物资）
             {
-                "id": "widget4",
+                "id": cfg["items"],
                 "type": "textarea",
                 "value": "\n".join(
                     f"{it['material_name']} {it.get('spec') or ''} × {it['quantity']}"
@@ -381,18 +483,19 @@ class _ScrapFeishuApprovalChannel(FeishuApprovalChannel):
                     for it in items
                 ),
             },
-            {"id": "widget5", "type": "input", "value": scrap.scrap_no},  # 单号回溯键
+            {"id": cfg["doc_no"], "type": "input", "value": scrap.scrap_no},  # 回溯键
         ]
         # uuid 幂等：scrap.id 派生（重试不重单）
         idempotency = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"hardware-scrap:{scrap.id}"))
         try:
             instance_code = await create_instance(
                 self.approval_code,
-                scrap.requested_by_open_id or "",
+                user_id,
                 form,
                 app_id=app_id,
                 app_secret=app_secret,
                 uuid_idempotency=idempotency,
+                node_approver_user_id_list={node_id: [approver_uid]},
             )
         except ApprovalAPIError as exc:
             raise ApprovalChannelError(f"飞书报废审批实例创建失败: {exc}") from exc
@@ -402,19 +505,243 @@ class _ScrapFeishuApprovalChannel(FeishuApprovalChannel):
         await db.flush()
         return instance_code
 
+    async def poll_scrap_result(
+        self, db: AsyncSession, scrap: HardwareScrap
+    ) -> str | None:
+        from app.platform.integrations.feishu.approval import (
+            ApprovalAPIError,
+            get_instance,
+        )
 
-def get_scrap_approval_channel() -> _ScrapManualApprovalChannel | _ScrapFeishuApprovalChannel:
-    """报废审批通道工厂：HARDWARE_SCRAP_APPROVAL_CHANNEL=feishu 且
-    HARDWARE_SCRAP_APPROVAL_CODE 已配置 → feishu；否则 manual 两步
-    （业务部门建好定义+配置 code 后自动切换）。"""
-    settings = get_settings()
-    channel = str(
-        getattr(settings, "HARDWARE_SCRAP_APPROVAL_CHANNEL", "manual") or "manual"
-    ).lower()
-    code = str(getattr(settings, "HARDWARE_SCRAP_APPROVAL_CODE", "") or "").strip()
-    if channel == "feishu" and code:
-        return _ScrapFeishuApprovalChannel(code)
-    return _ScrapManualApprovalChannel()
+        if not scrap.approval_instance_code:
+            return None
+        app_id, app_secret = self._credentials()
+        try:
+            instance = await get_instance(
+                scrap.approval_instance_code, app_id=app_id, app_secret=app_secret
+            )
+        except ApprovalAPIError as exc:
+            logger.warning("五金报废审批轮询失败 scrap=%s: %s", scrap.scrap_no, exc)
+            return None
+        status = str(instance.get("status") or "")
+        if status == "APPROVED":
+            return "approved"
+        if status == "REJECTED":
+            return "rejected"
+        return None
+
+
+def get_scrap_approval_channel() -> _ScrapFeishuApprovalChannel | None:
+    """报废审批通道工厂：领料 feishu 通道已配置且报废分支配置齐全 → feishu
+    通道（提交即把审批单发给所选审批人，审批人也可改在平台点通过）；否则
+    None（未配置分支：approval_channel=manual，审批人在平台点通过）。"""
+    if not scrap_branch_configured():
+        return None
+    return _ScrapFeishuApprovalChannel(get_approval_code())
+
+
+# ── 退料审批（2026-11-26：从已发料领料单发起退料，复用「五金库退料-平台」
+#    普通控件分支——明细表 fieldList API 不可写，同领料平台分支口径）──
+
+_RETURN_FORM_KEYS = ("kind_value", "dept", "starter", "source_req_no", "items", "return_no", "reason")
+
+
+def _return_form_config() -> dict[str, str]:
+    """退料-平台分支配置（env → 控件 id 映射）。
+
+    HARDWARE_RETURN_KIND_VALUE：分流键「五金库退料-平台」选项 value
+    HARDWARE_RETURN_FORM_WIDGETS：六控件 id JSON
+    {"dept":..,"starter":..,"source_req_no":..,"items":..,"return_no":..,"reason":..}
+    （退料部门/退料人/原领料单号/退料明细/退库单号/退料说明）
+    """
+    import json as _json
+
+    raw = _runtime_str(RETURN_FORM_WIDGETS_KEY)
+    try:
+        cfg: dict[str, Any] = dict(_json.loads(raw)) if raw else {}
+    except ValueError:
+        logger.warning("HARDWARE_RETURN_FORM_WIDGETS 非法 JSON，按未配置处理")
+        cfg = {}
+    cfg["kind_value"] = _runtime_str(RETURN_KIND_VALUE_KEY)
+    return {k: str(v).strip() for k, v in cfg.items()}
+
+
+def return_branch_configured() -> bool:
+    """退料-平台分支是否就绪（领料通道已配置 + 分流键/控件 id 全齐）。"""
+    if not feishu_channel_configured():
+        return False
+    cfg = _return_form_config()
+    return all(cfg.get(k) for k in _RETURN_FORM_KEYS)
+
+
+class _ReturnFeishuApprovalChannel(FeishuApprovalChannel):
+    """退料 feishu 审批通道：共用领料 definition + 「主管及以上审批」节点。
+
+    表单走「五金库退料-平台」分支（分流键选项 value + 六个顶层普通控件，
+    2026-11-26 真机验证可写）；指定审批人必传 node_approver_user_id_list；
+    uuid 幂等；发起人按 identity 解析（退料人）。"""
+
+    name = "feishu"
+
+    async def submit_return(
+        self, db: AsyncSession, ret: Any, req: Any
+    ) -> str:
+        from app.platform.integrations.feishu.approval import (
+            ApprovalAPIError,
+            create_instance,
+        )
+
+        cfg = _return_form_config()
+        missing = [k for k in _RETURN_FORM_KEYS if not cfg.get(k)]
+        if missing:
+            raise ApprovalChannelError(
+                f"退料-平台分支未配置（缺 {','.join(missing)}）：请在飞书后台为"
+                "「福兴电子领/退料单审批」添加该分支，并将选项 value/控件 id 填入"
+                " env（HARDWARE_RETURN_KIND_VALUE / HARDWARE_RETURN_FORM_WIDGETS）后重试"
+            )
+
+        app_id, app_secret = self._credentials()
+        if not app_id or not app_secret:
+            raise ApprovalChannelError(
+                "仓储应用审批凭证未配置（WAREHOUSE_FEISHU_APP_ID/SECRET）"
+            )
+
+        user_id = await _resolve_return_starter_user_id(db, ret)
+        if not user_id:
+            raise ApprovalChannelError(
+                "退料人飞书 user_id 未解析（identity.users.feishu_user_id 缺失），无法代发起审批"
+            )
+
+        approver_uid = str(ret.approver_user_id or "").strip()
+        if not approver_uid:
+            raise ApprovalChannelError("未选择审批人（主管及以上），请重新提交并选择审批人")
+        node_id = get_approver_node_id() or APPROVER_NODE_ID
+
+        detail = "\n".join(
+            f"{row.get('name') or '?'} {row.get('spec') or ''} × {row.get('quantity')}"
+            f" {row.get('unit') or ''}"
+            for row in ret.items or []
+        )
+        form = [
+            {"id": KIND_WIDGET_ID, "type": "radioV2", "value": cfg["kind_value"]},
+            {"id": cfg["dept"], "type": "input", "value": ret.dept_name},
+            {"id": cfg["starter"], "type": "input", "value": ret.returned_by},
+            {"id": cfg["source_req_no"], "type": "input", "value": req.req_no},
+            {"id": cfg["items"], "type": "textarea", "value": detail},
+            {"id": cfg["return_no"], "type": "input", "value": ret.return_no},
+            {
+                "id": cfg["reason"],
+                "type": "textarea",
+                "value": (ret.remark or "").strip() or "-",
+            },
+        ]
+        idempotency = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"hardware-return:{ret.id}"))
+        try:
+            instance_code = await create_instance(
+                self.approval_code,
+                user_id,
+                form,
+                app_id=app_id,
+                app_secret=app_secret,
+                uuid_idempotency=idempotency,
+                node_approver_user_id_list={node_id: [approver_uid]},
+            )
+        except ApprovalAPIError as exc:
+            raise ApprovalChannelError(f"飞书退料审批实例创建失败: {exc}") from exc
+        ret.approval_channel = "feishu"
+        ret.approval_instance_code = instance_code
+        ret.approval_status = "pending"
+        await db.flush()
+        return instance_code
+
+    async def poll_return_result(
+        self, db: AsyncSession, ret: Any
+    ) -> str | None:
+        from app.platform.integrations.feishu.approval import (
+            ApprovalAPIError,
+            get_instance,
+        )
+
+        if not ret.approval_instance_code:
+            return None
+        app_id, app_secret = self._credentials()
+        try:
+            instance = await get_instance(
+                ret.approval_instance_code, app_id=app_id, app_secret=app_secret
+            )
+        except ApprovalAPIError as exc:
+            logger.warning("五金退料审批轮询失败 return=%s: %s", ret.return_no, exc)
+            return None
+        status = str(instance.get("status") or "")
+        if status == "APPROVED":
+            return "approved"
+        if status == "REJECTED":
+            return "rejected"
+        return None
+
+
+def get_return_approval_channel() -> _ReturnFeishuApprovalChannel | None:
+    """退料审批通道工厂：领料 feishu 通道已配置且退料-平台分支配置齐全 → feishu
+    通道（提交即把审批单发给所选审批人）；否则 None（未配置分支：
+    approval_channel=manual，审批人在平台点通过）。"""
+    if not return_branch_configured():
+        return None
+    return _ReturnFeishuApprovalChannel(get_approval_code())
+
+
+async def _resolve_return_starter_user_id(db: AsyncSession, ret: Any) -> str:
+    """退料发起人 → 飞书 user_id（撤回实例的发起人锚点）：returned_by_open_id
+    按 identity 反查 feishu_user_id；查不到回退原值（创建时也用的同一解析链路，
+    一致即成功）。"""
+    from sqlalchemy import text
+
+    oid = getattr(ret, "returned_by_open_id", None)
+    if not oid:
+        return ""
+    row = (
+        await db.execute(
+            text(
+                "select feishu_user_id from identity.users "
+                "where feishu_open_id = :oid and is_deleted = false limit 1"
+            ),
+            {"oid": oid},
+        )
+    ).first()
+    if row and row[0]:
+        return str(row[0])
+    return str(oid)
+
+
+async def cancel_return_approval(db: AsyncSession, ret: Any) -> bool:
+    """平台通过/驳回/撤回退料单时撤回飞书待审实例（best-effort）。
+
+    只对 feishu 通道且审批未决（approval_status 空/pending）的单生效；撤回
+    失败不阻断本地操作，只留备注。调用方在之后按业务结论覆写 approval_status。
+    """
+    from app.platform.integrations.feishu.approval import cancel_instance
+
+    if getattr(ret, "approval_channel", None) != "feishu":
+        return False
+    if str(getattr(ret, "approval_status", "") or "") not in ("", "pending"):
+        return False
+    code = str(getattr(ret, "approval_instance_code", "") or "")
+    approval_code = get_approval_code()
+    app_id, app_secret = FeishuApprovalChannel._credentials()
+    if not (code and approval_code and app_id and app_secret):
+        return False
+    user_id = await _resolve_return_starter_user_id(db, ret)
+    if not user_id:
+        return False
+    ok = await cancel_instance(
+        approval_code, code, user_id, app_id=app_id, app_secret=app_secret
+    )
+    ret.approval_status = "cancelled"
+    if not ok:
+        ret.remark = (
+            f"{ret.remark or ''}；飞书实例撤回失败（可能已审批或定义未开撤销）"
+        ).strip("；")
+    await db.flush()
+    return ok
 
 
 # ── 提交编排（API 层 submit 后调用；feishu 失败上抛，由 API 回滚草稿）──
@@ -489,7 +816,7 @@ async def cancel_approval(db: AsyncSession, req: HardwareRequisition) -> bool:
     if str(getattr(req, "approval_status", "") or "") not in ("", "pending"):
         return False
     code = str(getattr(req, "approval_instance_code", "") or "")
-    approval_code = str(getattr(get_settings(), "HARDWARE_APPROVAL_CODE", "") or "").strip()
+    approval_code = get_approval_code()
     app_id, app_secret = FeishuApprovalChannel._credentials()
     if not (code and approval_code and app_id and app_secret):
         return False
@@ -552,3 +879,126 @@ async def poll_pending_approvals(db: AsyncSession, *, now: datetime | None = Non
             )
             stats["rejected"] += 1
     return stats
+
+
+# ── 报废审批：feishu 结果轮询兜底 + 平台通过/驳回/撤回 → 撤回实例（best-effort）──
+
+
+async def poll_pending_scraps(db: AsyncSession) -> dict[str, int]:
+    """拉取 feishu 通道待审批报废单的审批结果并同步状态机。
+
+    approved → approve_scrap + execute_scrap（与事件回流同口径：实例 APPROVED
+    =仓管已在飞书办理节点完成出库，预扣转实扣）；rejected → reject_scrap
+    （释放预扣）。manual 通道单不在此列（审批人在平台点通过）。
+    """
+    from sqlalchemy import select
+
+    from app.modules.warehouse.hardware import scrap as scrap_service
+
+    channel = get_scrap_approval_channel()
+    if channel is None:
+        return {"checked": 0, "approved": 0, "rejected": 0}
+    pending = (
+        await db.execute(
+            select(HardwareScrap).where(
+                HardwareScrap.approval_channel == "feishu",
+                HardwareScrap.status == "pending",
+                HardwareScrap.is_deleted.is_(False),
+            )
+        )
+    ).scalars().all()
+    stats = {"checked": len(pending), "approved": 0, "rejected": 0}
+    for scrap in pending:
+        result = await channel.poll_scrap_result(db, scrap)
+        if result == "approved":
+            await scrap_service.approve_scrap(
+                db, scrap.id,
+                approved_by=scrap.approver_name or "飞书审批",
+            )
+            await scrap_service.execute_scrap(
+                db, scrap.id, executed_by="飞书审批·仓管办理"
+            )
+            stats["approved"] += 1
+        elif result == "rejected":
+            await scrap_service.reject_scrap(
+                db, scrap.id,
+                rejected_by=scrap.approver_name or "飞书审批",
+                reason="飞书审批驳回（轮询同步）",
+            )
+            stats["rejected"] += 1
+    return stats
+
+
+async def poll_pending_returns(db: AsyncSession) -> dict[str, int]:
+    """拉取 feishu 通道待审批退料单的审批结果并同步状态机。
+
+    approved → approve_return（待仓管验收，不自动回加——2026-11-26 用户终版
+    拍板：退料须仓管员在平台点「验收回加」才回库存）；rejected →
+    reject_return（留证不动账）。manual 通道单不在此列（审批人在平台点
+    通过）；飞书自建退料（channel 空）不在此列。
+    """
+    from sqlalchemy import select
+
+    from app.modules.warehouse.hardware import return_flow
+
+    channel = get_return_approval_channel()
+    if channel is None:
+        return {"checked": 0, "approved": 0, "rejected": 0}
+    pending = (
+        await db.execute(
+            select(HardwareReturn).where(
+                HardwareReturn.approval_channel == "feishu",
+                HardwareReturn.status == "pending",
+                HardwareReturn.is_deleted.is_(False),
+            )
+        )
+    ).scalars().all()
+    stats = {"checked": len(pending), "approved": 0, "rejected": 0}
+    for ret in pending:
+        result = await channel.poll_return_result(db, ret)
+        if result == "approved":
+            await return_flow.approve_return(
+                db, ret.id, approved_by=ret.approver_name or "飞书审批"
+            )
+            stats["approved"] += 1
+        elif result == "rejected":
+            await return_flow.reject_return(
+                db, ret.id,
+                rejected_by=ret.approver_name or "飞书审批",
+                reason="飞书审批驳回（轮询同步）",
+            )
+            stats["rejected"] += 1
+    return stats
+
+
+async def cancel_scrap_approval(db: AsyncSession, scrap: HardwareScrap) -> bool:
+    """平台通过/驳回/撤回报废单时撤回飞书待审实例（best-effort）。
+
+    只对 feishu 通道且审批未决（approval_status 空/pending）的单生效；撤回
+    失败（定义未开「允许撤销」/已审批）不阻断本地操作，只留备注。调用方在
+    之后按业务结论覆写 approval_status（通过/驳回），撤回路径保留 cancelled。
+    """
+    from app.platform.integrations.feishu.approval import cancel_instance
+
+    if getattr(scrap, "approval_channel", None) != "feishu":
+        return False
+    if str(getattr(scrap, "approval_status", "") or "") not in ("", "pending"):
+        return False
+    code = str(getattr(scrap, "approval_instance_code", "") or "")
+    approval_code = get_approval_code()
+    app_id, app_secret = FeishuApprovalChannel._credentials()
+    if not (code and approval_code and app_id and app_secret):
+        return False
+    user_id = await _resolve_scrap_starter_user_id(db, scrap)
+    if not user_id:
+        return False
+    ok = await cancel_instance(
+        approval_code, code, user_id, app_id=app_id, app_secret=app_secret
+    )
+    scrap.approval_status = "cancelled"
+    if not ok:
+        scrap.remark = (
+            f"{scrap.remark or ''}；飞书实例撤回失败（可能已审批或定义未开撤销）"
+        ).strip("；")
+    await db.flush()
+    return ok

@@ -364,7 +364,7 @@ function RuleConfigDrawer(props: { open: boolean; onClose: () => void }) {
   })
 
   return (
-    <Drawer title="预警配置" open={props.open} width={520} onClose={props.onClose} destroyOnHidden>
+    <Drawer title="预警配置" open={props.open} size={520} onClose={props.onClose} destroyOnHidden>
       {isLoading && <Typography.Text>加载中…</Typography.Text>}
       {(rules ?? []).map(rule => (
         <RuleRow key={rule.rule_key} rule={rule} onSave={updateMutation.mutate} />

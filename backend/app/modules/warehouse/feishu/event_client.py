@@ -441,6 +441,40 @@ async def _dispatch_event(event: dict[str, Any]) -> Any:
         inner = event.get("event", {})
         event_type = inner.get("type", event.get("type", ""))
 
+    # 「审批事件订阅」原生格式（与 v1/v2 并存推送，2026-11-26 真机：领料通过
+    # 事件只以此格式到达）：
+    # {"type": "event_callback", "event": {"type": "approval", "event": "approve",
+    #  "instance_code": ...}}——归一化成 v1 approval_instance 语义事件，交给
+    # approval_ingest 既有处理器；未归一化会被当未知类型丢弃（单据卡待审批）。
+    if event_type == "approval":
+        inner = event.get("event", {})
+        action = str(inner.get("event") or "")
+        mapped = {
+            "approve": "approval.instance.approved",
+            "reject": "approval.instance.rejected",
+            "cancel": "approval.instance.canceled",
+            "create": "approval.instance.started",
+        }.get(action)
+        if mapped:
+            logger.info("审批原生事件归一化: action=%s -> %s", action, mapped)
+            event_type = mapped
+
+    # 任务级审批事件 approval_task（与实例级并存推送，2026-11-26 真机：报废
+    # 通过以此格式到达）：status=APPROVED/REJECTED 的任务结论即实例结论，
+    # 归一化成对应 approval_instance 事件——approval_ingest 按实例幂等，
+    # 多任务/多格式重复送达安全（中途态 PENDING 不映射，无意义）。
+    if event_type == "approval_task":
+        inner = event.get("event", {})
+        task_status = str(inner.get("status") or "")
+        mapped = {
+            "APPROVED": "approval.instance.approved",
+            "REJECTED": "approval.instance.rejected",
+            "CANCELED": "approval.instance.canceled",
+        }.get(task_status)
+        if mapped and inner.get("instance_code"):
+            logger.info("审批任务事件归一化: status=%s -> %s", task_status, mapped)
+            event_type = mapped
+
     if event_type:
         event_data = event.get("event", event)
         return await _dispatch(event_type, event_data)

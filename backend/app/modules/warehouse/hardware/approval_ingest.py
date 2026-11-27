@@ -27,11 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.modules.warehouse.hardware import service as hw_service
+from app.modules.warehouse.hardware.approval_channel import get_approval_code
 from app.modules.warehouse.hardware.models import (
     HardwareMaterial,
     HardwareRequisition,
     HardwareRequisitionItem,
     HardwareReturn,
+    HardwareScrap,
 )
 from app.modules.warehouse.hardware.schemas import (
     RequisitionCreate,
@@ -58,6 +60,7 @@ PLATFORM_QTY_WIDGET_ID = "widget17950812036890001"
 
 KIND_REQUISITION = "领料"
 KIND_RETURN = "退料"
+KIND_SCRAP = "报废"  # 2026-11-25 报废分支：系统代发起，回流按 instance_code 匹配
 
 
 class IngestError(Exception):
@@ -66,7 +69,7 @@ class IngestError(Exception):
 
 @dataclass
 class ParsedForm:
-    kind: str  # KIND_REQUISITION / KIND_RETURN
+    kind: str  # KIND_REQUISITION / KIND_RETURN / KIND_SCRAP
     rows: list[dict[str, Any]] = field(default_factory=list)  # [{name, spec, quantity}]
     linked_code: str = ""  # 退料：关联领料审批实例 code（货对板校验锚点）
     raw: str = ""  # 原始 form JSON（观察模式）
@@ -97,6 +100,8 @@ def _kind_from_value(v: Any) -> str | None:
         return KIND_REQUISITION
     if "退料" in s:
         return KIND_RETURN
+    if "报废" in s:
+        return KIND_SCRAP
     return None
 
 
@@ -453,6 +458,17 @@ async def _find_return(db: AsyncSession, code: str) -> HardwareReturn | None:
     ).scalars().first()
 
 
+async def _find_scrap(db: AsyncSession, code: str) -> HardwareScrap | None:
+    return (
+        await db.execute(
+            select(HardwareScrap).where(
+                HardwareScrap.approval_instance_code == code,
+                HardwareScrap.is_deleted.is_(False),
+            )
+        )
+    ).scalars().first()
+
+
 def _credentials() -> tuple[str | None, str | None]:
     s = get_settings()
     return s.WAREHOUSE_FEISHU_APP_ID or None, s.WAREHOUSE_FEISHU_APP_SECRET or None
@@ -477,13 +493,17 @@ async def ingest_instance(
 ) -> dict[str, Any]:
     """幂等摄取：领料→建单预扣；退料→退库草稿。返回 {action, kind, doc_no, ...}。
 
-    已摄取过（领料单或退库单已挂本 instance_code）→ action=exists。
+    已摄取过（领料单/退库单/报废单已挂本 instance_code）→ action=exists。
     """
-    if await _find_requisition(db, instance_code) or await _find_return(db, instance_code):
+    if (
+        await _find_requisition(db, instance_code)
+        or await _find_return(db, instance_code)
+        or await _find_scrap(db, instance_code)
+    ):
         return {"action": "exists", "instance_code": instance_code}
 
     inst = instance if instance is not None else await _fetch_instance(instance_code)
-    approval_code = str(get_settings().HARDWARE_APPROVAL_CODE or "").strip()
+    approval_code = get_approval_code()
     if approval_code and str(inst.get("approval_code") or "") != approval_code:
         # 静默跳过曾吞掉全部真机实例（get_instance 未透传 approval_code），必须留痕
         logger.info(
@@ -493,6 +513,11 @@ async def ingest_instance(
         return {"action": "skip", "reason": "非五金库领/退料定义"}
 
     parsed = parse_form(inst.get("form"))
+    if parsed.kind == KIND_SCRAP:
+        # 报废分支只由系统代发起（回流按 instance_code 匹配，上面已覆盖）；
+        # 用户在飞书自建报废单不摄取（v1 口径：报废必须从系统发起走留证流程）
+        logger.info("[摄取] 跳过报废分支自建实例（不支持飞书自建报废）: %s", instance_code)
+        return {"action": "skip", "reason": "报废分支不摄取", "instance_code": instance_code}
     if not parsed.rows:
         raise IngestError(f"明细行为空: instance={instance_code} raw={parsed.raw[:300]}")
     starter = await _starter(db, inst)
@@ -659,12 +684,46 @@ async def _apply_status(db: AsyncSession, req: HardwareRequisition, status: str)
 
 
 async def _apply_return_status(db: AsyncSession, ret: HardwareReturn, status: str) -> None:
-    """飞书实例状态对齐退库单（幂等，2026-11-19 对称语义）。
+    """飞书实例状态对齐退库单（幂等，2026-11-19 对称语义；2026-11-26 双链路）。
 
-    APPROVED=终态=审批关闭=仓管已在飞书办理收料 → 负责人签（飞书审批链
-    「主管及以上」节点视同签收）+ 自动验收回加（对称领料自动发料实扣）；
-    REJECTED/CANCELED → 草稿作废留痕。
+    - 平台发起链路（approval_channel 有值，pending=待审批）：APPROVED →
+      approved（待仓管验收，**不自动回加**——2026-11-26 用户终版拍板：退料
+      必须仓管员验收后才回库存，仓管在平台「退料」页签点「验收回加」；
+      REJECTED → rejected；CANCELED → cancelled。离开 pending 后实例后续
+      结论只留痕。
+    - 飞书自建链路（channel 空，draft=待签收验收）：APPROVED=终态=审批关闭=
+      仓管已在飞书办理收料 → 负责人签 + 自动验收回加（对称领料自动发料，
+      行为不变）；REJECTED/CANCELED → 草稿作废留痕。
     """
+    if getattr(ret, "approval_channel", None):  # 平台发起链路
+        approver = ret.approver_name or "飞书审批"
+        note = f"飞书审批单后续{status}（单据已在平台处理，不重复生效）"
+        if status == "APPROVED":
+            if ret.status == "pending":
+                from app.modules.warehouse.hardware import return_flow
+
+                await return_flow.approve_return(db, ret.id, approved_by=approver)
+            elif note not in (ret.remark or ""):
+                ret.remark = f"{ret.remark or ''}；{note}".strip("；")
+        elif status == "REJECTED":
+            if ret.status == "pending":
+                from app.modules.warehouse.hardware import return_flow
+
+                await return_flow.reject_return(
+                    db, ret.id, rejected_by=approver,
+                    reason="飞书审批驳回（事件/对账同步）",
+                )
+            elif ret.status != "pending" and note not in (ret.remark or ""):
+                ret.remark = f"{ret.remark or ''}；{note}".strip("；")
+        elif status == "CANCELED":
+            if ret.status == "pending":
+                from app.modules.warehouse.hardware import return_flow
+
+                await return_flow.cancel_return(db, ret.id)
+        await db.flush()
+        return
+
+    # 飞书自建链路（原语义不变）
     if status == "APPROVED" and ret.status == "draft":
         from app.modules.warehouse.hardware.stocktake import accept_return
 
@@ -682,10 +741,58 @@ async def _apply_return_status(db: AsyncSession, ret: HardwareReturn, status: st
         await db.flush()
 
 
+def _note_late_scrap_result(scrap: HardwareScrap, result: str) -> None:
+    """报废单已在平台处理（通过/驳回/撤回）后飞书实例才出结论：只留痕不生效。
+
+    平台先通过时已尽力撤回实例；定义未开撤销时审批人之后在飞书再点，结论
+    不会重复改变单据状态。同一结论只记一次（事件/轮询/对账会重复送达）。
+    """
+    note = f"飞书审批单后续{result}（单据已在平台处理，不重复生效）"
+    if note in (scrap.remark or ""):
+        return
+    scrap.remark = f"{scrap.remark or ''}；{note}".strip("；")
+    logger.info("[回流] 报废单已离开待审批，飞书结论 %s 只留痕: %s", result, scrap.scrap_no)
+
+
+async def _apply_scrap_status(db: AsyncSession, scrap: HardwareScrap, status: str) -> None:
+    """飞书实例状态对齐报废单状态机（幂等，2026-11-25 与申领对齐真机口径）。
+
+    实例 APPROVED=终态=审批关闭=仓管已在飞书「办理」节点完成出库（真机验证
+    2026-11-25：办理节点即仓管出库动作）→ 自动 approve+execute（预扣转实扣，
+    同事务，扣减失败整体回滚保持待审批由轮询重试）；REJECTED→rejected
+    （释放预扣）；CANCELED→cancelled（释放预扣）。单据离开 pending 后
+    （平台先通过/驳回/撤回）不再受实例后续事件影响。
+    """
+    from app.modules.warehouse.hardware import scrap as scrap_service
+
+    approver = scrap.approver_name or "飞书审批"
+    if status == "APPROVED":
+        if scrap.status == "pending":
+            await scrap_service.approve_scrap(db, scrap.id, approved_by=approver)
+            await scrap_service.execute_scrap(
+                db, scrap.id, executed_by="飞书审批·仓管办理"
+            )
+        else:
+            _note_late_scrap_result(scrap, "通过")
+    elif status == "REJECTED":
+        if scrap.status == "pending":
+            await scrap_service.reject_scrap(
+                db, scrap.id,
+                rejected_by=approver,
+                reason="飞书审批驳回（事件/对账同步）",
+            )
+        else:
+            _note_late_scrap_result(scrap, "驳回")
+    elif status == "CANCELED":
+        if scrap.status == "pending":
+            await scrap_service.cancel_scrap(db, scrap.id)
+    await db.flush()
+
+
 async def sync_status(
     db: AsyncSession, instance_code: str, *, status: str | None = None
 ) -> dict[str, Any]:
-    """审批结果事件 → 领料单/退库单状态机同步。"""
+    """审批结果事件 → 领料单/退库单/报废单状态机同步。"""
     if status is None:
         status = str((await _fetch_instance(instance_code)).get("status") or "")
     req = await _find_requisition(db, instance_code)
@@ -696,6 +803,10 @@ async def sync_status(
     if ret is not None:
         await _apply_return_status(db, ret, status)
         return {"action": "synced", "doc_no": ret.return_no, "status": ret.status}
+    scrap = await _find_scrap(db, instance_code)
+    if scrap is not None:
+        await _apply_scrap_status(db, scrap, status)
+        return {"action": "synced", "doc_no": scrap.scrap_no, "status": scrap.status}
     return {"action": "ignore", "reason": "无关联单据"}
 
 
@@ -713,7 +824,7 @@ async def _cancel_feishu_instance(instance_code: str, inst: dict[str, Any]) -> N
         or (inst.get("starter") or {}).get("user_id")
         or ""
     )
-    approval_code = str(get_settings().HARDWARE_APPROVAL_CODE or "").strip()
+    approval_code = get_approval_code()
     if not user_id or not approval_code:
         logger.info("[摄取] 缺料退回跳过（缺 user_id/approval_code）: %s", instance_code)
         return
@@ -938,7 +1049,7 @@ async def reconcile_recent_instances(
     """扫描近 N 小时实例：未摄取的补摄取 + pending 单状态对齐（幂等）。"""
     from app.platform.integrations.feishu.approval import list_instance_codes
 
-    approval_code = str(get_settings().HARDWARE_APPROVAL_CODE or "").strip()
+    approval_code = get_approval_code()
     if not approval_code:
         return {"enabled": 0, "codes": 0, "ingested": 0, "synced": 0, "skipped": 0}
     now = now or datetime.now(UTC)
@@ -951,7 +1062,11 @@ async def reconcile_recent_instances(
     stats = {"enabled": 1, "codes": len(codes), "ingested": 0, "synced": 0, "skipped": 0}
     for code in codes:
         try:
-            if await _find_requisition(db, code) or await _find_return(db, code):
+            if (
+                await _find_requisition(db, code)
+                or await _find_return(db, code)
+                or await _find_scrap(db, code)
+            ):
                 result = await sync_status(db, code)
                 if result.get("action") == "synced":
                     stats["synced"] += 1

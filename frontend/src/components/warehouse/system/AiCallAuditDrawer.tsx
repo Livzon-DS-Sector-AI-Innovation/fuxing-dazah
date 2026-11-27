@@ -95,7 +95,7 @@ export default function AiCallAuditDrawer({ open, detail, loading, onClose }: Ai
 
   return (
     <Drawer
-      width={760}
+      size={760}
       open={open}
       onClose={onClose}
       loading={loading && !detail}

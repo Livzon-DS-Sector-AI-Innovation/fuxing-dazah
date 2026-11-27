@@ -21,11 +21,14 @@ import type {
   HardwareStocktakeRecord,
   HardwareStocktakeItemRecord,
   HardwareReturnRecord,
+  HardwareReturnFromRequisitionInput,
+  HardwareReturnableRow,
   HardwarePlanRecord,
   HardwarePlanItemRecord,
   HardwareEnvLogRecord,
   HardwareScrapRecord,
   HardwareScrapCreateInput,
+  HardwareOutboundDocRow,
   HardwareErpImportResult,
   HardwareReconcileDiffs,
 } from '@/types/warehouse-hardware'
@@ -61,6 +64,11 @@ export async function fetchHardwareStockClient(
 
 export async function fetchHardwareStockSummaryClient(): Promise<HardwareStockSummary> {
   return apiGet<HardwareStockSummary>(`${CLIENT_API}${BASE}/stock/summary`)
+}
+
+/** 库存明细全量导出 Excel（不随页面筛选，含 direct 类）。 */
+export function exportHardwareStockUrl(): string {
+  return `${CLIENT_API}${BASE}/stock/export`
 }
 
 export interface HardwareStockDetail {
@@ -393,6 +401,49 @@ export async function rejectHardwareReturnClient(
   return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/reject`, { reason })
 }
 
+// ── 平台退料链路（2026-11-26：从已发料领料单发起，审批→仓管验收回加）──
+
+export async function fetchReturnApproversClient(
+  params: { keyword?: string; limit?: number } = {},
+): Promise<HardwareApproverCandidate[]> {
+  const sp = new URLSearchParams()
+  if (params.keyword) sp.set('keyword', params.keyword)
+  sp.set('limit', String(params.limit ?? 50))
+  const data = await apiGet<{ items: HardwareApproverCandidate[] }>(
+    `${CLIENT_API}${BASE}/return-approvers?${sp.toString()}`,
+  )
+  return data.items ?? []
+}
+
+export async function fetchReturnableQtyClient(
+  requisitionId: string,
+): Promise<{ items: HardwareReturnableRow[]; requisition_status: string }> {
+  return apiGet(`${CLIENT_API}${BASE}/requisitions/${requisitionId}/returnable`)
+}
+
+/** 从已发料领料单发起退料：创建并提交审批（同申领「确定即提交」） */
+export async function createReturnFromRequisitionClient(
+  payload: HardwareReturnFromRequisitionInput,
+): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(
+    `${CLIENT_API}${BASE}/returns/from-requisition`,
+    payload,
+  )
+}
+
+export async function submitHardwareReturnClient(id: string): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/submit`, {})
+}
+
+/** 审批人在平台点通过（与飞书审批单任选其一） */
+export async function approveHardwareReturnClient(id: string): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/approve`, {})
+}
+
+export async function cancelHardwareReturnClient(id: string): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/cancel`, {})
+}
+
 export async function fetchHardwarePlansClient(
   page = 1, pageSize = 20,
 ): Promise<PaginatedCompat<HardwarePlanRecord>> {
@@ -486,39 +537,55 @@ export async function submitHardwareScrapClient(id: string): Promise<HardwareScr
   return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/submit`, {})
 }
 
-export async function deptConfirmHardwareScrapClient(
-  id: string,
-  confirmedBy: string,
-  note?: string,
-): Promise<HardwareScrapRecord> {
-  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/dept-confirm`, {
-    confirmed_by: confirmedBy,
-    note,
+/** 审批人在平台点通过（与飞书审批单任选其一）；审批人取当前登录用户 */
+export async function approveHardwareScrapClient(id: string): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/approve`, {})
+}
+
+/** 仓管出库（待出库 → 已出库，实扣）；操作人取当前登录用户 */
+export async function executeHardwareScrapClient(id: string): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/execute`, {
+    executed_by: 'web',
   })
 }
 
-export async function approveHardwareScrapClient(
-  id: string,
-  approvedBy: string,
-): Promise<HardwareScrapRecord> {
-  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/approve`, {
-    approved_by: approvedBy,
-  })
+export async function fetchScrapApproversClient(
+  params: { keyword?: string; limit?: number } = {},
+): Promise<HardwareApproverCandidate[]> {
+  const sp = new URLSearchParams()
+  if (params.keyword) sp.set('keyword', params.keyword)
+  sp.set('limit', String(params.limit ?? 50))
+  const data = await apiGet<{ items: HardwareApproverCandidate[] }>(
+    `${CLIENT_API}${BASE}/scrap-approvers?${sp.toString()}`,
+  )
+  return data.items ?? []
 }
 
 export async function rejectHardwareScrapClient(
   id: string,
-  rejectedBy: string,
   reason: string,
 ): Promise<HardwareScrapRecord> {
   return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/reject`, {
-    rejected_by: rejectedBy,
     reason,
   })
 }
 
 export async function cancelHardwareScrapClient(id: string): Promise<HardwareScrapRecord> {
   return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/cancel`, {})
+}
+
+/**
+ * 「申请单据」合并列表：领料单 + 报废单同一分页，状态同名同义
+ * （pending 待审批 / approved 待发料·待出库 / issued 已发料·已出库）。
+ */
+export async function fetchHardwareOutboundDocsClient(
+  params: { status?: string; page?: number; pageSize?: number } = {},
+): Promise<PaginatedCompat<HardwareOutboundDocRow>> {
+  const sp = new URLSearchParams()
+  if (params.status) sp.set('status', params.status)
+  sp.set('page', String(params.page ?? 1))
+  sp.set('page_size', String(params.pageSize ?? 20))
+  return apiFetchPaginated<HardwareOutboundDocRow>(`${CLIENT_API}${BASE}/outbound-docs?${sp.toString()}`)
 }
 
 export async function photoScreenHardwareReceiptClient(

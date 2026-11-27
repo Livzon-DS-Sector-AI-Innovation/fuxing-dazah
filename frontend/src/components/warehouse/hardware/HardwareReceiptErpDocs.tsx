@@ -1,7 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { Button, Empty, Input, InputNumber, Segmented, Select, Space, Spin, Tooltip } from 'antd'
+import { useMemo } from 'react'
+import { Button, Empty, Input, InputNumber, Select, Space, Spin, Tooltip } from 'antd'
 import { DeleteOutlined, FileDoneOutlined } from '@ant-design/icons'
 import type { HardwareMaterialRecord } from '@/types/warehouse-hardware'
 import { StatusTag } from '@/components/warehouse'
@@ -32,10 +32,28 @@ export interface ErpDocGroupStatus extends ErpDocGroup {
   mode: 'stocked' | 'direct'
 }
 
+/** 匹配置信度阈值：低于此分的行归为未匹配（与后端 matcher.LOW_CONFIDENCE_THRESHOLD 对齐）。 */
+export const MATCH_SCORE_THRESHOLD = 75
+
+/**
+ * 单行是否匹配成功：有物料ID且置信度达标。
+ *
+ * 手动选定物料（match_confidence='manual'）视为 100 分——用户已人工确认，
+ * 不受阈值限制（后端 pickMaterial 亦写 score=100）。
+ */
+export function isRowMatched(row: ErpDocRow): boolean {
+  if (!row.material_id) return false
+  if (row.match_confidence === 'manual') return true
+  const score = row.match_score
+  if (score == null) return true // 无分数信息（历史/OCR 通道）不拦，交由人工核对
+  return score >= MATCH_SCORE_THRESHOLD
+}
+
 export function docStatusOf(d: ErpDocGroup): ErpDocGroupStatus {
   return {
     ...d,
-    all_matched: d.rows.length > 0 && d.rows.every((r) => !!r.material_id),
+    // 整单全行匹配才算 matched（保留字段供批量建单筛选；界面已改为行级统计）
+    all_matched: d.rows.length > 0 && d.rows.every((r) => isRowMatched(r)),
     mode: d.rows.some((r) => r.managed_class === 'stocked') ? 'stocked' : 'direct',
   }
 }
@@ -159,7 +177,7 @@ function DocCard({
   extra?: React.ReactNode
   children?: React.ReactNode
 }) {
-  const unmatched = doc.rows.filter((r) => !r.material_id).length
+  const unmatched = doc.rows.filter((r) => !isRowMatched(r)).length
   return (
     <div className="rounded-md border border-neutral-200 px-3 py-2">
       <div className="flex items-center justify-between gap-2">
@@ -167,7 +185,9 @@ function DocCard({
           单号 {doc.delivery_note_no || '（无单号）'}
           <span className="ml-2 text-xs font-normal text-neutral-500">
             {doc.supplier_name || '供应商未知'} · {doc.rows.length} 行
-            {unmatched > 0 && <span className="text-red-500">（{unmatched} 未匹配）</span>}
+            {unmatched > 0 && (
+              <span className="text-red-500">（{unmatched} 行未匹配，建单时自动跳过）</span>
+            )}
           </span>
           <span className="ml-2">
             <StatusTag tone={MANAGED_CLASS_TONE[doc.mode]} label={MODE_LABEL[doc.mode]} />
@@ -193,16 +213,20 @@ export function HardwareReceiptErpDocs({
   onBuildAll,
 }: Props) {
   const statuses = useMemo(() => docs.map(docStatusOf), [docs])
-  const matchedDocs = statuses.filter((d) => d.all_matched)
-  const unmatchedDocs = statuses.filter((d) => !d.all_matched)
 
-  const [tabPref, setTabPref] = useState<'matched' | 'unmatched' | null>(null)
-  const tab =
-    tabPref && (tabPref === 'matched' ? matchedDocs.length > 0 : unmatchedDocs.length > 0)
-      ? tabPref
-      : matchedDocs.length > 0
-        ? 'matched'
-        : 'unmatched'
+  // 按行统计（2026-11-24 口径变更）：不再按整单二分，每行独立判定
+  const stats = useMemo(() => {
+    let matched = 0
+    let unmatched = 0
+    for (const d of statuses) {
+      for (const r of d.rows) {
+        if (isRowMatched(r)) matched += 1
+        else unmatched += 1
+      }
+    }
+    const buildable = statuses.filter((d) => d.rows.some((r) => isRowMatched(r)))
+    return { matched, unmatched, buildable }
+  }, [statuses])
 
   if (statuses.length === 0) {
     return <Empty description="没有可处理的单据（全部已建单或已删空）" />
@@ -220,65 +244,63 @@ export function HardwareReceiptErpDocs({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <Segmented
-          value={tab}
-          onChange={(v) => setTabPref(v as 'matched' | 'unmatched')}
-          options={[
-            { value: 'matched', label: `已匹配单据（${matchedDocs.length}）` },
-            { value: 'unmatched', label: `未匹配单据（${unmatchedDocs.length}）` },
-          ]}
-        />
+        <Space size="middle">
+          <span className="text-sm">
+            本批共 <b>{stats.matched + stats.unmatched}</b> 行：
+            <span className="ml-1 text-green-600">已匹配 {stats.matched} 行</span>
+            {stats.unmatched > 0 && (
+              <span className="ml-2 text-red-500">未匹配 {stats.unmatched} 行</span>
+            )}
+          </span>
+        </Space>
         <Button
           type="primary"
           icon={<FileDoneOutlined />}
           loading={building}
-          disabled={matchedDocs.length === 0}
+          disabled={stats.buildable.length === 0}
           onClick={onBuildAll}
         >
-          批量建单（{matchedDocs.length} 张已匹配）
+          批量建单（{stats.buildable.length} 张 · 仅含已匹配行）
         </Button>
       </div>
 
-      {tab === 'matched' ? (
-        matchedDocs.length === 0 ? (
-          <Empty description="暂无全行匹配的单据——到「未匹配单据」栏人工补配" />
-        ) : (
-          <div className="flex max-h-[420px] flex-col gap-3 overflow-y-auto">
-            {matchedDocs.map((doc) => (
-              <DocCard
-                key={doc.key}
-                doc={doc}
-                extra={
-                  <Button
-                    size="small"
-                    type="primary"
-                    loading={building}
-                    onClick={() => onBuildDoc(doc)}
-                  >
-                    建单
-                  </Button>
-                }
-              >
-                <DocRowsEditor doc={doc} {...rowsEditorProps} />
-              </DocCard>
-            ))}
-          </div>
-        )
-      ) : unmatchedDocs.length === 0 ? (
-        <Empty description="未匹配栏已清空——全部单据已可建单" />
-      ) : (
-        <div className="flex max-h-[420px] flex-col gap-3 overflow-y-auto">
-          {unmatchedDocs.map((doc) => (
+      <div className="flex max-h-[420px] flex-col gap-3 overflow-y-auto">
+        {statuses.map((doc) => {
+          const rowMatched = doc.rows.filter((r) => isRowMatched(r)).length
+          const canBuild = rowMatched > 0
+          return (
             <DocCard
               key={doc.key}
               doc={doc}
-              extra={<span className="text-xs text-neutral-400">逐行选择物料，整单补齐后自动移入已匹配栏</span>}
+              extra={
+                <Space size="small">
+                  <span className="text-xs text-neutral-500">
+                    已匹配 {rowMatched}/{doc.rows.length} 行
+                  </span>
+                  {canBuild ? (
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={building}
+                      onClick={() => onBuildDoc(doc)}
+                    >
+                      建单（{rowMatched} 行）
+                    </Button>
+                  ) : (
+                    <Tooltip title="请先为至少一行选择物料">
+                      <Button size="small" disabled>
+                        建单
+                      </Button>
+                    </Tooltip>
+                  )}
+                </Space>
+              }
             >
               <DocRowsEditor doc={doc} {...rowsEditorProps} />
             </DocCard>
-          ))}
-        </div>
-      )}
+          )
+        })}
+      </div>
     </div>
   )
 }

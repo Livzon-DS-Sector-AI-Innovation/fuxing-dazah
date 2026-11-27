@@ -315,6 +315,133 @@ _RUNTIME_KEYS: tuple[RuntimeKeyInfo, ...] = (
             "默认 0.9=90 分）。仅 direct 单生效，stocked 永不自动"
         ),
     ),
+    # ── 五金审批（2026-11-26 由 env 迁入系统配置；env 仅兜底，页面改值即时生效）──
+    RuntimeKeyInfo(
+        key="hardware_approval_channel",
+        label="领料审批通道（feishu/manual）",
+        group="五金库",
+        value_type="str",
+        default="manual",
+        env_var="HARDWARE_APPROVAL_CHANNEL",
+        min_value=None,
+        max_value=None,
+        max_length=10,
+        description=(
+            "「福兴电子领/退料单审批」通道总开关（领料/报废/退料共用）："
+            "feishu=提交即代发起飞书审批实例；manual=系统内代录。"
+            "需同时配好审批定义编码（hardware_approval_code）"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_approval_code",
+        label="审批定义编码",
+        group="五金库",
+        value_type="str",
+        default="",
+        env_var="HARDWARE_APPROVAL_CODE",
+        min_value=None,
+        max_value=None,
+        max_length=100,
+        description=(
+            "飞书审批定义 code（「福兴电子领/退料单审批」，申领/报废/退料共用）。"
+            "飞书审批管理后台 → 定义编辑页 URL 中的 definitionCode"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_approval_reconcile_enabled",
+        label="审批实例对账任务开关（0/1）",
+        group="五金库",
+        value_type="int",
+        default=1,
+        env_var="HARDWARE_APPROVAL_RECONCILE_ENABLED",
+        min_value=0,
+        max_value=1,
+        max_length=None,
+        description=(
+            "每小时拉近 2h 审批实例补摄取+状态对齐的兜底任务。"
+            "0=关闭（本地联调防生产真实实例灌入本地库；轮询/WS 事件不受影响）"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_approval_node_id",
+        label="「主管及以上审批」节点 ID 覆盖",
+        group="五金库",
+        value_type="str",
+        default="",
+        env_var="HARDWARE_APPROVAL_NODE_ID",
+        min_value=None,
+        max_value=None,
+        max_length=100,
+        description=(
+            "发起人自选审批节点的 id；审批定义改版后节点 id 变化时覆盖。"
+            "留空=使用代码内置默认值（当前定义的节点 id）"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_scrap_kind_value",
+        label="报废分支分流键选项 value",
+        group="五金库",
+        value_type="str",
+        default="",
+        env_var="HARDWARE_SCRAP_KIND_VALUE",
+        min_value=None,
+        max_value=None,
+        max_length=100,
+        description=(
+            "「五金库报废出库」分支：飞书定义分流键「领/退料」的报废选项 value"
+            "（写接口口径）。配齐本键+hardware_scrap_form_widgets 即启用报废"
+            "飞书审批；留空=审批人在平台点通过"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_scrap_form_widgets",
+        label="报废分支控件 ID（JSON）",
+        group="五金库",
+        value_type="str",
+        default="",
+        env_var="HARDWARE_SCRAP_FORM_WIDGETS",
+        min_value=None,
+        max_value=None,
+        max_length=4000,
+        description=(
+            '报废分支五控件 id JSON：{"dept":..,"starter":..,"reason":..,'
+            '"items":..,"doc_no":..}（发起部门/发起人/报废条件及说明/报废明细/'
+            "报废单号，显示条件=报废分支）。非法 JSON 按未配置处理"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_return_kind_value",
+        label="退料分支分流键选项 value",
+        group="五金库",
+        value_type="str",
+        default="",
+        env_var="HARDWARE_RETURN_KIND_VALUE",
+        min_value=None,
+        max_value=None,
+        max_length=100,
+        description=(
+            "「五金库退料-平台」分支：分流键的退料平台选项 value。"
+            "配齐本键+hardware_return_form_widgets 即启用退料飞书审批；"
+            "留空=审批人在平台点通过"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_return_form_widgets",
+        label="退料分支控件 ID（JSON）",
+        group="五金库",
+        value_type="str",
+        default="",
+        env_var="HARDWARE_RETURN_FORM_WIDGETS",
+        min_value=None,
+        max_value=None,
+        max_length=4000,
+        description=(
+            '退料分支六控件 id JSON：{"dept":..,"starter":..,"source_req_no":..,'
+            '"items":..,"return_no":..,"reason":..}（退料部门/退料人/原领料单号/'
+            "退料明细/退库单号/退料说明，显示条件=退料-平台分支）。"
+            "非法 JSON 按未配置处理"
+        ),
+    ),
 )
 
 RUNTIME_REGISTRY: dict[str, RuntimeKeyInfo] = {k.key: k for k in _RUNTIME_KEYS}

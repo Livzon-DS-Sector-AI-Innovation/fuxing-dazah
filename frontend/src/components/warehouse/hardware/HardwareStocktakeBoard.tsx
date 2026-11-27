@@ -233,7 +233,7 @@ export function HardwareStocktakeBoard() {
         title={take ? `${take.take_no}（${HARDWARE_STOCKTAKE_TYPE_LABEL[take.take_type]}）` : '盘点单'}
         open={!!detailId}
         onClose={() => setDetailId(null)}
-        width="92%"
+        size="92%"
         styles={{ body: { padding: 12 } }}
       >
         {take && (

@@ -219,7 +219,17 @@ async def test_feishu_poll_result_mapping(db_session):
         assert await channel.poll_result(db_session, FakeReq()) is None
 
 
-def test_factory_fallback_without_code():
+def _patch_channel_conf(monkeypatch, *, channel: str, code: str) -> None:
+    """通道工厂读 runtime（2026-11-26 配置迁系统配置后），patch 读取 helper
+    的落点（get_approval_channel_conf 是唯一数据源）。"""
+    import app.modules.warehouse.hardware.approval_channel as ac
+
+    monkeypatch.setattr(
+        ac, "get_approval_channel_conf", lambda: (channel, code)
+    )
+
+
+def test_factory_fallback_without_code(monkeypatch):
     """未配置 definition code → 自动落 manual 通道（不炸）。"""
     from app.modules.warehouse.hardware.approval_channel import (
         ManualApprovalChannel,
@@ -227,27 +237,22 @@ def test_factory_fallback_without_code():
         get_approval_channel,
     )
 
-    with patch("app.modules.warehouse.hardware.approval_channel.get_settings", return_value=_settings_stub()):
-        channel = get_approval_channel()
-        assert isinstance(channel, ManualApprovalChannel)
-        assert feishu_channel_configured() is False
+    _patch_channel_conf(monkeypatch, channel="feishu", code="")
+    channel = get_approval_channel()
+    assert isinstance(channel, ManualApprovalChannel)
+    assert feishu_channel_configured() is False
 
 
-def test_factory_selects_feishu_when_configured():
-    with patch(
-        "app.modules.warehouse.hardware.approval_channel.get_settings",
-        return_value=_settings_stub(
-            HARDWARE_APPROVAL_CHANNEL="feishu", HARDWARE_APPROVAL_CODE="OP-REAL"
-        ),
-    ):
-        from app.modules.warehouse.hardware.approval_channel import (
-            FeishuApprovalChannel,
-            get_approval_channel,
-        )
+def test_factory_selects_feishu_when_configured(monkeypatch):
+    from app.modules.warehouse.hardware.approval_channel import (
+        FeishuApprovalChannel,
+        get_approval_channel,
+    )
 
-        channel = get_approval_channel()
-        assert isinstance(channel, FeishuApprovalChannel)
-        assert channel.approval_code == "OP-REAL"
+    _patch_channel_conf(monkeypatch, channel="feishu", code="OP-REAL")
+    channel = get_approval_channel()
+    assert isinstance(channel, FeishuApprovalChannel)
+    assert channel.approval_code == "OP-REAL"
 
 
 def _settings_stub(**overrides):

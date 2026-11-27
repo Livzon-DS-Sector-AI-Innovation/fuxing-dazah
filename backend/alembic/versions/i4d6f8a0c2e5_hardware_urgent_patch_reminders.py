@@ -67,26 +67,27 @@ def upgrade() -> None:
         sa.column("updated_at", sa.DateTime(timezone=True)),
         schema=SCHEMA,
     )
-    op.execute(
-        postgresql.insert(task_rows)
-        .values(
-            [
-                {
-                    "id": uuid4(),
-                    "task_name": info.task_name,
-                    "enabled": True,
-                    "schedule": info.default_schedule,
-                    "targets": None,
-                    "is_deleted": False,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                for info in push_registry.iter_tasks()
-                if info.task_name in NEW_PUSH_TASKS
-            ]
+    seed_rows = [
+        {
+            "id": uuid4(),
+            "task_name": info.task_name,
+            "enabled": True,
+            "schedule": info.default_schedule,
+            "targets": None,
+            "is_deleted": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        for info in push_registry.iter_tasks()
+        if info.task_name in NEW_PUSH_TASKS
+    ]
+    # registry 已退役该任务（o3a5c7e9b1d3 起 hardware_urgent_overdue 下线）时
+    # 取到空列表，直接跳过——否则 postgresql.insert([]) 会退化成
+    # `INSERT ... DEFAULT VALUES`，撞 task_name NOT NULL 约束。
+    if seed_rows:
+        op.execute(
+            postgresql.insert(task_rows).values(seed_rows).on_conflict_do_nothing()
         )
-        .on_conflict_do_nothing()
-    )
 
 
 def downgrade() -> None:

@@ -15,7 +15,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.exceptions import ForbiddenException
 from app.core.response import paginated_response, success_response
+from app.modules.warehouse.hardware import approval_docs
 from app.modules.warehouse.hardware import service
 from app.modules.warehouse.hardware.schemas import (
     CodeBackfillStatsResponse,
@@ -49,12 +51,13 @@ from app.modules.warehouse.hardware.schemas import (
     RequisitionResponse,
     ReturnAcceptBody,
     ReturnCreate,
+    ReturnFromRequisitionCreate,
     ReturnReject,
     ReturnResponse,
     ReturnSign,
     ScrapApprove,
     ScrapCreate,
-    ScrapDeptConfirm,
+    ScrapExecute,
     ScrapItemResponse,
     ScrapReject,
     ScrapResponse,
@@ -70,7 +73,8 @@ from app.modules.warehouse.hardware import planning as planning_service
 from app.modules.warehouse.hardware import scrap as scrap_service
 from app.modules.warehouse.hardware import stocktake as stocktake_service
 from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
+from app.platform.permission import deps as permission_deps
+from app.platform.permission.deps import require_permission, require_user
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +171,36 @@ async def stock_summary(
                 for r in low[:20]
             ],
         }
+    )
+
+
+@router.get("/stock/export", summary="库存明细导出 Excel（全量，含 direct 类）")
+async def export_stock(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stock:read")),
+):
+    """全量导出库存明细：一物料一行，列与库存页表格一致。
+
+    不随页面筛选变化（固定 managed_class=None 含 direct 类），供盘点/归档。
+    注意：必须注册在 /stock/{material_id} 之前，否则会被路径参数吞掉。
+    """
+    from datetime import datetime as _dt
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    from app.modules.warehouse.hardware.excel_io import export_stock_excel
+
+    # page_size 取 5000 与 summary 同口径；页面上限 200，导出需单独放大
+    rows, _total = await service.list_stock_rows(
+        db, managed_class=None, page=1, page_size=5000
+    )
+    xlsx = export_stock_excel(rows)
+    filename = f"五金库库存明细_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 
 
@@ -728,17 +762,12 @@ async def _requisition_response(db: AsyncSession, req: Any) -> dict[str, Any]:
     return payload.model_dump(mode="json")
 
 
-@router.get("/requisition-approvers", summary="审批人候选（主管及以上，发起人自选）")
-async def list_requisition_approvers(
-    keyword: str | None = Query(default=None, max_length=50),
-    limit: int = Query(default=30, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("warehouse:hardware:requisition:create")),
-) -> JSONResponse:
-    """申领弹窗的审批人下拉数据（飞书 user_id + 姓名/部门/职位）。
+async def _approver_candidates(
+    db: AsyncSession, keyword: str | None, limit: int
+) -> dict[str, Any]:
+    """审批人候选共享查询（申领/报废弹窗共用，主管及以上硬过滤）。
 
-    审批节点为「发起人自选（主管及以上）」：**硬过滤**，只返回
-    ① 职位命中 主管/经理/部长/总监/副总/厂长/总经理/主任；
+    只返回：① 职位命中 主管/经理/部长/总监/副总/厂长/总经理/主任；
     ② 任一部门负责人（identity.departments.leader_user_id）；
     ③ 持 `warehouse:hardware:requisition:approve` 权限的人。
     名单以 identity.users 为准（与发起人/审批人 user_id 同源），由通讯录
@@ -799,7 +828,29 @@ async def list_requisition_approvers(
         }
         for r in rows
     ]
-    return success_response({"items": items, "total": len(items)})
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/requisition-approvers", summary="审批人候选（主管及以上，发起人自选）")
+async def list_requisition_approvers(
+    keyword: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:requisition:create")),
+) -> JSONResponse:
+    """申领弹窗的审批人下拉数据（飞书 user_id + 姓名/部门/职位）。"""
+    return success_response(await _approver_candidates(db, keyword, limit))
+
+
+@router.get("/scrap-approvers", summary="报废审批人候选（主管及以上，发起人自选）")
+async def list_scrap_approvers(
+    keyword: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    """报废弹窗的审批人下拉（数据源与申领同池：主管及以上）。"""
+    return success_response(await _approver_candidates(db, keyword, limit))
 
 
 @router.get("/requisitions/{requisition_id}", summary="领用申请详情")
@@ -1120,11 +1171,23 @@ async def cancel_stocktake(
     return success_response(_stocktake_response(take))
 
 
-# ── 退库（二期 M4：负责人签→仓管员验收→批次回加）──
+# ── 退库（二期 M4：负责人签→仓管员验收→批次回加；2026-11-26 平台审批链路）──
 
 
-def _return_response(r: Any) -> dict[str, Any]:
-    return ReturnResponse.model_validate(r).model_dump(mode="json")
+def _return_response(r: Any, *, can_approve: bool | None = None) -> dict[str, Any]:
+    data = ReturnResponse.model_validate(r).model_dump(mode="json")
+    if can_approve is not None:
+        data["can_approve"] = can_approve
+    return data
+
+
+async def _require_return_approve_access(db: AsyncSession, ret: Any, user: User) -> None:
+    """平台「通过 / 驳回」准入：持「退料管理」权限，或被选为该单审批人。"""
+    from app.modules.warehouse.hardware import return_flow
+
+    perms = await _user_perms(db, user)
+    if not return_flow.can_user_approve_return(ret, user=user, perms=perms):
+        raise ForbiddenException("无权审批该退料单（需「退料管理」权限，或被选为该单审批人）")
 
 
 @router.get("/returns", summary="退库单分页列表")
@@ -1139,8 +1202,18 @@ async def list_returns(
     items, total = await stocktake_service.list_returns(
         db, status=status, dept_name=dept_name, page=page, page_size=page_size
     )
+    from app.modules.warehouse.hardware import return_flow
+
+    perms = await _user_perms(db, user)
     return paginated_response(
-        [_return_response(r) for r in items], total=total, page=page, page_size=page_size
+        [
+            _return_response(
+                r,
+                can_approve=return_flow.can_user_approve_return(r, user=user, perms=perms),
+            )
+            for r in items
+        ],
+        total=total, page=page, page_size=page_size,
     )
 
 
@@ -1192,9 +1265,14 @@ async def accept_return(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:hardware:return:manage")),
 ) -> JSONResponse:
-    ret = await stocktake_service.accept_return(
-        db, return_id, accepted_by=payload.accepted_by
-    )
+    # 平台发起链路：审批通过（approved）才可验收；老登记链路 draft 签收后验收不变
+    ret = await stocktake_service.get_return(db, return_id)
+    if getattr(ret, "approval_channel", None) and ret.status != "approved":
+        raise service.HardwareError(
+            f"退料单状态 {ret.status} 不可验收（审批通过后才可验收回加）"
+        )
+    accepted_by = str(getattr(user, "name", "") or payload.accepted_by)
+    ret = await stocktake_service.accept_return(db, return_id, accepted_by=accepted_by)
     return success_response(_return_response(ret))
 
 
@@ -1205,7 +1283,149 @@ async def reject_return(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:hardware:return:manage")),
 ) -> JSONResponse:
+    ret = await stocktake_service.get_return(db, return_id)
+    if getattr(ret, "approval_channel", None) and ret.status == "pending":
+        # 平台发起链路的待审批单：驳回=审批否（走 return_flow，尽力撤回飞书实例）
+        from app.modules.warehouse.hardware import return_flow
+
+        ret = await return_flow.reject_return(
+            db, return_id,
+            rejected_by=str(getattr(user, "name", "") or "仓管"),
+            reason=payload.reason, withdraw_instance=True,
+        )
+        return success_response(_return_response(ret))
+    rejected_by = str(getattr(user, "name", "") or "仓管")
     ret = await stocktake_service.reject_return(db, return_id, reason=payload.reason)
+    ret.rejected_by = rejected_by
+    await db.flush()
+    return success_response(_return_response(ret))
+
+
+# ── 平台退料链路（2026-11-26：从已发料领料单发起，审批→仓管验收回加）──
+
+
+@router.get("/return-approvers", summary="退料审批人候选（主管及以上，发起人自选）")
+async def list_return_approvers(
+    keyword: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    """退料弹窗的审批人下拉（数据源与申领同池：主管及以上）。"""
+    return success_response(await _approver_candidates(db, keyword, limit))
+
+
+@router.get(
+    "/requisitions/{requisition_id}/returnable",
+    summary="领料单可退额度（按物料：实发 − 已退/在退，退料弹窗上限）",
+)
+async def get_returnable_quota(
+    requisition_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:requisition:read")),
+) -> JSONResponse:
+    from sqlalchemy import select as sa_select
+
+    from app.modules.warehouse.hardware import return_flow
+    from app.modules.warehouse.hardware.models import HardwareMaterial
+
+    req = await service.get_requisition(db, requisition_id)
+    quota = await return_flow.collect_requisition_quota(db, req)
+    items = await service.list_requisition_items(db, requisition_id)
+    materials = {
+        str(m.id): m
+        for m in (
+            await db.execute(
+                sa_select(HardwareMaterial).where(
+                    HardwareMaterial.id.in_({i.material_id for i in items})
+                )
+            )
+        ).scalars()
+    }
+    rows = []
+    for key, base in quota.items():
+        material = materials.get(key)
+        rows.append({
+            "material_id": key,
+            "name": material.name if material else None,
+            "spec": material.spec if material else None,
+            "unit": material.unit if material else None,
+            "issued": base["issued"],
+            "returned": base["returned"],
+            "returnable": max(base["issued"] - base["returned"], 0),
+        })
+    return success_response({"items": rows, "requisition_status": req.status})
+
+
+@router.post(
+    "/returns/from-requisition",
+    status_code=201,
+    summary="从已发料领料单发起退料（创建并提交审批；额度校验双卡点）",
+)
+async def create_return_from_requisition(
+    payload: ReturnFromRequisitionCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    from app.modules.warehouse.hardware import return_flow
+
+    ret = await return_flow.create_return_from_requisition(
+        db,
+        UUID(str(payload.requisition_id)),
+        returned_by=payload.returned_by or str(getattr(user, "name", "") or ""),
+        approver_user_id=payload.approver_user_id,
+        approver_name=payload.approver_name,
+        items=[i.model_dump() for i in payload.items],
+        reason_note=payload.reason_note,
+        user=user,
+    )
+    try:
+        submitted = await return_flow.submit_return(db, ret.id, user=user)
+    except service.HardwareError:
+        raise  # 提交失败：单据留在草稿（错误信息里已说明），前端提示后可重试
+    return success_response(_return_response(submitted), status_code=201)
+
+
+@router.post("/returns/{return_id}/submit", summary="提交退料审批（草稿 → 待审批）")
+async def submit_return(
+    return_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    from app.modules.warehouse.hardware import return_flow
+
+    ret = await return_flow.submit_return(db, return_id, user=user)
+    return success_response(_return_response(ret))
+
+
+@router.post("/returns/{return_id}/approve", summary="审批通过（平台点通过 → 待验收）")
+async def approve_return(
+    return_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """审批人在平台点通过（与飞书审批单任选其一）。"""
+    from app.modules.warehouse.hardware import return_flow
+
+    ret = await return_flow.get_return(db, return_id)
+    await _require_return_approve_access(db, ret, user)
+    ret = await return_flow.approve_return(
+        db, return_id,
+        approved_by=str(getattr(user, "name", "") or "审批人"),
+        user=user, withdraw_instance=True,
+    )
+    return success_response(_return_response(ret))
+
+
+@router.post("/returns/{return_id}/cancel", summary="撤回退料（草稿/待审批可撤）")
+async def cancel_return(
+    return_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    from app.modules.warehouse.hardware import return_flow
+
+    ret = await return_flow.cancel_return(db, return_id)
     return success_response(_return_response(ret))
 
 
@@ -1365,16 +1585,32 @@ async def export_movements(
     )
 
 
-# ── 报废（三期 M7）──
+# ── 报废（三期 M7；2026-11-25 并入申领出库全路径）──
 
 
-def _scrap_response(s: Any, *, items: list[Any] | None = None) -> dict[str, Any]:
+def _scrap_response(
+    s: Any, *, items: list[Any] | None = None, can_approve: bool | None = None
+) -> dict[str, Any]:
     data = ScrapResponse.model_validate(s).model_dump(mode="json")
     if items is not None:
         data["items"] = [
             ScrapItemResponse.model_validate(i).model_dump(mode="json") for i in items
         ]
+    if can_approve is not None:
+        data["can_approve"] = can_approve
     return data
+
+
+async def _user_perms(db: AsyncSession, user: User) -> set[str]:
+    """当前用户权限集（经 permission.deps 模块属性调用，保持与 require_permission 同源）。"""
+    return await permission_deps.get_user_permissions(str(user.id), db)
+
+
+async def _require_scrap_approve_access(db: AsyncSession, scrap: Any, user: User) -> None:
+    """平台「通过 / 驳回」准入：持「报废管理」权限，或被选为该单审批人。"""
+    perms = await _user_perms(db, user)
+    if not scrap_service.can_user_approve_scrap(scrap, user=user, perms=perms):
+        raise ForbiddenException("无权审批该报废单（需「报废管理」权限，或被选为该单审批人）")
 
 
 @router.get("/scraps", summary="报废单分页列表")
@@ -1391,12 +1627,19 @@ async def list_scraps(
         db, status=status, scrap_reason=scrap_reason, dept_name=dept_name,
         page=page, page_size=page_size,
     )
+    perms = await _user_perms(db, user)
     return paginated_response(
-        [_scrap_response(s) for s in items], total=total, page=page, page_size=page_size
+        [
+            _scrap_response(
+                s, can_approve=scrap_service.can_user_approve_scrap(s, user=user, perms=perms)
+            )
+            for s in items
+        ],
+        total=total, page=page, page_size=page_size,
     )
 
 
-@router.post("/scraps", status_code=201, summary="发起报废（四条件单选+留证照片+明细行）")
+@router.post("/scraps", status_code=201, summary="发起报废（四条件单选+留证照片+明细行+指定审批人）")
 async def create_scrap(
     payload: ScrapCreate,
     db: AsyncSession = Depends(get_db),
@@ -1412,6 +1655,9 @@ async def create_scrap(
         items=[i.model_dump() for i in payload.items],
         attachments=payload.attachments,
         remark=payload.remark,
+        approver_user_id=payload.approver_user_id,
+        approver_name=payload.approver_name,
+        user=user,
     )
     items = await scrap_service.list_scrap_items(db, scrap.id)
     return success_response(_scrap_response(scrap, items=items), status_code=201)
@@ -1425,10 +1671,17 @@ async def get_scrap(
 ) -> JSONResponse:
     scrap = await scrap_service.get_scrap(db, scrap_id)
     items = await scrap_service.list_scrap_items(db, scrap_id)
-    return success_response(_scrap_response(scrap, items=items))
+    perms = await _user_perms(db, user)
+    return success_response(
+        _scrap_response(
+            scrap,
+            items=items,
+            can_approve=scrap_service.can_user_approve_scrap(scrap, user=user, perms=perms),
+        )
+    )
 
 
-@router.post("/scraps/{scrap_id}/submit", summary="提交报废审批（未配置 feishu=manual 两步）")
+@router.post("/scraps/{scrap_id}/submit", summary="提交报废（预扣生效 → 待审批）")
 async def submit_scrap(
     scrap_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -1438,46 +1691,55 @@ async def submit_scrap(
     return success_response(_scrap_response(scrap))
 
 
-@router.post("/scraps/{scrap_id}/dept-confirm", summary="①部门主管确认（manual 第一步）")
-async def dept_confirm_scrap(
-    scrap_id: UUID,
-    payload: ScrapDeptConfirm,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
-) -> JSONResponse:
-    scrap = await scrap_service.dept_confirm_scrap(
-        db, scrap_id, confirmed_by=payload.confirmed_by, note=payload.note
-    )
-    return success_response(_scrap_response(scrap))
-
-
-@router.post("/scraps/{scrap_id}/approve", summary="②仓储负责人终审（通过即销账，唯一动账点）")
-async def final_approve_scrap(
+@router.post("/scraps/{scrap_id}/approve", summary="审批通过（平台点通过 → 待出库，预扣保持）")
+async def approve_scrap(
     scrap_id: UUID,
     payload: ScrapApprove,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+    user: User = Depends(require_user),
 ) -> JSONResponse:
-    scrap = await scrap_service.final_approve_scrap(
-        db, scrap_id, approved_by=payload.approved_by, user=user
+    """审批人在平台点通过（与飞书审批单两条路任选其一）。"""
+    scrap = await scrap_service.get_scrap(db, scrap_id)
+    await _require_scrap_approve_access(db, scrap, user)
+    scrap = await scrap_service.approve_scrap(
+        db, scrap_id, approved_by=str(getattr(user, "name", "") or payload.approved_by),
+        user=user, withdraw_instance=True,
     )
     return success_response(_scrap_response(scrap))
 
 
-@router.post("/scraps/{scrap_id}/reject", summary="驳回报废（任一步可驳，零动账）")
+@router.post("/scraps/{scrap_id}/execute", summary="出库（待出库 → 已出库，仓管实扣，唯一动账点）")
+async def execute_scrap(
+    scrap_id: UUID,
+    payload: ScrapExecute,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    scrap = await scrap_service.execute_scrap(
+        db, scrap_id, executed_by=payload.executed_by, user=user
+    )
+    return success_response(_scrap_response(scrap))
+
+
+@router.post("/scraps/{scrap_id}/reject", summary="驳回报废（待审批可驳，释放预扣）")
 async def reject_scrap(
     scrap_id: UUID,
     payload: ScrapReject,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+    user: User = Depends(require_user),
 ) -> JSONResponse:
+    scrap = await scrap_service.get_scrap(db, scrap_id)
+    await _require_scrap_approve_access(db, scrap, user)
     scrap = await scrap_service.reject_scrap(
-        db, scrap_id, rejected_by=payload.rejected_by, reason=payload.reason
+        db, scrap_id,
+        rejected_by=str(getattr(user, "name", "") or payload.rejected_by),
+        reason=payload.reason,
+        withdraw_instance=True,
     )
     return success_response(_scrap_response(scrap))
 
 
-@router.post("/scraps/{scrap_id}/cancel", summary="撤回报废（approved 前可撤，零动账）")
+@router.post("/scraps/{scrap_id}/cancel", summary="撤回报废（草稿/待审批可撤，释放预扣）")
 async def cancel_scrap(
     scrap_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -1485,6 +1747,65 @@ async def cancel_scrap(
 ) -> JSONResponse:
     scrap = await scrap_service.cancel_scrap(db, scrap_id)
     return success_response(_scrap_response(scrap))
+
+
+@router.get("/outbound-docs", summary="出库单据合并分页（领料单 + 报废单，按状态归入页签）")
+async def list_outbound_docs(
+    status: str | None = Query(
+        default=None,
+        description="draft/pending/approved/issued/rejected/cancelled；空=全部",
+    ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """「申请单据」列表与顶部统计卡的数据源：两类单据同一分页、状态同名。
+
+    两表状态同名同义（pending 待审批 / approved 待发料·待出库 / issued 已发料·
+    已出库），按状态直接归入页签。按用户的单据读取权限决定包含哪类单据
+    （与 /requisitions、/scraps 的读取权限一致），两类都无权则 403。行内带
+    各自端点同构的 requisition / scrap 数据，前端直接复用现有弹窗。
+    """
+    perms = await _user_perms(db, user)
+    kinds = [
+        kind
+        for kind, code in (
+            (approval_docs.KIND_REQUISITION, "warehouse:hardware:requisition:read"),
+            (approval_docs.KIND_SCRAP, "warehouse:hardware:scrap:read"),
+        )
+        if code in perms
+    ]
+    if not kinds:
+        raise ForbiddenException("缺少权限: warehouse:hardware:requisition:read 或 scrap:read")
+    refs, total = await approval_docs.list_outbound_docs(
+        db, kinds=kinds, statuses=[status] if status else None, page=page, page_size=page_size
+    )
+    data: list[dict[str, Any]] = []
+    for kind, doc_id in refs:
+        if kind == approval_docs.KIND_REQUISITION:
+            req = await service.get_requisition(db, doc_id)
+            data.append({
+                "doc_kind": kind,
+                "id": str(doc_id),
+                "requisition": await _requisition_response(db, req),
+                "scrap": None,
+            })
+        else:
+            scrap = await scrap_service.get_scrap(db, doc_id)
+            data.append({
+                "doc_kind": kind,
+                "id": str(doc_id),
+                "requisition": None,
+                "scrap": _scrap_response(
+                    scrap,
+                    items=await scrap_service.list_scrap_items(db, doc_id),
+                    can_approve=scrap_service.can_user_approve_scrap(
+                        scrap, user=user, perms=perms
+                    ),
+                ),
+            })
+    return paginated_response(data, page, page_size, total)
 
 
 # ── 实物照片初筛（三期 M7，advisory 只标记）──

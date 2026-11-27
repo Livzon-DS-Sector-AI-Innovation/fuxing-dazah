@@ -58,6 +58,89 @@ async def test_event_without_event_id_never_deduped(probe_handler) -> None:
     assert len(probe_handler) == 2
 
 
+# ── 审批原生事件归一化（2026-11-26 真机：领料通过事件以此格式到达）──
+
+
+@pytest.fixture()
+def approval_probe(monkeypatch) -> list[str]:
+    """探针注册到归一化目标事件，记录收到的 instance_code。"""
+    seen: list[str] = []
+
+    async def handler(event_data: dict[str, Any]) -> None:
+        seen.append(str(event_data.get("instance_code")))
+
+    monkeypatch.setitem(
+        event_client._handlers, "approval.instance.approved", [handler]
+    )
+    monkeypatch.setitem(
+        event_client._handlers, "approval.instance.rejected", [handler]
+    )
+    event_client._event_dedup.clear()
+    yield seen
+    event_client._event_dedup.clear()
+
+
+def _native_approval_event(action: str, code: str) -> dict[str, Any]:
+    """飞书「审批事件订阅」原生格式（与 v1/v2 并存推送）。"""
+    return {
+        "type": "event_callback",
+        "event": {
+            "type": "approval",
+            "event": action,
+            "instance_code": code,
+            "definition_code": "6FECD1F4-TEST",
+        },
+    }
+
+
+async def test_native_approval_event_routed_to_v1_handler(approval_probe) -> None:
+    """type=approval + event=approve → approval.instance.approved 处理器接住。"""
+    await event_client._dispatch_event(_native_approval_event("approve", "INST-N1"))
+    assert approval_probe == ["INST-N1"]
+
+
+async def test_native_approval_other_actions_ignored(approval_probe) -> None:
+    """未映射的 action（如 cc/task 类事件不走此路径）不误触发审批结论。"""
+    await event_client._dispatch_event(_native_approval_event("forward", "INST-N2"))
+    assert approval_probe == []
+
+
+# ── 任务级审批事件归一化（2026-11-26 真机：报废通过以此格式到达）──
+
+
+def _approval_task_event(task_status: str, code: str) -> dict[str, Any]:
+    """飞书任务级审批事件（与实例级并存推送）。"""
+    return {
+        "type": "event_callback",
+        "event": {
+            "type": "approval_task",
+            "status": task_status,
+            "task_id": "7712300002916437227",
+            "instance_code": code,
+            "user_id": "xukangfu",
+        },
+    }
+
+
+async def test_approval_task_approved_routed_to_v1_handler(approval_probe) -> None:
+    """type=approval_task + status=APPROVED → 实例通过事件（审批任务办结即结论）。"""
+    await event_client._dispatch_event(_approval_task_event("APPROVED", "INST-T1"))
+    assert approval_probe == ["INST-T1"]
+
+
+async def test_approval_task_rejected_routed_to_v1_handler(approval_probe) -> None:
+    """type=approval_task + status=REJECTED → 实例驳回事件。"""
+    await event_client._dispatch_event(_approval_task_event("REJECTED", "INST-T2"))
+    assert approval_probe == ["INST-T2"]
+
+
+async def test_approval_task_pending_not_mapped(approval_probe) -> None:
+    """中途态 PENDING 不映射（无结论意义，防误触发）。"""
+    await event_client._dispatch_event(_approval_task_event("PENDING", "INST-T3"))
+    await event_client._dispatch_event(_approval_task_event("DONE", "INST-T4"))
+    assert approval_probe == []
+
+
 async def test_dedup_expires_after_ttl(probe_handler) -> None:
     await event_client._dispatch_event(_v2_event("evt-ttl"))
     # 登记时间回拨到 TTL 之外，模拟窗口过期后飞书仍在重推

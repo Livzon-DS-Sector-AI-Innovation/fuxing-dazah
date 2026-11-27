@@ -405,7 +405,7 @@ export function StockTable(props: {
       <Drawer
         title={detail ? `物料流水：${detail.code} ${detail.name}` : '物料流水'}
         open={!!detail}
-        width={560}
+        size={560}
         onClose={() => setDetail(null)}
         destroyOnHidden
       >

@@ -24,8 +24,8 @@ import {
   acceptHardwareReceiptClient,
   createHardwareReceiptClient,
   fetchHardwareMaterialsClient,
+  fetchHardwareOutboundDocsClient,
   fetchHardwareReceiptsClient,
-  fetchHardwareRequisitionsClient,
   fetchHardwareReturnsClient,
   importHardwareErpFile,
   parseHardwareReceiptExcelClient,
@@ -43,7 +43,7 @@ import {
 import { usePermission } from '@/hooks/usePermission'
 import { HardwareRequisitions } from './HardwareRequisitions'
 import { HardwareReturnPanel } from './HardwareReturnPanel'
-import { HardwareReceiptErpDocs, docStatusOf, type ErpDocGroup, type ErpDocGroupStatus, type ErpDocRow } from './HardwareReceiptErpDocs'
+import { HardwareReceiptErpDocs, docStatusOf, isRowMatched, type ErpDocGroup, type ErpDocGroupStatus, type ErpDocRow } from './HardwareReceiptErpDocs'
 import { erpMatchKey, loadErpMatchMemory, saveErpMatch } from './erpMatchMemory'
 import { formatQty } from './format'
 import { MANAGED_CLASS_TONE, RECEIPT_STATUS_TONE } from './constants'
@@ -105,14 +105,15 @@ function InoutStatCards({ onOpen }: { onOpen: (tab: TabKey, focusStatus?: string
     queryFn: () => fetchHardwareReceiptsClient({ status: 'draft', page: 1, pageSize: 1 }),
     refetchInterval: 60_000,
   })
-  const { data: pendingReq, isLoading: l2 } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'requisitions', 'stat-pending'],
-    queryFn: () => fetchHardwareRequisitionsClient({ status: 'pending', page: 1, pageSize: 1 }),
+  // 领料单 + 报废单合并统计（两类单据走同一条出库路径，状态同名同义）
+  const { data: pendingDocs, isLoading: l2 } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'outbound-docs', 'stat-pending'],
+    queryFn: () => fetchHardwareOutboundDocsClient({ status: 'pending', page: 1, pageSize: 1 }),
     refetchInterval: 60_000,
   })
-  const { data: approvedReq, isLoading: l3 } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'requisitions', 'stat-approved'],
-    queryFn: () => fetchHardwareRequisitionsClient({ status: 'approved', page: 1, pageSize: 1 }),
+  const { data: approvedDocs, isLoading: l3 } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'outbound-docs', 'stat-approved'],
+    queryFn: () => fetchHardwareOutboundDocsClient({ status: 'approved', page: 1, pageSize: 1 }),
     refetchInterval: 60_000,
   })
   const { data: draftReturns, isLoading: l4 } = useQuery({
@@ -133,7 +134,7 @@ function InoutStatCards({ onOpen }: { onOpen: (tab: TabKey, focusStatus?: string
       />
       <StatCard
         label="待审批申请"
-        value={(pendingReq?.total ?? 0).toLocaleString()}
+        value={(pendingDocs?.total ?? 0).toLocaleString()}
         sub="单"
         tone="info"
         loading={l2}
@@ -141,7 +142,7 @@ function InoutStatCards({ onOpen }: { onOpen: (tab: TabKey, focusStatus?: string
       />
       <StatCard
         label="待发料"
-        value={(approvedReq?.total ?? 0).toLocaleString()}
+        value={(approvedDocs?.total ?? 0).toLocaleString()}
         sub="单"
         tone="primary"
         loading={l3}
@@ -503,15 +504,20 @@ function ReceiptEntryModal({
       setDocs(groups)
       form.setFieldsValue({ remark: result.remark ?? undefined })
       const statuses = groups.map(docStatusOf)
-      const matchedDocs = statuses.filter((d) => d.all_matched).length
-      const unmatchedDocs = statuses.length - matchedDocs
+      const matchedRows = statuses.reduce(
+        (n, d) => n + d.rows.filter((r) => isRowMatched(r)).length, 0,
+      )
+      const totalRows = statuses.reduce((n, d) => n + d.rows.length, 0)
+      const unmatchedRows = totalRows - matchedRows
+      const buildableDocs = statuses.filter((d) => d.rows.some((r) => isRowMatched(r))).length
       setSummaryText(
-        `已解析 ${result.items.length} 行 / ${statuses.length} 张单据：已匹配 ${matchedDocs} 张可建单 · 未匹配 ${unmatchedDocs} 张待人工补配`,
+        `已解析 ${totalRows} 行 / ${statuses.length} 张单据：已匹配 ${matchedRows} 行 · 未匹配 ${unmatchedRows} 行`
+          + `（可建单 ${buildableDocs} 张，建单时自动跳过未匹配行）`,
       )
       message.success(
-        `解析完成：${statuses.length} 张单据（已匹配 ${matchedDocs} / 未匹配 ${unmatchedDocs}）`
+        `解析完成：${totalRows} 行（已匹配 ${matchedRows} / 未匹配 ${unmatchedRows}）`
           + (memoryApplied ? `，已套用 ${memoryApplied} 行历史人工匹配` : '')
-          + '——已匹配单据可直接建单',
+          + '——建单时仅提交已匹配行',
       )
       if (result.errors?.length) {
         message.warning(
@@ -565,7 +571,7 @@ function ReceiptEntryModal({
       unit: material.unit ?? undefined,
       managed_class: material.managed_class,
       match_confidence: 'manual',
-      match_score: undefined,
+      match_score: 100,
       low: false,
       memory: false,
     })
@@ -574,6 +580,12 @@ function ReceiptEntryModal({
   const buildReceiptForDoc = async (doc: ErpDocGroupStatus) => {
     const values = await form.getFieldsValue()
     const targetDept = (values.target_dept || '').trim()
+    // 2026-11-24 口径：只建匹配成功的行，未匹配行留在界面待人工处理
+    const matchedRows = doc.rows.filter((r) => isRowMatched(r))
+    if (matchedRows.length === 0) {
+      message.warning(`单据 ${doc.delivery_note_no || '（无单号）'} 没有已匹配行，无法建单`)
+      return null
+    }
     if (doc.mode === 'direct' && !targetDept) {
       message.warning(`单据 ${doc.delivery_note_no || '（无单号）'} 为直发单，请先填写「直发车间」再建单`)
       return null
@@ -586,7 +598,7 @@ function ReceiptEntryModal({
       target_dept: doc.mode === 'direct' ? targetDept : undefined,
       remark: values.remark || undefined,
       excel_result: parsed?.excel_result ?? undefined,
-      items: doc.rows.map((r) => ({
+      items: matchedRows.map((r) => ({
         material_id: r.material_id,
         name: r.name,
         spec: r.spec || undefined,
@@ -603,9 +615,19 @@ function ReceiptEntryModal({
     try {
       const receipt = await buildReceiptForDoc(doc)
       if (!receipt) return
-      setDocs((prev) => prev.filter((d) => d.key !== doc.key))
+      // 仅移除已建行，未匹配行保留继续处理
+      setDocs((prev) =>
+        prev.flatMap((d) => {
+          if (d.key !== doc.key) return [d]
+          const rest = d.rows.filter((r) => !isRowMatched(r))
+          return rest.length ? [{ ...d, rows: rest }] : []
+        }),
+      )
+      const restCount = doc.rows.filter((r) => !isRowMatched(r)).length
       message.success(
-        `单据 ${doc.delivery_note_no || '（无单号）'} 已生成草稿 ${receipt.receipt_no}，请在列表中一屏确认入账`,
+        `单据 ${doc.delivery_note_no || '（无单号）'} 已生成草稿 ${receipt.receipt_no}` +
+          (restCount ? `（另有 ${restCount} 行未匹配，已保留在界面）` : '') +
+          '，请在列表中一屏确认入账',
       )
       queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
     } catch (e) {
@@ -616,7 +638,8 @@ function ReceiptEntryModal({
   }
 
   const handleBuildAll = async () => {
-    const targets = docs.map(docStatusOf).filter((d) => d.all_matched)
+    // 2026-11-24 口径：只要有已匹配行就可建单，未匹配行留在界面
+    const targets = docs.map(docStatusOf).filter((d) => d.rows.some((r) => isRowMatched(r)))
     if (targets.length === 0) return
     setBuilding(true)
     try {
@@ -634,9 +657,16 @@ function ReceiptEntryModal({
           failed.push(doc.delivery_note_no || '（无单号）')
         }
       }
-      setDocs((prev) => prev.filter((d) => !builtKeys.includes(d.key)))
+      // 建单成功的单据：仅移除已建行，未匹配行保留继续处理
+      setDocs((prev) =>
+        prev.flatMap((d) => {
+          if (!builtKeys.includes(d.key)) return [d]
+          const rest = d.rows.filter((r) => !isRowMatched(r))
+          return rest.length ? [{ ...d, rows: rest }] : []
+        }),
+      )
       if (builtKeys.length) {
-        message.success(`已批量生成 ${builtKeys.length} 张草稿，请在列表中逐张一屏确认入账`)
+        message.success(`已批量生成 ${builtKeys.length} 张草稿（仅含已匹配行），请在列表中逐张一屏确认入账`)
         queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
       }
       if (failed.length) {

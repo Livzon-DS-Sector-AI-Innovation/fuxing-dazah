@@ -20,6 +20,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -510,12 +511,21 @@ async def _return_carrier_receipt(
 async def accept_return(
     db: AsyncSession, return_id: UUID, *, accepted_by: str
 ) -> HardwareReturn:
-    """仓管员验收：批次回加（优先回原 lot；原 lot 无效则新建 return 批次）。"""
+    """仓管员验收：批次回加（优先回原 lot；原 lot 无效则新建 return 批次）。
+
+    前置：老登记链路 draft+已签收；平台发起链路 approved（审批人同意时
+    return_flow 已补签收）。API 层已按链路分派，此处做状态终检。
+    """
     ret = await _load_return(db, return_id)
-    if ret.status != "draft":
-        raise hw.HardwareError(f"退库单状态 {ret.status} 不可验收")
-    if not ret.leader_signed:
-        raise hw.HardwareError("部门负责人未签收，不可验收")
+    if getattr(ret, "approval_channel", None):  # noqa: F821 Any 已由模块头部导入
+        # 平台发起链路：审批通过才可验收（approved，签收由审批同意补齐）
+        if ret.status != "approved":
+            raise hw.HardwareError(f"退料单状态 {ret.status} 不可验收（须审批通过）")
+    else:
+        if ret.status != "draft":
+            raise hw.HardwareError(f"退库单状态 {ret.status} 不可验收")
+        if not ret.leader_signed:
+            raise hw.HardwareError("部门负责人未签收，不可验收")
     now = _now()
     ret.accepted_by = accepted_by
     carrier: HardwareReceipt | None = None

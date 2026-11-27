@@ -71,15 +71,19 @@ export const STOCKTAKE_STATUS_TONE: Record<HardwareStocktakeStatus, Tone> = {
 
 export const RETURN_STATUS_TONE: Record<HardwareReturnStatus, Tone> = {
   draft: 'warn',
+  pending: 'warn',
+  approved: 'info',
   accepted: 'ok',
   rejected: 'danger',
+  cancelled: 'default',
 }
 
+// 与领料单状态同义同色（同一条出库路径，同一个列表）
 export const SCRAP_STATUS_TONE: Record<HardwareScrapStatus, Tone> = {
   draft: 'default',
-  pending_dept: 'warn',
-  pending_final: 'warn',
-  approved: 'ok',
+  pending: 'warn',
+  approved: 'info',
+  issued: 'ok',
   rejected: 'danger',
   cancelled: 'default',
 }

@@ -254,3 +254,31 @@ async def create_grid_view(
         app_secret=app_secret,
     )
     return str(data.get("view", {}).get("view_id", ""))
+
+
+async def create_field(
+    app_token: str,
+    table_id: str,
+    field_name: str,
+    field_type: int,
+    *,
+    property_: dict[str, Any] | None = None,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+) -> dict[str, Any]:
+    """创建表格字段，返回 {field_id, field_name, type, ...}；重名时飞书报错上抛。
+
+    field_type 取飞书 FieldType 数字（1=多行文本、2=数字、3=单选…）；
+    property_ 可带 ui_type/formatter 等（见安全模块 bitable_client 同款实现）。
+    """
+    payload: dict[str, Any] = {"field_name": field_name, "type": field_type}
+    if property_ is not None:
+        payload["property"] = property_
+    data = await _request(
+        "POST",
+        f"{BITABLE_BASE}/apps/{app_token}/tables/{table_id}/fields",
+        json_body=payload,
+        app_id=app_id,
+        app_secret=app_secret,
+    )
+    return dict(data.get("field") or {})

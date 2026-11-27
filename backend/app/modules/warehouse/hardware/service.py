@@ -35,6 +35,8 @@ from app.modules.warehouse.hardware.models import (
     HardwareReceiptItem,
     HardwareRequisition,
     HardwareRequisitionItem,
+    HardwareScrap,
+    HardwareScrapItem,
 )
 from app.modules.warehouse.hardware.schemas import (
     ReceiptCreate,
@@ -50,6 +52,8 @@ ZERO = Decimal("0")
 
 # 预扣占用状态（reserved 口径）
 RESERVING_STATUSES = ("pending", "approved")
+# 报废预扣占用状态（与领料单同口径：提交即预扣，出库实扣 / 驳回撤回释放）
+SCRAP_RESERVING_STATUSES = ("pending", "approved")
 
 _DOC_PREFIX = {
     HardwareReceipt: "WJK-RK",
@@ -122,8 +126,30 @@ def _on_hand_subquery():
     )
 
 
-def _reserved_subquery():
+def _scrap_reserved_subquery():
+    """报废预扣（2026-11-25）：待审批/待出库的明细量合计（出库动账时随 issued 退出）。"""
     return (
+        select(
+            HardwareScrapItem.material_id.label("material_id"),
+            func.sum(HardwareScrapItem.quantity).label("reserved"),
+        )
+        .join(HardwareScrap, HardwareScrap.id == HardwareScrapItem.scrap_id)
+        .where(
+            HardwareScrap.status.in_(SCRAP_RESERVING_STATUSES),
+            HardwareScrap.is_deleted.is_(False),
+            HardwareScrapItem.is_deleted.is_(False),
+        )
+        .group_by(HardwareScrapItem.material_id)
+        .subquery()
+    )
+
+
+def _reserved_subquery():
+    """领料预扣 + 报废预扣合并（reserved 口径；镜像三值同源复用）。
+
+    两域各自按物料聚合后 UNION ALL 再汇总（不能用单侧 LEFT JOIN——另一侧
+    空时会把有量的一侧也吃掉）。"""
+    req_sq = (
         select(
             HardwareRequisitionItem.material_id.label("material_id"),
             func.sum(HardwareRequisitionItem.need_qty).label("reserved"),
@@ -138,6 +164,26 @@ def _reserved_subquery():
             HardwareRequisitionItem.is_deleted.is_(False),
         )
         .group_by(HardwareRequisitionItem.material_id)
+        .subquery()
+    )
+    scrap_sq = _scrap_reserved_subquery()
+    union_sq = (
+        select(req_sq.c.material_id.label("material_id"), req_sq.c.reserved.label("reserved"))
+        .select_from(req_sq)
+        .union_all(
+            select(
+                scrap_sq.c.material_id.label("material_id"),
+                scrap_sq.c.reserved.label("reserved"),
+            ).select_from(scrap_sq)
+        )
+        .subquery()
+    )
+    return (
+        select(
+            union_sq.c.material_id.label("material_id"),
+            func.sum(union_sq.c.reserved).label("reserved"),
+        )
+        .group_by(union_sq.c.material_id)
         .subquery()
     )
 
@@ -887,23 +933,11 @@ async def available_of_material(db: AsyncSession, material_id: UUID) -> Decimal:
             ZERO,
         ))
     )
+    reserved_sq = _reserved_subquery()
     reserved = await db.scalar(
-        select(func.coalesce(
-            select(func.sum(HardwareRequisitionItem.need_qty))
-            .select_from(HardwareRequisitionItem)
-            .join(
-                HardwareRequisition,
-                HardwareRequisition.id == HardwareRequisitionItem.requisition_id,
-            )
-            .where(
-                HardwareRequisitionItem.material_id == material_id,
-                HardwareRequisition.status.in_(RESERVING_STATUSES),
-                HardwareRequisition.is_deleted.is_(False),
-                HardwareRequisitionItem.is_deleted.is_(False),
-            )
-            .scalar_subquery(),
-            ZERO,
-        ))
+        select(func.coalesce(reserved_sq.c.reserved, ZERO))
+        .select_from(reserved_sq)
+        .where(reserved_sq.c.material_id == material_id)
     )
     return (on_hand or ZERO) - (reserved or ZERO)
 
@@ -1346,6 +1380,7 @@ async def create_material_manual(
         spec=payload.spec,
         unit=payload.unit,
         category=payload.category,
+        location_no=payload.location_no,
         managed_class=payload.managed_class,
         direct_dept=payload.direct_dept,
         inspect_class=payload.inspect_class,
@@ -1375,9 +1410,9 @@ async def update_material(
     if material is None or material.is_deleted:
         raise HardwareError("物料不存在", status_code=404)
     for field in (
-        "name", "spec", "unit", "category", "code", "direct_dept", "inspect_class",
-        "safety_stock", "max_stock", "monthly_demands", "lead_time_days",
-        "secondary_holder", "no_expiry", "active", "remark",
+        "name", "spec", "unit", "category", "location_no", "code", "direct_dept",
+        "inspect_class", "safety_stock", "max_stock", "monthly_demands",
+        "lead_time_days", "secondary_holder", "no_expiry", "active", "remark",
     ):
         value = getattr(payload, field, None)
         if value is not None:

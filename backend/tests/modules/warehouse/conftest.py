@@ -182,6 +182,24 @@ async def create_movement(
 
 
 @pytest.fixture(autouse=True)
+def _pin_hardware_approval_manual(monkeypatch: pytest.MonkeyPatch) -> None:
+    """五金审批通道钉在 manual（2026-11-26 配置迁 runtime 后 patch DB 层——
+    本地 runtime_configs 已固化 feishu+真值，防测试进程真发飞书审批实例：
+    假发起人解析失败 502，或更糟真建实例打扰审批人）。
+    需要 feishu 通道的测试自行 monkeypatch 通道工厂。"""
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    original = runtime_store.get_value
+
+    def _get_value(key: str) -> Any:
+        if key == "hardware_approval_channel":
+            return "manual"
+        return original(key)
+
+    monkeypatch.setattr(runtime_store, "get_value", _get_value)
+
+
+@pytest.fixture(autouse=True)
 def _pin_bitable_env_test(monkeypatch: pytest.MonkeyPatch) -> None:
     """仓库测试钉住两项运行参数（live 库会随生产切换/直读改造翻转）：
 

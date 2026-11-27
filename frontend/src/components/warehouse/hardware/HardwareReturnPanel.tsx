@@ -18,12 +18,15 @@ import type { TableColumnsType } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import {
   acceptHardwareReturnClient,
+  approveHardwareReturnClient,
+  cancelHardwareReturnClient,
   createHardwareReturnClient,
   fetchHardwareMaterialsClient,
   fetchHardwareReturnsClient,
   fetchHardwareStockDetailClient,
   rejectHardwareReturnClient,
   signHardwareReturnClient,
+  submitHardwareReturnClient,
 } from '@/lib/api/warehouse-hardware'
 import {
   HARDWARE_RETURN_STATUS_LABEL,
@@ -41,8 +44,14 @@ interface ReturnLine {
   preferred_lot_id?: string
 }
 
+/**
+ * 退料页签（2026-11-26 双链路）：
+ * - 平台发起（从已发料领料单）：待审批 → 审批人通过（飞书/平台）→ 待验收 →
+ *   仓管「验收回加」物料回库存；驳回/撤回留证。
+ * - 老登记/飞书自建（channel 空）：待提交=待签收验收，签收→验收回加，原行为不变。
+ */
 export function HardwareReturnPanel() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const qc = useQueryClient()
   const [status, setStatus] = useState<string | undefined>(undefined)
   const [createOpen, setCreateOpen] = useState(false)
@@ -55,7 +64,11 @@ export function HardwareReturnPanel() {
     placeholderData: keepPreviousData,
   })
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['hardware-returns'] })
+  // 退料状态会影响库存（验收回加）与申请单据额度，统一按前缀失效
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['hardware-returns'] })
+    qc.invalidateQueries({ queryKey: ['warehouse', 'hardware'] })
+  }
 
   const createMut = useMutation({
     mutationFn: (v: {
@@ -82,8 +95,30 @@ export function HardwareReturnPanel() {
     onError: (e: Error) => message.error(e.message),
   })
 
+  const submitMut = useMutation({
+    mutationFn: (id: string) => submitHardwareReturnClient(id),
+    onSuccess: (r) => {
+      message.success(
+        r.approval_channel === 'feishu'
+          ? '已提交，飞书审批单已发给所选审批人'
+          : '已提交（待审批），等审批人点通过',
+      )
+      invalidate()
+    },
+    onError: (e: Error) => message.error(e.message),
+  })
+
+  const approveMut = useMutation({
+    mutationFn: (id: string) => approveHardwareReturnClient(id),
+    onSuccess: () => {
+      message.success('已审批通过（待仓管验收回加）')
+      invalidate()
+    },
+    onError: (e: Error) => message.error(e.message),
+  })
+
   const acceptMut = useMutation({
-    mutationFn: (id: string) => acceptHardwareReturnClient(id, '仓管员'),
+    mutationFn: (id: string) => acceptHardwareReturnClient(id, 'web'),
     onSuccess: (ret) => {
       const lines = (ret.lot_adjustments ?? [])
         .map((a) => `${a.material}→${a.lot_no}（${a.mode === 'preferred' ? '回原批次' : '新建批次'}）`)
@@ -97,19 +132,140 @@ export function HardwareReturnPanel() {
   const rejectMut = useMutation({
     mutationFn: (v: { id: string; reason: string }) => rejectHardwareReturnClient(v.id, v.reason),
     onSuccess: () => {
-      message.success('已拒退（留证不动账）')
+      message.success('已驳回（留证不动账）')
       invalidate()
     },
     onError: (e: Error) => message.error(e.message),
   })
 
+  const cancelMut = useMutation({
+    mutationFn: (id: string) => cancelHardwareReturnClient(id),
+    onSuccess: () => {
+      message.success('已撤回')
+      invalidate()
+    },
+    onError: (e: Error) => message.error(e.message),
+  })
+
+  const askReject = (r: HardwareReturnRecord) => {
+    let reason = ''
+    modal.warning({
+      title: r.status === 'pending' ? '驳回报废审批' : '拒退（实物不符留证）',
+      content: (
+        <Input.TextArea
+          rows={3}
+          placeholder={r.status === 'pending' ? '驳回原因' : '不合格说明（留证）'}
+          onChange={(e) => {
+            reason = e.target.value
+          }}
+        />
+      ),
+      okText: '确认驳回',
+      okButtonProps: { danger: true },
+      onOk: () =>
+        rejectMut.mutate({
+          id: r.id,
+          reason: reason.trim() || (r.status === 'pending' ? '未填写原因' : '质量不合格'),
+        }),
+    })
+  }
+
+  const actionsFor = (r: HardwareReturnRecord) => {
+    const isPlatform = !!r.approval_channel
+    if (!canManage && !(isPlatform && r.status === 'pending' && r.can_approve)) {
+      return (
+        <span className="text-xs text-gray-400">
+          {r.status === 'accepted' && r.accepted_by ? `验收 ${r.accepted_by}` : ''}
+          {r.status === 'rejected' ? r.rejected_reason : ''}
+        </span>
+      )
+    }
+    // 平台发起链路
+    if (isPlatform) {
+      return (
+        <Space size={4} wrap>
+          {r.status === 'draft' && (
+            <Button size="small" type="primary" onClick={() => submitMut.mutate(r.id)}>
+              提交审批
+            </Button>
+          )}
+          {r.status === 'pending' && r.can_approve && (
+            <>
+              <Button size="small" type="primary" onClick={() => approveMut.mutate(r.id)}>
+                通过
+              </Button>
+              <Button size="small" danger onClick={() => askReject(r)}>
+                驳回
+              </Button>
+            </>
+          )}
+          {r.status === 'approved' && canManage && (
+            <>
+              <Popconfirm
+                title="验收后批次回加库存，确认？"
+                onConfirm={() => acceptMut.mutate(r.id)}
+              >
+                <Button size="small" type="primary">
+                  验收回加
+                </Button>
+              </Popconfirm>
+              <Button size="small" danger onClick={() => askReject(r)}>
+                拒退
+              </Button>
+            </>
+          )}
+          {(r.status === 'draft' || r.status === 'pending') && canManage && (
+            <Button size="small" onClick={() => cancelMut.mutate(r.id)}>
+              撤回
+            </Button>
+          )}
+        </Space>
+      )
+    }
+    // 老登记/飞书自建链路（原行为不变）
+    if (r.status === 'draft') {
+      return (
+        <Space size={4} wrap>
+          {!r.leader_signed && (
+            <Popconfirm
+              title="以部门负责人身份签收？"
+              onConfirm={() => signMut.mutate({ id: r.id, leader: '部门负责人' })}
+            >
+              <Button size="small" type="link">
+                负责人签收
+              </Button>
+            </Popconfirm>
+          )}
+          {r.leader_signed && (
+            <>
+              <Popconfirm title="验收后批次回加库存，确认？" onConfirm={() => acceptMut.mutate(r.id)}>
+                <Button size="small" type="primary">
+                  验收回加
+                </Button>
+              </Popconfirm>
+              <Button size="small" danger type="link" onClick={() => askReject(r)}>
+                拒退
+              </Button>
+            </>
+          )}
+        </Space>
+      )
+    }
+    return (
+      <span className="text-xs text-gray-400">
+        {r.status === 'accepted' && r.accepted_by ? `验收 ${r.accepted_by}` : ''}
+        {r.status === 'rejected' ? r.rejected_reason : ''}
+      </span>
+    )
+  }
+
   const columns: TableColumnsType<HardwareReturnRecord> = [
     { title: '退库单号', dataIndex: 'return_no', width: 165, className: 'font-mono' },
-    { title: '退库部门', dataIndex: 'dept_name', width: 110 },
-    { title: '退库人', dataIndex: 'returned_by', width: 90 },
+    { title: '退库部门', dataIndex: 'dept_name', width: 100 },
+    { title: '退库人', dataIndex: 'returned_by', width: 84 },
     {
       title: '明细',
-      width: 220,
+      width: 200,
       render: (_, r) => (
         <div className="text-xs">
           {r.items.map((i, idx) => (
@@ -122,9 +278,15 @@ export function HardwareReturnPanel() {
       ),
     },
     {
-      title: '负责人签',
+      title: '审批人',
+      dataIndex: 'approver_name',
+      width: 84,
+      render: (v: string | null, r) => v || (r.approval_channel ? '—' : '（登记）'),
+    },
+    {
+      title: '签收',
       dataIndex: 'leader_signed',
-      width: 90,
+      width: 84,
       render: (v: boolean, r) =>
         v ? (
           <StatusTag tone="ok" label={r.leader_signed_by || '已签'} />
@@ -135,63 +297,22 @@ export function HardwareReturnPanel() {
     {
       title: '状态',
       dataIndex: 'status',
-      width: 90,
+      width: 84,
       render: (v: HardwareReturnStatus) => (
         <StatusTag tone={RETURN_STATUS_TONE[v] ?? 'default'} label={HARDWARE_RETURN_STATUS_LABEL[v]} />
       ),
     },
     {
       title: '操作',
-      width: 260,
-      render: (_, r) =>
-        canManage && r.status === 'draft' ? (
-          <Space size={4} wrap>
-            {!r.leader_signed && (
-              <Popconfirm
-                title="以部门负责人身份签收？"
-                onConfirm={() => signMut.mutate({ id: r.id, leader: '部门负责人' })}
-              >
-                <Button size="small" type="link">
-                  负责人签收
-                </Button>
-              </Popconfirm>
-            )}
-            {r.leader_signed && (
-              <>
-                <Popconfirm title="验收后批次回加库存，确认？" onConfirm={() => acceptMut.mutate(r.id)}>
-                  <Button size="small" type="primary">
-                    验收回加
-                  </Button>
-                </Popconfirm>
-                <Popconfirm
-                  title="拒退原因"
-                  description={
-                    <Input id={`reject-reason-${r.id}`} placeholder="不合格说明（留证）" />
-                  }
-                  onConfirm={() => {
-                    const el = document.getElementById(`reject-reason-${r.id}`) as HTMLInputElement
-                    rejectMut.mutate({ id: r.id, reason: el?.value || '质量不合格' })
-                  }}
-                >
-                  <Button size="small" danger type="link">
-                    拒退
-                  </Button>
-                </Popconfirm>
-              </>
-            )}
-          </Space>
-        ) : (
-          <span className="text-xs text-gray-400">
-            {r.status === 'accepted' && r.accepted_by ? `验收 ${r.accepted_by}` : ''}
-            {r.status === 'rejected' ? r.rejected_reason : ''}
-          </span>
-        ),
+      width: 250,
+      render: (_, r) => actionsFor(r),
     },
   ]
 
   return (
     <SectionCard
       title="退库单"
+      description="从「出库 → 已发料」发起退料走审批（审批人同意后仓管验收回加）；「登记退库」为无审批直录链路。"
       action={
         canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
@@ -218,9 +339,9 @@ export function HardwareReturnPanel() {
         loading={list.isLoading}
         dataSource={list.data?.items ?? []}
         columns={columns}
-        locale={{ emptyText: <EmptyGuide compact title="暂无退库单" description="退库需部门负责人签收后由仓管员验收回加" /> }}
+        locale={{ emptyText: <EmptyGuide compact title="暂无退库单" description="在「出库 → 已发料」的领料单上点「退料」发起审批退料" /> }}
         pagination={{ total: list.data?.total ?? 0, pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
-        scroll={{ x: 950 }}
+        scroll={{ x: 1050 }}
       />
 
       <ReturnCreateModal

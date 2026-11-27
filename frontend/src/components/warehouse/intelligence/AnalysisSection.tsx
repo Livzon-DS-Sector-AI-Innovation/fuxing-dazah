@@ -223,7 +223,7 @@ export function AnalysisSection() {
 
       <Drawer
         title={detail ? `分析定档 ${detail.report_date}` : ''}
-        width={720} open={!!detail} onClose={() => setDetail(null)}
+        size={720} open={!!detail} onClose={() => setDetail(null)}
       >
         {detail && (
           <>

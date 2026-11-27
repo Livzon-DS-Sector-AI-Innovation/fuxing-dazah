@@ -21,28 +21,39 @@ import {
   approveHardwareRequisitionClient,
   cancelHardwareRequisitionClient,
   createHardwareRequisitionClient,
+  createHardwareScrapClient,
   exportRequisitionsUrl,
   fetchHardwareMovementsClient,
-  fetchHardwareRequisitionsClient,
   fetchHardwareStockClient,
   fetchHardwareStockDetailClient,
   fetchHardwareStockSummaryClient,
+  fetchHardwareOutboundDocsClient,
   fetchRequisitionApproversClient,
+  fetchScrapApproversClient,
   issueHardwareRequisitionClient,
   rejectHardwareRequisitionClient,
   submitHardwareRequisitionClient,
+  submitHardwareScrapClient,
 } from '@/lib/api/warehouse-hardware'
 import {
   HARDWARE_REQ_STATUS_LABEL,
   HARDWARE_REQ_TYPE_LABEL,
+  HARDWARE_SCRAP_REASON_LABEL,
+  HARDWARE_SCRAP_STATUS_LABEL,
+  type HardwareOutboundDocRow,
   type HardwareRequisitionRecord,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
 import { getCurrentUser } from '@/actions/auth'
 import type { User } from '@/types/user'
 import { QueryFilter, SectionCard, StatusTag, EmptyGuide } from '@/components/warehouse'
-import { REQ_STATUS_TONE, REQ_TYPE_TONE } from './constants'
+import { REQ_STATUS_TONE, REQ_TYPE_TONE, SCRAP_STATUS_TONE } from './constants'
 import { formatQty } from './format'
+import { useScrapActions } from './useScrapActions'
+import { ScrapDetailDrawer } from './ScrapDetailDrawer'
+import { ScrapExecuteModal } from './ScrapExecuteModal'
+import { ReturnCreateModal } from './ReturnCreateModal'
+import { ScrapRowActions } from './ScrapRowActions'
 
 type TabKey = 'browse' | 'mine' | 'dept'
 
@@ -69,12 +80,21 @@ export function HardwareRequisitions({ focusStatus }: { focusStatus?: string }) 
 function BrowsePanel() {
   const { hasPermission } = usePermission()
   const canCreate = hasPermission('warehouse:hardware:requisition:create')
+  const queryClient = useQueryClient()
 
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [lowOnly, setLowOnly] = useState(false)
   const [applying, setApplying] = useState<{
+    id: string
+    name: string
+    category: string
+    spec: string
+    unit: string
+    available: number
+  } | null>(null)
+  const [scrapping, setScrapping] = useState<{
     id: string
     name: string
     category: string
@@ -126,30 +146,46 @@ function BrowsePanel() {
     { title: '预扣', dataIndex: 'reserved', width: 80, align: 'right', className: 'tabular-nums', render: (v: unknown) => formatQty(v) },
     {
       title: '操作',
-      width: 110,
-      render: (_: unknown, r) =>
-        canCreate && r.material.managed_class === 'stocked' ? (
-          <Button
-            size="small"
-            disabled={Number(r.available) <= 0}
-            onClick={() =>
-              setApplying({
-                id: r.material.id,
-                name: r.name ?? '',
-                category: r.category ?? r.material.category ?? '',
-                spec: r.spec ?? '',
-                unit: r.unit ?? '',
-                available: Number(r.available),
-              })
-            }
-          >
-            申领
-          </Button>
-        ) : (
-          <span className="text-[12px] text-gray-400">
-            {r.material.managed_class === 'direct' ? '到货直领' : '-'}
-          </span>
-        ),
+      width: 170,
+      render: (_: unknown, r) => {
+        if (r.material.managed_class !== 'stocked') {
+          return (
+            <span className="text-[12px] text-gray-400">
+              {r.material.managed_class === 'direct' ? '到货直领' : '-'}
+            </span>
+          )
+        }
+        const unavailable = Number(r.available) <= 0
+        const target = {
+          id: r.material.id,
+          name: r.name ?? '',
+          category: r.category ?? r.material.category ?? '',
+          spec: r.spec ?? '',
+          unit: r.unit ?? '',
+          available: Number(r.available),
+        }
+        return (
+          <Space size={4}>
+            {canCreate ? (
+              <Button
+                size="small"
+                disabled={unavailable}
+                onClick={() => setApplying(target)}
+              >
+                申领
+              </Button>
+            ) : null}
+            <Button
+              size="small"
+              danger
+              disabled={unavailable}
+              onClick={() => setScrapping(target)}
+            >
+              报废出库
+            </Button>
+          </Space>
+        )
+      },
     },
   ]
 
@@ -203,7 +239,203 @@ function BrowsePanel() {
         scroll={{ x: 850 }}
       />
       <ApplyModal apply={applying} onClose={() => setApplying(null)} />
+      <ScrapOutboundModal
+        target={scrapping}
+        onClose={() => setScrapping(null)}
+        // 预扣/在手、申请单据合并列表与统计卡一起刷新（同申领提交后）
+        onDone={() => queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware'] })}
+      />
     </SectionCard>
+  )
+}
+
+/** 报废出库：从库存页发起，确定即提交（同申领）——预扣生效，进「申请单据 → 待审批」。 */
+function ScrapOutboundModal({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: {
+    id: string
+    name: string
+    category: string
+    spec: string
+    unit: string
+    available: number
+  } | null
+  onClose: () => void
+  onDone: () => void
+}) {
+  const { message, modal } = App.useApp()
+  const [form] = Form.useForm()
+  const [saving, setSaving] = useState(false)
+  const [me, setMe] = useState<User | null>(null)
+  const [approverId, setApproverId] = useState<string | undefined>(undefined)
+  const [approverKeyword, setApproverKeyword] = useState('')
+
+  useEffect(() => {
+    if (!target) return
+    getCurrentUser().then(setMe).catch(() => setMe(null))
+  }, [target])
+
+  const { data: approvers = [], isFetching: approversLoading } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'scrap-approvers', approverKeyword],
+    queryFn: () =>
+      fetchScrapApproversClient({
+        keyword: approverKeyword || undefined,
+        limit: 50,
+      }),
+    enabled: !!target,
+    staleTime: 60_000,
+  })
+  const approverOptions = approvers.map((a) => ({
+    value: a.user_id,
+    label: `${a.supervisor ? '【主管及以上】' : ''}${a.name}（${a.department || '未匹配部门'} · ${a.position || '—'}）`,
+  }))
+  const selectedApprover = approvers.find((a) => a.user_id === approverId) ?? null
+
+  const submitConfirmed = async (values: { quantity: number; reason_note?: string }) => {
+    if (!target) return
+    setSaving(true)
+    let createdId: string | null = null
+    try {
+      const qty = Number(values.quantity)
+      if (qty > target.available) {
+        message.error(`报废数量不能超过可用量 ${formatQty(target.available)} ${target.unit}`)
+        return
+      }
+      const created = await createHardwareScrapClient({
+        dept_name: me?.department || '未匹配部门',
+        requested_by: me?.name || '未知用户',
+        approver_user_id: selectedApprover?.user_id,
+        approver_name: selectedApprover?.name,
+        // 报废条件固定为破损（页面仅提供自由文本说明，2026-11-24 口径）
+        scrap_reason: 'damaged',
+        reason_note: values.reason_note || undefined,
+        items: [{ material_id: target.id, quantity: qty }],
+      })
+      createdId = created.id
+      const submitted = await submitHardwareScrapClient(created.id)
+      message.success(
+        submitted.approval_channel === 'feishu'
+          ? '已提交（预扣生效），飞书审批单已发给所选审批人；审批通过后由仓管出库'
+          : '已提交（预扣生效），等审批人在「申请单据 → 待审批」点通过',
+      )
+      form.resetFields()
+      setApproverId(undefined)
+      onDone()
+      onClose()
+    } catch (e) {
+      const tip = e instanceof Error ? e.message : '提交失败'
+      message.error(
+        createdId ? `${tip}（单据已留在「申请单据 → 全部」的草稿里，可重新提交）` : tip,
+      )
+      if (createdId) {
+        form.resetFields()
+        setApproverId(undefined)
+        onDone()
+        onClose()
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const onOk = async () => {
+    if (!target) return
+    const values = await form.validateFields()
+    if (!selectedApprover) {
+      message.error('请选择审批人（主管及以上）后再提交')
+      return
+    }
+    modal.confirm({
+      title: '确认发起报废',
+      width: 440,
+      okText: '确认发起',
+      okButtonProps: { danger: true },
+      cancelText: '再改改',
+      content: (
+        <div className="space-y-1 text-[13px]">
+          <div>物资：{target.name}{target.spec ? ` · ${target.spec}` : ''}</div>
+          <div>报废数量：{formatQty(Number(values.quantity))} {target.unit}</div>
+          <div>审批人：{selectedApprover?.name ?? '-'}</div>
+          <div className="pt-1 text-[12px] text-gray-500">
+            提交后即预扣，报废单进入「申请单据 → 待审批」；审批人通过（飞书或平台）后进待发料，仓管点「出库」才真正扣减库存。
+          </div>
+        </div>
+      ),
+      onOk: () => submitConfirmed(values),
+    })
+  }
+
+  return (
+    <Modal
+      title={`报废出库 · ${target?.name ?? ''}`}
+      open={!!target}
+      onCancel={onClose}
+      onOk={onOk}
+      confirmLoading={saving}
+      okText="发起报废"
+      okButtonProps={{ danger: true }}
+      width={460}
+      destroyOnHidden
+    >
+      {target && (
+        <div className="mb-3 space-y-1 rounded bg-gray-50 px-3 py-2 text-[13px]">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <div>类别：{target.category || '-'}</div>
+            <div>物资名称：{target.name || '-'}</div>
+            <div>规格型号：{target.spec || '-'}</div>
+            <div>计量单位：{target.unit || '-'}</div>
+            <div className="font-medium">可用量：{formatQty(target.available)}</div>
+          </div>
+          <div className="pt-1 text-[12px] text-gray-500">
+            发起部门 / 发起人：{me ? `${me.department || '未匹配部门'} / ${me.name}` : '加载中…'}
+          </div>
+        </div>
+      )}
+      <div className="mb-3 rounded bg-yellow-50 px-3 py-2 text-[13px] text-yellow-700">
+        报废出库会扣减库存，流程同申领：提交即预扣 → 审批人通过 → 仓管点「出库」才真正扣库存。
+      </div>
+      <Form form={form} layout="vertical" initialValues={{ quantity: 1 }}>
+        <Form.Item
+          name="quantity"
+          label="报废数量"
+          rules={[{ required: true, message: '请输入报废数量' }]}
+        >
+          <InputNumber
+            min={1}
+            precision={0}
+            max={target?.available}
+            style={{ width: '100%' }}
+            addonAfter={target?.unit}
+          />
+        </Form.Item>
+        <Form.Item label="审批人（主管及以上）" required>
+          <Select
+            showSearch
+            filterOption={false}
+            onSearch={setApproverKeyword}
+            onChange={(v) => setApproverId(v)}
+            value={approverId}
+            placeholder="搜索姓名 / 部门 / 职位选择审批人"
+            options={approverOptions}
+            notFoundContent={
+              approversLoading ? '搜索中…' : '无匹配审批人（主管及以上）'
+            }
+            allowClear
+          />
+        </Form.Item>
+        <Form.Item name="reason_note" label="报废原因">
+          <Input.TextArea
+            rows={3}
+            placeholder="如：长期存放已锈蚀 / 密封失效 / 技术鉴定不合格"
+            maxLength={500}
+            showCount
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
   )
 }
 
@@ -292,8 +524,8 @@ function ApplyModal({
       form.resetFields()
       setApproverId(undefined)
       onClose()
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+      // 预扣/在手、申请单据合并列表与统计卡一起刷新
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware'] })
     } catch (e) {
       const tip = e instanceof Error ? e.message : '提交失败'
       message.error(createdId ? `${tip}（单据已留在「申请单据」草稿，可重新提交）` : tip)
@@ -301,8 +533,7 @@ function ApplyModal({
         form.resetFields()
         setApproverId(undefined)
         onClose()
-        queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
-        queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+        queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware'] })
       }
     } finally {
       setSaving(false)
@@ -433,25 +664,36 @@ function MyRequisitionsPanel({ focusStatus }: { focusStatus?: string }) {
   const { hasPermission } = usePermission()
   const canApprove = hasPermission('warehouse:hardware:requisition:approve')
   const canIssue = hasPermission('warehouse:hardware:requisition:issue')
+  const canReturn = hasPermission('warehouse:hardware:return:manage')
+  const scrapActions = useScrapActions()
 
   const [statusFilter, setStatusFilter] = useState<string | undefined>(focusStatus ?? 'pending')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [detail, setDetail] = useState<HardwareRequisitionRecord | null>(null)
   const [issuing, setIssuing] = useState<HardwareRequisitionRecord | null>(null)
+  const [returning, setReturning] = useState<HardwareRequisitionRecord | null>(null)
+  const [scrapDetailId, setScrapDetailId] = useState<string | null>(null)
+  const [executingId, setExecutingId] = useState<string | null>(null)
 
+  // 领料单 + 报废单合并列表：两表状态同名同义，按状态直接归入页签
   const { data: res, isLoading } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'requisitions', { statusFilter, page, pageSize }],
-    queryFn: () => fetchHardwareRequisitionsClient({ status: statusFilter, page, pageSize }),
+    queryKey: ['warehouse', 'hardware', 'outbound-docs', { statusFilter, page, pageSize }],
+    queryFn: () =>
+      fetchHardwareOutboundDocsClient({ status: statusFilter, page, pageSize }),
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
   })
+
+  // 单据状态变化会同时影响预扣/在手、合并列表与顶部统计卡，统一按前缀失效
+  const invalidateAll = () =>
+    queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware'] })
 
   const approve = useMutation({
     mutationFn: (id: string) => approveHardwareRequisitionClient(id, '部门主管（web 代录）'),
     onSuccess: () => {
       message.success('已审批通过（预扣保持，待仓管员发料）')
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+      invalidateAll()
     },
     onError: (e) => message.error(e instanceof Error ? e.message : '审批失败'),
   })
@@ -461,7 +703,7 @@ function MyRequisitionsPanel({ focusStatus }: { focusStatus?: string }) {
       rejectHardwareRequisitionClient(id, '部门主管（web 代录）', '主管驳回'),
     onSuccess: () => {
       message.success('已驳回（预扣已释放）')
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+      invalidateAll()
     },
     onError: (e) => message.error(e instanceof Error ? e.message : '驳回失败'),
   })
@@ -474,106 +716,161 @@ function MyRequisitionsPanel({ focusStatus }: { focusStatus?: string }) {
           ? '已重新发起飞书审批（预扣生效）'
           : '已提交（预扣生效，等待主管在系统内审批）',
       )
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
+      invalidateAll()
     },
     onError: (e) => message.error(e instanceof Error ? e.message : '提交失败'),
   })
 
-  const columns: TableColumnsType<HardwareRequisitionRecord> = [
-    { title: '单号', dataIndex: 'req_no', width: 160, className: 'font-mono' },
+  const requisitionActionsFor = (r: HardwareRequisitionRecord) => (
+    <Space wrap size={4}>
+      <Button size="small" onClick={() => setDetail(r)}>
+        明细
+      </Button>
+      {canIssue && (r.status === 'approved' || (r.req_type === 'urgent' && r.status === 'pending')) && (
+        <Button size="small" type="primary" onClick={() => setIssuing(r)}>
+          发料
+        </Button>
+      )}
+      {r.status === 'issued' && canReturn && (
+        <Button size="small" onClick={() => setReturning(r)}>
+          退料
+        </Button>
+      )}
+      {r.status === 'pending' && canApprove && (
+        <>
+          <Button size="small" type="primary" loading={approve.isPending} onClick={() => approve.mutate(r.id)}>
+            通过
+          </Button>
+          <Button size="small" danger loading={reject.isPending} onClick={() => reject.mutate(r.id)}>
+            驳回
+          </Button>
+        </>
+      )}
+      {r.status === 'draft' && (
+        <Button
+          size="small"
+          type="primary"
+          loading={resubmit.isPending}
+          onClick={() => resubmit.mutate(r.id)}
+        >
+          提交审批
+        </Button>
+      )}
+      {(r.status === 'draft' || r.status === 'pending') && (
+        <Button
+          size="small"
+          onClick={async () => {
+            await cancelHardwareRequisitionClient(r.id)
+            message.success('已取消')
+            invalidateAll()
+          }}
+        >
+          取消
+        </Button>
+      )}
+    </Space>
+  )
+
+  const columns: TableColumnsType<HardwareOutboundDocRow> = [
+    {
+      title: '单号',
+      width: 160,
+      className: 'font-mono',
+      render: (_: unknown, r) => r.requisition?.req_no ?? r.scrap?.scrap_no ?? '',
+    },
     {
       title: '类型',
-      dataIndex: 'req_type',
       width: 70,
-      render: (v: string) => (
-        <StatusTag
-          tone={REQ_TYPE_TONE[v as keyof typeof REQ_TYPE_TONE] ?? 'default'}
-          label={HARDWARE_REQ_TYPE_LABEL[v as keyof typeof HARDWARE_REQ_TYPE_LABEL] ?? v}
-        />
-      ),
+      render: (_: unknown, r) =>
+        r.requisition ? (
+          <StatusTag
+            tone={REQ_TYPE_TONE[r.requisition.req_type] ?? 'default'}
+            label={HARDWARE_REQ_TYPE_LABEL[r.requisition.req_type] ?? r.requisition.req_type}
+          />
+        ) : (
+          <StatusTag tone="danger" label="报废" />
+        ),
     },
-    { title: '部门', dataIndex: 'dept_name', width: 90 },
-    { title: '申请人', dataIndex: 'applicant', width: 85 },
-    { title: '用途', dataIndex: 'purpose', width: 100, ellipsis: true, render: (v) => v || '-' },
+    {
+      title: '部门',
+      width: 90,
+      render: (_: unknown, r) => r.requisition?.dept_name ?? r.scrap?.dept_name ?? '',
+    },
+    {
+      title: '申请人',
+      width: 85,
+      render: (_: unknown, r) => r.requisition?.applicant ?? r.scrap?.requested_by ?? '',
+    },
+    {
+      title: '用途',
+      width: 110,
+      ellipsis: true,
+      render: (_: unknown, r) => {
+        if (r.requisition) return r.requisition.purpose || '-'
+        if (r.scrap) return `报废·${HARDWARE_SCRAP_REASON_LABEL[r.scrap.scrap_reason] ?? r.scrap.scrap_reason}`
+        return '-'
+      },
+    },
     {
       title: '状态',
-      dataIndex: 'status',
       width: 95,
-      render: (v: string) => (
-        <StatusTag
-          tone={REQ_STATUS_TONE[v as keyof typeof REQ_STATUS_TONE] ?? 'default'}
-          label={HARDWARE_REQ_STATUS_LABEL[v as keyof typeof HARDWARE_REQ_STATUS_LABEL] ?? v}
-        />
-      ),
+      render: (_: unknown, r) => {
+        if (r.requisition) {
+          return (
+            <StatusTag
+              tone={REQ_STATUS_TONE[r.requisition.status] ?? 'default'}
+              label={HARDWARE_REQ_STATUS_LABEL[r.requisition.status] ?? r.requisition.status}
+            />
+          )
+        }
+        if (r.scrap) {
+          return (
+            <StatusTag
+              tone={SCRAP_STATUS_TONE[r.scrap.status] ?? 'default'}
+              label={HARDWARE_SCRAP_STATUS_LABEL[r.scrap.status] ?? r.scrap.status}
+            />
+          )
+        }
+        return null
+      },
     },
     {
       title: '审批人',
-      dataIndex: 'approved_by',
       width: 95,
-      render: (_: unknown, r: HardwareRequisitionRecord) =>
-        r.approved_by || r.approver_name || '-',
+      render: (_: unknown, r) =>
+        r.requisition
+          ? r.requisition.approved_by || r.requisition.approver_name || '-'
+          : r.scrap
+            ? r.scrap.approved_by || r.scrap.approver_name || '-'
+            : '-',
     },
     {
       title: '申请时间',
-      dataIndex: 'created_at',
       width: 110,
-      render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
+      render: (_: unknown, r) =>
+        dayjs(r.requisition?.created_at ?? r.scrap?.created_at).format('MM-DD HH:mm'),
     },
     {
       title: '操作',
-      width: 220,
+      width: 240,
       fixed: 'right',
-      render: (_: unknown, r) => (
-        <Space wrap size={4}>
-          <Button size="small" onClick={() => setDetail(r)}>
-            明细
-          </Button>
-          {canIssue && (r.status === 'approved' || (r.req_type === 'urgent' && r.status === 'pending')) && (
-            <Button size="small" type="primary" onClick={() => setIssuing(r)}>
-              发料
-            </Button>
-          )}
-          {r.status === 'pending' && canApprove && (
-            <>
-              <Button size="small" type="primary" loading={approve.isPending} onClick={() => approve.mutate(r.id)}>
-                通过
-              </Button>
-              <Button size="small" danger loading={reject.isPending} onClick={() => reject.mutate(r.id)}>
-                驳回
-              </Button>
-            </>
-          )}
-          {r.status === 'draft' && (
-            <Button
-              size="small"
-              type="primary"
-              loading={resubmit.isPending}
-              onClick={() => resubmit.mutate(r.id)}
-            >
-              提交审批
-            </Button>
-          )}
-          {(r.status === 'draft' || r.status === 'pending') && (
-            <Button
-              size="small"
-              onClick={async () => {
-                await cancelHardwareRequisitionClient(r.id)
-                message.success('已取消')
-                queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
-              }}
-            >
-              取消
-            </Button>
-          )}
-        </Space>
-      ),
+      render: (_: unknown, r) =>
+        r.requisition ? (
+          requisitionActionsFor(r.requisition)
+        ) : r.scrap ? (
+          <ScrapRowActions
+            scrap={r.scrap}
+            actions={scrapActions}
+            onDetail={setScrapDetailId}
+            onExecute={setExecutingId}
+          />
+        ) : null,
     },
   ]
 
   return (
     <SectionCard
-      title="领用申请单"
+      title="申请单据"
       action={
         <a href={exportRequisitionsUrl({ status: statusFilter })}>
           <Button size="small" icon={<DownloadOutlined />}>导出 Excel</Button>
@@ -598,13 +895,13 @@ function MyRequisitionsPanel({ focusStatus }: { focusStatus?: string }) {
           />
         }
       />
-      <Table<HardwareRequisitionRecord>
+      <Table<HardwareOutboundDocRow>
         size="middle"
-        rowKey="id"
+        rowKey={(r) => `${r.doc_kind}:${r.id}`}
         loading={isLoading}
         columns={columns}
         dataSource={res?.items ?? []}
-        locale={{ emptyText: <EmptyGuide compact title="暂无申请单据" description="在「申领库存」中选择物资发起申请" /> }}
+        locale={{ emptyText: <EmptyGuide compact title="暂无申请单据" description="在「申领库存」中选择物资发起申领或报废出库" /> }}
         pagination={{
           current: page,
           pageSize,
@@ -615,10 +912,25 @@ function MyRequisitionsPanel({ focusStatus }: { focusStatus?: string }) {
             setPageSize(ps)
           },
         }}
-        scroll={{ x: 1090 }}
+        scroll={{ x: 1150 }}
       />
       <RequisitionDetailModal record={detail} onClose={() => setDetail(null)} />
       <IssueModal requisition={issuing} onClose={() => setIssuing(null)} />
+      <ReturnCreateModal
+        requisition={returning}
+        onClose={() => setReturning(null)}
+        onDone={invalidateAll}
+      />
+      <ScrapDetailDrawer scrapId={scrapDetailId} onClose={() => setScrapDetailId(null)} />
+      <ScrapExecuteModal
+        scrapId={executingId}
+        loading={scrapActions.executing}
+        onConfirm={(id) => {
+          scrapActions.execute(id)
+          setExecutingId(null)
+        }}
+        onClose={() => setExecutingId(null)}
+      />
     </SectionCard>
   )
 }
@@ -741,8 +1053,7 @@ function IssueModal({
       })
       message.success('发料完成，库存已扣减并记录流水')
       onClose()
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware'] })
     } catch (e) {
       message.error(e instanceof Error ? e.message : '发料失败')
     } finally {

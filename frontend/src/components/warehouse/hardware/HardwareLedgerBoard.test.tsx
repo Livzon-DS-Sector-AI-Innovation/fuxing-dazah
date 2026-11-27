@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -9,6 +9,9 @@ const stocktakesMock = vi.hoisted(() => vi.fn())
 const movementsMock = vi.hoisted(() => vi.fn())
 const erpReceiptsMock = vi.hoisted(() => vi.fn())
 const diffsMock = vi.hoisted(() => vi.fn())
+const scrapsMock = vi.hoisted(() => vi.fn())
+const approveScrapMock = vi.hoisted(() => vi.fn())
+const hasPermissionMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/api/warehouse-hardware', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -16,6 +19,11 @@ vi.mock('@/lib/api/warehouse-hardware', async (importOriginal) => ({
   fetchHardwareMovementsClient: movementsMock,
   fetchHardwareErpReceiptsClient: erpReceiptsMock,
   fetchHardwareReconcileDiffsClient: diffsMock,
+  fetchHardwareScrapsClient: scrapsMock,
+  approveHardwareScrapClient: approveScrapMock,
+}))
+vi.mock('@/hooks/usePermission', () => ({
+  usePermission: () => ({ hasPermission: hasPermissionMock }),
 }))
 
 beforeEach(() => {
@@ -81,6 +89,40 @@ beforeEach(() => {
     total: 1,
   })
   diffsMock.mockResolvedValue({ erp_only: [], ocr_only: [] })
+  hasPermissionMock.mockReturnValue(true)
+  approveScrapMock.mockResolvedValue({})
+  scrapsMock.mockResolvedValue({
+    items: [
+      {
+        id: 's1',
+        scrap_no: 'WJK-BF-261125-001',
+        dept_name: 'AI创新部',
+        requested_by: '叶海斌',
+        scrap_reason: 'damaged',
+        reason_note: null,
+        attachments: null,
+        approver_user_id: 'xukangfu',
+        approver_name: '许康福',
+        approval_channel: 'manual',
+        approval_instance_code: null,
+        approval_status: 'pending',
+        approved_by: null,
+        approved_at: null,
+        executed_by: null,
+        rejected_by: null,
+        rejected_reason: null,
+        status: 'pending',
+        scrapped_at: null,
+        lot_allocations: null,
+        remark: null,
+        created_at: '2026-11-25T10:20:00',
+        can_approve: true,
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 50,
+  })
 })
 
 afterEach(() => {
@@ -125,5 +167,19 @@ describe('五金盘点台账五段', () => {
 
     expect(await screen.findByText('差异清单 · ERP 有 / 系统无')).toBeInTheDocument()
     expect(screen.queryByText('PD-202611-001')).not.toBeInTheDocument()
+  })
+
+  it('点击「报废」展示报废单：待审批单有审批资格时可在台账页直接点通过', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<HardwareLedgerBoard />)
+
+    await user.click(screen.getByText('报废'))
+    const row = (await screen.findByText('WJK-BF-261125-001')).closest('tr') as HTMLElement
+    expect(screen.getByText('待审批')).toBeInTheDocument()
+
+    // antd 会在两个汉字的按钮中间插空格（如「通 过」）
+    await user.click(within(row).getByText(/^通\s*过$/))
+    expect(approveScrapMock).toHaveBeenCalledTimes(1)
+    expect(approveScrapMock.mock.calls[0][0]).toBe('s1')
   })
 })

@@ -4,12 +4,13 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, App, Button, Drawer, Input, Segmented, Select, Table, Upload } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { SearchOutlined, UploadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   fetchHardwareStockClient,
   fetchHardwareStockDetailClient,
   fetchHardwareStockSummaryClient,
+  exportHardwareStockUrl,
   importHardwareMaterials,
 } from '@/lib/api/warehouse-hardware'
 import {
@@ -85,6 +86,12 @@ export function HardwareStockTable() {
     },
     { title: '规格型号', dataIndex: 'spec', width: 140, ellipsis: true, render: (v) => v || '-' },
     { title: '单位', dataIndex: 'unit', width: 56 },
+    {
+      title: '位号',
+      dataIndex: ['material', 'location_no'],
+      width: 70,
+      render: (v: string | null) => v || '—',
+    },
     {
       title: '在手',
       dataIndex: 'on_hand',
@@ -217,34 +224,39 @@ export function HardwareStockTable() {
                   { value: 'low', label: '仅看预警' },
                 ]}
               />
+              <Button icon={<DownloadOutlined />} href={exportHardwareStockUrl()} target="_blank">
+                导出库存
+              </Button>
             </>
           }
           advanced={
-            canManage ? (
-              <Upload
-                accept=".xlsx"
-                showUploadList={false}
-                beforeUpload={async (file) => {
-                  setImporting(true)
-                  try {
-                    const stats = await importHardwareMaterials(file)
-                    message.success(
-                      `导入完成：新建 ${stats.created} / 更新 ${stats.updated} / 跳过 ${stats.skipped}`,
-                    )
-                    refetch()
-                  } catch (e) {
-                    message.error(e instanceof Error ? e.message : '导入失败')
-                  } finally {
-                    setImporting(false)
-                  }
-                  return false
-                }}
-              >
-                <Button icon={<UploadOutlined />} loading={importing}>
-                  导入物资清单
-                </Button>
-              </Upload>
-            ) : undefined
+            <>
+              {canManage ? (
+                <Upload
+                  accept=".xlsx"
+                  showUploadList={false}
+                  beforeUpload={async (file) => {
+                    setImporting(true)
+                    try {
+                      const stats = await importHardwareMaterials(file)
+                      message.success(
+                        `导入完成：新建 ${stats.created} / 更新 ${stats.updated} / 跳过 ${stats.skipped}`,
+                      )
+                      refetch()
+                    } catch (e) {
+                      message.error(e instanceof Error ? e.message : '导入失败')
+                    } finally {
+                      setImporting(false)
+                    }
+                    return false
+                  }}
+                >
+                  <Button icon={<UploadOutlined />} loading={importing}>
+                    导入物资清单
+                  </Button>
+                </Upload>
+              ) : null}
+            </>
           }
         />
 
@@ -299,7 +311,7 @@ function HardwareStockDrawer({
     <Drawer
       open={!!materialId}
       onClose={onClose}
-      width={640}
+      size={640}
       title={m ? `${m.name}${m.spec ? ` · ${m.spec}` : ''}` : '物料库存'}
       loading={isLoading}
     >
@@ -314,6 +326,7 @@ function HardwareStockDrawer({
           <div className="text-[13px] leading-6 text-[var(--color-charcoal)]">
             <div>编码：{m.code || '待回填'}</div>
             <div>类别：{m.category}（{HARDWARE_MANAGED_CLASS_LABEL[m.managed_class]}）</div>
+            <div>位号：{m.location_no || '—'}</div>
             <div>安全库存：{formatQty(m.safety_stock)} {m.unit}{data.stock.is_low && <span className="ml-2"><StatusTag tone="danger" label={`缺口 ${formatQty(data.stock.low_gap)}`} /></span>}</div>
             <div>月需求：{demands}</div>
             <div>采购周期：{m.lead_time_days != null ? `${m.lead_time_days} 天` : '-'}</div>

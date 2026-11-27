@@ -385,7 +385,7 @@ function StocktakeDetailDrawer(props: {
     <Drawer
       title={record ? `盘点单 ${record.stocktake_no}` : '盘点单'}
       open
-      width={860}
+      size={860}
       onClose={props.onClose}
       destroyOnHidden
       extra={

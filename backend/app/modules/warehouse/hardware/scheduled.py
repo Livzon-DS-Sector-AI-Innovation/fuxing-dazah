@@ -26,14 +26,26 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 async def _run_scheduled_approval_poll() -> None:
-    """feishu 审批结果轮询兜底（15 分钟一轮；未配置通道时空转）。"""
-    from app.modules.warehouse.hardware.approval_channel import poll_pending_approvals
+    """feishu 审批结果轮询兜底（15 分钟一轮；未配置通道时空转）。
+
+    2026-11-25 起并轮报废审批；2026-11-26 起并轮退料审批（待审批单）。"""
+    from app.modules.warehouse.hardware.approval_channel import (
+        poll_pending_approvals,
+        poll_pending_returns,
+        poll_pending_scraps,
+    )
 
     async with async_session_factory() as session:
         stats = await poll_pending_approvals(session)
+        scrap_stats = await poll_pending_scraps(session)
+        return_stats = await poll_pending_returns(session)
         await session.commit()
     if stats.get("approved") or stats.get("rejected"):
         logger.info("五金领料审批轮询同步: %s", stats)
+    if scrap_stats.get("approved") or stats.get("rejected"):
+        logger.info("五金报废审批轮询同步: %s", scrap_stats)
+    if return_stats.get("approved") or return_stats.get("rejected"):
+        logger.info("五金退料审批轮询同步: %s", return_stats)
 
 
 HARDWARE_APPROVAL_POLL_TASK = TaskDefinition(
@@ -49,8 +61,15 @@ async def _run_scheduled_approval_reconcile() -> None:
     """领/退料审批实例对账兜底：事件丢失补摄取 + pending 单状态对齐（幂等）。
 
     主通道是 approval.instance.* WS 事件（approval_ingest），本任务每小时扫
-    近 2 小时实例防长连接断线漏单；HARDWARE_APPROVAL_CODE 未配置时自空转。
+    近 2 小时实例防长连接断线漏单；审批定义编码未配置时自空转。
+    系统配置 hardware_approval_reconcile_enabled=0 时整任务自空转（本地
+    联调：防生产实例被摄取进本地库污染测试数据；轮询/WS 事件不受影响）。
     """
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    enabled = runtime_store.get_value("hardware_approval_reconcile_enabled")
+    if int(0 if enabled is None else enabled) != 1:
+        return
     from app.modules.warehouse.hardware.approval_ingest import reconcile_recent_instances
 
     async with async_session_factory() as session:
