@@ -845,8 +845,9 @@ async def poll_pending_approvals(db: AsyncSession, *, now: datetime | None = Non
     结果由人直写，不在此列）；approved → service.approve（预扣保持）；
     rejected → service.reject（释放预扣）。
     """
-    from app.modules.warehouse.hardware import service as hw_service
     from sqlalchemy import select
+
+    from app.modules.warehouse.hardware import service as hw_service
 
     now = now or datetime.now(UTC)
     pending = (
@@ -932,14 +933,16 @@ async def poll_pending_scraps(db: AsyncSession) -> dict[str, int]:
 async def poll_pending_returns(db: AsyncSession) -> dict[str, int]:
     """拉取 feishu 通道待审批退料单的审批结果并同步状态机。
 
-    approved → approve_return（待仓管验收，不自动回加——2026-11-26 用户终版
-    拍板：退料须仓管员在平台点「验收回加」才回库存）；rejected →
-    reject_return（留证不动账）。manual 通道单不在此列（审批人在平台点
-    通过）；飞书自建退料（channel 空）不在此列。
+    approved → approve_return + accept_return（与事件回流同口径：实例
+    APPROVED=仓管已在飞书「办理」节点完成收料，自动回加库存；2026-11-27
+    真机证实主管同意后任务流转到办理节点，办理完成实例才 APPROVED）；
+    rejected → reject_return（留证不动账）。manual 通道单不在此列
+    （审批人在平台点通过）；飞书自建退料（channel 空）不在此列。
     """
     from sqlalchemy import select
 
     from app.modules.warehouse.hardware import return_flow
+    from app.modules.warehouse.hardware.stocktake import accept_return
 
     channel = get_return_approval_channel()
     if channel is None:
@@ -960,6 +963,7 @@ async def poll_pending_returns(db: AsyncSession) -> dict[str, int]:
             await return_flow.approve_return(
                 db, ret.id, approved_by=ret.approver_name or "飞书审批"
             )
+            await accept_return(db, ret.id, accepted_by="飞书审批·仓管办理")
             stats["approved"] += 1
         elif result == "rejected":
             await return_flow.reject_return(

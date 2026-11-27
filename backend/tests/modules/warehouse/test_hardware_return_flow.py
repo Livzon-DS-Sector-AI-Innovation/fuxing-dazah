@@ -22,6 +22,7 @@ from app.modules.warehouse.hardware.models import (
     HardwareRequisition,
 )
 
+
 def _patch_runtime(monkeypatch, values: dict) -> None:
     """runtime_store 单例替身：固定值表（审批配置已迁系统配置，2026-11-26）。"""
     from app.modules.warehouse.ops_config.runtime_store import runtime_store
@@ -302,9 +303,8 @@ async def test_return_reject_and_cancel(db_session):
 
 
 async def test_return_feishu_backflow_and_platform_first(db_session, monkeypatch):
-    """飞书回流：APPROVED→approved 待仓管验收（不自动回加）；平台先批后飞书结论只留痕一次。"""
+    """飞书回流：APPROVED（含办理完成）→自动验收回加；平台先批后飞书结论只留痕一次。"""
     import app.platform.integrations.feishu.approval as approval_mod
-    from app.core.config import get_settings
     from app.modules.warehouse.hardware import approval_channel as ac
     from app.modules.warehouse.hardware import approval_ingest as ai
 
@@ -326,20 +326,15 @@ async def test_return_feishu_backflow_and_platform_first(db_session, monkeypatch
     ret.returned_by_open_id = "ou_starter"
     await db_session.flush()
 
-    # 飞书先通过：approved（待仓管验收，不自动回加——2026-11-26 用户终版
-    # 拍板：退料须仓管员验收后才回库存）；验收前批次不动
+    # 飞书先通过（实例 APPROVED=主管同意+办理节点完成，2026-11-27 真机证实
+    # 流转链）：自动验收回加（办理成功才算终态，库存才涨，仓管无需回平台）
     result = await ai.sync_status(db_session, "INST-RET-A", status="APPROVED")
-    assert result == {"action": "synced", "doc_no": ret.return_no, "status": "approved"}
+    assert result == {"action": "synced", "doc_no": ret.return_no, "status": "accepted"}
     await db_session.refresh(ret)
-    assert ret.status == "approved"
-    assert ret.leader_signed is True and ret.leader_signed_by == "赵审批"
-    assert ret.accepted_by is None and not ret.lot_adjustments
-    # 仓管验收回加（回加模式=未预填批次 → 新建 return 批次）
-    from app.modules.warehouse.hardware.stocktake import accept_return
-
-    accepted = await accept_return(db_session, ret.id, accepted_by="钱仓管")
-    assert accepted.status == "accepted"
-    assert accepted.lot_adjustments and accepted.lot_adjustments[0]["mode"] == "new"
+    assert ret.status == "accepted"
+    assert ret.leader_signed is True
+    assert ret.accepted_by == "飞书审批·仓管办理"
+    assert ret.lot_adjustments and ret.lot_adjustments[0]["mode"] == "new"
 
     # 平台先通过（撤回实例）→ 飞书后续结论只留痕一次
     ret2 = await return_flow.create_return_from_requisition(

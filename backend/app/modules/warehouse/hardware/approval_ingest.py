@@ -686,11 +686,13 @@ async def _apply_status(db: AsyncSession, req: HardwareRequisition, status: str)
 async def _apply_return_status(db: AsyncSession, ret: HardwareReturn, status: str) -> None:
     """飞书实例状态对齐退库单（幂等，2026-11-19 对称语义；2026-11-26 双链路）。
 
-    - 平台发起链路（approval_channel 有值，pending=待审批）：APPROVED →
-      approved（待仓管验收，**不自动回加**——2026-11-26 用户终版拍板：退料
-      必须仓管员验收后才回库存，仓管在平台「退料」页签点「验收回加」；
-      REJECTED → rejected；CANCELED → cancelled。离开 pending 后实例后续
-      结论只留痕。
+    - 平台发起链路（approval_channel 有值，pending=待审批）：实例 APPROVED=
+      终态=审批关闭=**仓管已在飞书「办理」节点完成收料**（2026-11-27 真机
+      证实：主管同意后任务流转到办理节点，办理完成实例才 APPROVED）→
+      自动 approve + accept 回加库存（办理成功才算终态，库存才涨，仓管
+      无需回平台点验收）。REJECTED → rejected；CANCELED → cancelled。
+      离开 pending 后实例后续结论只留痕。平台「通过」按钮仍只进待验收
+      （approved），由仓管在平台点「验收回加」兜底。
     - 飞书自建链路（channel 空，draft=待签收验收）：APPROVED=终态=审批关闭=
       仓管已在飞书办理收料 → 负责人签 + 自动验收回加（对称领料自动发料，
       行为不变）；REJECTED/CANCELED → 草稿作废留痕。
@@ -701,8 +703,10 @@ async def _apply_return_status(db: AsyncSession, ret: HardwareReturn, status: st
         if status == "APPROVED":
             if ret.status == "pending":
                 from app.modules.warehouse.hardware import return_flow
+                from app.modules.warehouse.hardware.stocktake import accept_return
 
                 await return_flow.approve_return(db, ret.id, approved_by=approver)
+                await accept_return(db, ret.id, accepted_by="飞书审批·仓管办理")
             elif note not in (ret.remark or ""):
                 ret.remark = f"{ret.remark or ''}；{note}".strip("；")
         elif status == "REJECTED":
