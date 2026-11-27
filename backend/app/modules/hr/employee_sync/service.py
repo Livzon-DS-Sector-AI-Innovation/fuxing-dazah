@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterable
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -30,11 +30,15 @@ from app.modules.hr.employee_sync.config import (
     KEY_SOURCE_TABLE_ID,
     KEY_SOURCE_TABLE_NAME,
     ROSTER_FILL_IF_EMPTY_FIELDS,
+    ROSTER_FOLLOW_MODE_ALL,
     ROSTER_INITIAL_FIELDS,
     ROSTER_ORG_REFRESH_FIELDS,
     TRAINING_ROSTER_FIELDS,
     EmployeeSyncConfig,
+    RosterFollowConfig,
     load_config,
+    load_roster_follow_config,
+    roster_follow_options,
     save_config_values,
 )
 from app.modules.hr.employee_sync.mapping import (
@@ -161,6 +165,71 @@ def _record_number(record: dict[str, Any]) -> str:
     """源表记录的工号（单元格归一化并去空白；缺失为空串）。"""
     fields = record.get("fields") or {}
     return str(normalize_cell(fields.get("工号")) or "").strip()
+
+
+async def roster_department_counts(session: AsyncSession) -> dict[str, int]:
+    """在职名单上出现过的体现部门及人数（「未分类」是同步兜底占位，不算部门）。"""
+    rows = (await session.execute(
+        select(TrainingRosterProfile.department, func.count())
+        .where(
+            TrainingRosterProfile.is_deleted.is_(False),
+            TrainingRosterProfile.department.notin_(("", "未分类")),
+        )
+        .group_by(TrainingRosterProfile.department)
+    )).all()
+    return {name: count for name, count in rows}
+
+
+async def roster_follow_payload(
+    session: AsyncSession, cfg: RosterFollowConfig,
+) -> dict[str, Any]:
+    """跟随规则接口的载荷：全局字段 + 部门例外 + 按工号例外 + 候选项说明。
+
+    departments 为可选部门清单（名单上出现过的体现部门，已配置的不重复列）；
+    已配置的部门带当前人数——体现部门改名或人员调走后规则会匹配不到人，人数为 0 时提示。
+    """
+    counts = await roster_department_counts(session)
+    department_exceptions = [
+        {"department": name, "mode": mode, "count": counts.get(name, 0)}
+        for name, mode in cfg.department_modes.items()
+    ]
+    departments = sorted(
+        (
+            {"name": name, "count": count}
+            for name, count in counts.items()
+            if name not in cfg.department_modes
+        ),
+        key=lambda item: str(item["name"]),
+    )
+    resolved: dict[str, tuple[str, str]] = {}
+    if cfg.member_modes:
+        rows = (await session.execute(
+            select(
+                TrainingRosterProfile.employee_number,
+                TrainingRosterProfile.name,
+                TrainingRosterProfile.department,
+            ).where(TrainingRosterProfile.employee_number.in_(list(cfg.member_modes)))
+            # 含软删行：离职者的例外保留，重新进入名单时仍生效
+        )).all()
+        resolved = {number: (name, dept) for number, name, dept in rows}
+    exceptions = [
+        {
+            "employee_number": number,
+            "mode": mode,
+            "name": resolved.get(number, ("", ""))[0] or None,
+            "department": resolved.get(number, ("", ""))[1] or None,
+        }
+        for number, mode in cfg.member_modes.items()
+    ]
+    return {
+        "fields": sorted(cfg.fields),
+        "department_modes": dict(cfg.department_modes),
+        "department_exceptions": department_exceptions,
+        "departments": departments,
+        "member_modes": dict(cfg.member_modes),
+        "exceptions": exceptions,
+        **roster_follow_options(),
+    }
 
 
 class EmployeeSyncService:
@@ -525,6 +594,8 @@ class EmployeeSyncService:
         roster_added, roster_removed, roster_status_synced = (
             await self.sync_roster_membership()
         )
+        # 已设为「跟随档案」的字段按规则覆盖（全局字段 + 按人例外）；未配置即空操作
+        roster_fields_synced = await self.sync_roster_follow_fields()
 
         # 定编数表：与员工档案同一 Base，一次同步顺带拉取（未绑定则跳过）。
         # 独立 SAVEPOINT：定编表失败（如表级权限未授权）只降级为 stats 错误，
@@ -558,6 +629,7 @@ class EmployeeSyncService:
             "roster_added": roster_added,
             "roster_removed": roster_removed,
             "roster_status_synced": roster_status_synced,
+            "roster_fields_synced": roster_fields_synced["changed"],
         }
         if headcount_stats is not None:
             stats["headcount"] = headcount_stats
@@ -958,6 +1030,81 @@ class EmployeeSyncService:
             "dry_run": dry_run,
         }
 
+    async def sync_roster_follow_fields(
+        self,
+        cfg: RosterFollowConfig | None = None,
+        *,
+        dry_run: bool = False,
+        employee_numbers: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
+        """名单字段按规则跟随员工档案（全局字段 + 按工号例外）。
+
+        人员状态不在此处理：它恒跟随，由 sync_roster_membership 与离职/复职处维护。
+        规则按「工号 + 名单体现部门」解析：人员例外 > 部门例外 > 全局字段。
+        - dry_run=True 只统计不落库（保存规则前预览影响）
+        - employee_numbers 非空时只处理这些人（档案编辑后的即时同步）
+        返回 {total, changed, field_changes, dry_run}。
+        """
+        if cfg is None:
+            cfg = await load_roster_follow_config(self.session)
+        numbers = set(employee_numbers) if employee_numbers is not None else None
+        # 没有任何字段跟随（未配置）时是空操作：不查库，每轮对账零开销
+        follows_any = (
+            cfg.fields
+            or ROSTER_FOLLOW_MODE_ALL in cfg.member_modes.values()
+            or ROSTER_FOLLOW_MODE_ALL in cfg.department_modes.values()
+        )
+        if not follows_any or (numbers is not None and not numbers):
+            return {"total": 0, "changed": 0, "field_changes": {}, "dry_run": dry_run}
+
+        emp_stmt = select(Employee).where(Employee.is_deleted.is_(False))
+        profile_stmt = select(TrainingRosterProfile).where(
+            TrainingRosterProfile.is_deleted.is_(False)
+        )
+        if numbers is not None:
+            emp_stmt = emp_stmt.where(Employee.employee_number.in_(sorted(numbers)))
+            profile_stmt = profile_stmt.where(
+                TrainingRosterProfile.employee_number.in_(sorted(numbers))
+            )
+        employee_by_number = {
+            e.employee_number: e
+            for e in (await self.session.execute(emp_stmt)).scalars().all()
+        }
+        profiles = (await self.session.execute(profile_stmt)).scalars().all()
+
+        field_changes: dict[str, int] = {}
+        changed_rows = considered = 0
+        for profile in profiles:
+            employee = employee_by_number.get(profile.employee_number)
+            if employee is None:
+                continue
+            considered += 1
+            row_changed = False
+            for attr in cfg.fields_for(profile.employee_number, profile.department):
+                new_value = getattr(employee, attr, None)
+                # NOT NULL 兜底同初值复制：档案缺体现部门/职位/姓名时不至于写库报错
+                if attr == "department" and not new_value:
+                    new_value = "未分类"
+                elif attr in ("position", "name") and not new_value:
+                    new_value = ""
+                if getattr(profile, attr, None) != new_value:
+                    field_changes[attr] = field_changes.get(attr, 0) + 1
+                    row_changed = True
+                    if not dry_run:
+                        setattr(profile, attr, new_value)
+            if row_changed:
+                changed_rows += 1
+        if not dry_run and changed_rows:
+            await self.session.flush()
+        return {
+            "total": considered,
+            "changed": changed_rows,
+            "field_changes": dict(sorted(
+                field_changes.items(), key=lambda kv: -kv[1]
+            )),
+            "dry_run": dry_run,
+        }
+
     async def training_roster(
         self,
         *,
@@ -966,6 +1113,7 @@ class EmployeeSyncService:
         page: int = 1,
         page_size: int = 20,
         scoped_departments: set[str] | None = None,
+        follow_cfg: RosterFollowConfig | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """培训专用脱敏名单：读独立数据集，仅输出白名单字段。
 
@@ -975,7 +1123,9 @@ class EmployeeSyncService:
         scoped_departments 非空时按用户数据范围过滤（体现部门或实际部门
         在授权范围内的行），与员工档案/SOP二级表共用「用户多部门访问授权」。
         返回 (rows, total)。rows 每行 dict 的 key 为 ORM 字段名，
-        另带 tags（该人的分类标签名列表）。
+        另带 tags（该人的分类标签名列表）、follow_mode（生效的例外模式，空串 = 无例外）
+        与 follow_source（例外来自 member 人员 / department 部门，空串 = 无）。
+        follow_cfg 由调用方传入可省一次配置查询。
         """
         stmt = select(TrainingRosterProfile).where(
             TrainingRosterProfile.is_deleted.is_(False)
@@ -1018,6 +1168,8 @@ class EmployeeSyncService:
         ).offset((page - 1) * page_size).limit(page_size)
         profiles = (await self.session.execute(stmt)).scalars().all()
         tags_by_employee = await self._roster_tags([p.employee_number for p in profiles])
+        if follow_cfg is None:
+            follow_cfg = await load_roster_follow_config(self.session)
 
         rows = []
         for profile in profiles:
@@ -1030,6 +1182,12 @@ class EmployeeSyncService:
                 profile.level, profile.duty, profile.job_category,
             )
             row["tags"] = tags_by_employee.get(profile.employee_number, [])
+            row["follow_mode"] = follow_cfg.mode_of(
+                profile.employee_number, profile.department,
+            )
+            row["follow_source"] = follow_cfg.source_of(
+                profile.employee_number, profile.department,
+            )
             rows.append(row)
         return rows, total
 
@@ -1075,22 +1233,26 @@ class EmployeeSyncService:
             for d in (profile.department, profile.actual_department) if d
         ):
             raise PermissionError(f"数据范围限制：仅可操作授权部门（{profile.department}）")
+        # status 随总表自动同步，不开放手动编辑（改了也会被下轮对账覆盖）；
+        # 已设为「跟随档案」的字段同理（人员例外 > 部门例外 > 全局规则）；
+        # level 不在白名单（不外显）但允许编辑——report_level 分级输入
+        follow_cfg = await load_roster_follow_config(self.session)
+        allowed = (
+            (set(TRAINING_ROSTER_FIELDS.values()) | {"level"})
+            - {"employee_number", "status"}
+            - set(follow_cfg.fields_for(employee_number, profile.department))
+        )
+        applied = {key: value for key, value in data.items() if key in allowed}
         # 写入的新部门值也必须在授权范围内，防止把人员改到未授权部门
         if scoped_departments is not None:
             for key in ("department", "actual_department"):
-                new_val = data.get(key)
+                new_val = applied.get(key)
                 if new_val and new_val not in scoped_departments:
                     raise PermissionError(
                         f"数据范围限制：无权将人员调整到部门 '{new_val}'",
                     )
-        # status 随总表自动同步，不开放手动编辑（改了也会被下轮对账覆盖）；
-        # level 不在白名单（不外显）但允许编辑——report_level 分级输入
-        allowed = (
-            set(TRAINING_ROSTER_FIELDS.values()) | {"level"}
-        ) - {"employee_number", "status"}
-        for key, value in data.items():
-            if key in allowed:
-                setattr(profile, key, value)
+        for key, value in applied.items():
+            setattr(profile, key, value)
         if updated_by:
             profile.updated_by = updated_by
         await self.session.flush()

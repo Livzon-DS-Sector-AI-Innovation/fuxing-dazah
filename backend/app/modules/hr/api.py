@@ -36,6 +36,7 @@ from app.modules.hr.evaluation_document_generator import (
 from app.modules.hr.interview_routes import router as interview_router
 from app.modules.hr.resume_screening_routes import router as resume_screening_router
 from app.modules.hr.job_requirement_routes import router as job_requirement_router
+from app.modules.hr.recruitment_position_info_routes import router as recruitment_position_info_router
 from app.modules.hr.employee_info_collection_routes import router as employee_info_collection_router
 from app.modules.hr.employee_certificate_routes import router as employee_certificate_router
 from app.modules.hr.labor_contract.archive_routes import router as labor_contract_archive_router
@@ -127,6 +128,7 @@ router.include_router(headcount_router)
 router.include_router(interview_router)
 router.include_router(resume_screening_router)
 router.include_router(job_requirement_router)
+router.include_router(recruitment_position_info_router)
 router.include_router(employee_info_collection_router)
 router.include_router(employee_certificate_router)
 router.include_router(labor_contract_router)
@@ -6011,7 +6013,14 @@ async def list_sop_catalog(
         count_q = count_q.where(SopCatalog.file_name.ilike(f"%{keyword}%"))
 
     total = (await session.execute(count_q)).scalar() or 0
-    rows = (await session.execute(query.order_by(SopCatalog.category, SopCatalog.file_name).offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    # 排序必须落到唯一键上：类别、文件名称两列大量并列，只按它们排序时分页结果不稳定——
+    # 并列行每次查询先后不同，OFFSET 翻页会漏行、重行（本地库 3011 条实测只翻出 2919 条不重复）
+    rows = (await session.execute(
+        query.order_by(
+            SopCatalog.category, SopCatalog.file_name,
+            SopCatalog.department, SopCatalog.position_name, SopCatalog.id,
+        ).offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
 
     return paginated_response(
         data=[SopCatalogResponse.model_validate(r).model_dump(mode="json") for r in rows],

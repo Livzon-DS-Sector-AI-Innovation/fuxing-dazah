@@ -27,6 +27,7 @@ from app.modules.hr.models import (
     DeptTrainingPersonnel,
     Employee,
     HrDepartment,
+    HrPosition,
     Interview,
     InterviewFeedback,
     InterviewStatusLog,
@@ -56,6 +57,7 @@ from app.modules.hr.repository import (
     OnboardingRecordRepository,
     PerformanceEvaluationRepository,
     PositionTrainingRepository,
+    RecruitmentPositionInfoRepository,
     TrainingLedgerPageRepository,
     TrainingLedgerRepository,
 )
@@ -81,6 +83,9 @@ from app.modules.hr.schemas import (
     PerformanceEvaluationCreate,
     PerformanceEvaluationUpdate,
     PerformanceListParams,
+    RecruitmentPositionInfoResponse,
+    RecruitmentPositionInfoSummary,
+    RecruitmentPositionInfoUpdate,
     TrainingLedgerCreate,
     TrainingLedgerUpdate,
 )
@@ -670,6 +675,16 @@ class EmployeeService:
                     TrainingRosterProfile.is_deleted.is_(False),
                 )
                 .values(status=employee.status)
+            )
+        # 已设为「跟随档案」的名单字段同样即时跟随：同步未启用时没有定时对账兜底
+        # （同步启用期间档案只读，走不到这里）
+        from app.modules.hr.employee_sync.config import ROSTER_FOLLOWABLE_FIELDS
+
+        if any(field in ROSTER_FOLLOWABLE_FIELDS for field in update_data):
+            from app.modules.hr.employee_sync.service import EmployeeSyncService
+
+            await EmployeeSyncService(self.repo.session).sync_roster_follow_fields(
+                employee_numbers={employee.employee_number},
             )
         return result
 
@@ -1564,6 +1579,10 @@ _CANDIDATE_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+# 岗位需求的两个描述字段：空串一律按「没填」存
+_DESCRIPTION_FIELDS = ("duties", "requirements")
+
+
 class JobRequirementService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = JobRequirementRepository(session)
@@ -1580,13 +1599,25 @@ class JobRequirementService:
         return req
 
     async def create(self, data: JobRequirementCreate) -> JobRequirement:
-        req = JobRequirement(**data.model_dump())
+        values = data.model_dump()
+        # 两个描述字段都没传才带出岗位库里配置的招聘岗位信息；传了任意一个（哪怕是空串）就完全按传入的来
+        if not {"duties", "requirements"} & data.model_fields_set:
+            configured = await RecruitmentPositionInfoRepository(self.repo.session).get_by_name(
+                values["department"], values["position_name"],
+            )
+            if configured:
+                values["duties"] = configured.recruitment_duties
+                values["requirements"] = configured.recruitment_requirements
+        for field in _DESCRIPTION_FIELDS:
+            values[field] = values.get(field) or None
+        req = JobRequirement(**values)
         return await self.repo.create(req)
 
     async def update(self, req_id: UUID, data: JobRequirementUpdate) -> JobRequirement:
         req = await self.get(req_id)
         for k, v in data.model_dump(exclude_unset=True).items():
-            setattr(req, k, v)
+            # 岗位描述传空串 = 清空（表单里删光再保存要能生效）；没传才是「不改」
+            setattr(req, k, None if k in _DESCRIPTION_FIELDS and v == "" else v)
         return await self.repo.update(req)
 
     async def delete(self, req_id: UUID) -> dict:
@@ -1599,6 +1630,90 @@ class JobRequirementService:
         if req.status == "招聘中":
             raise ValueError("岗位仍在招聘中，请先在「编辑」中改为已关闭，再删除")
         return await self.repo.soft_delete_with_candidates(req.id)
+
+
+def _recruitment_excerpt(position: HrPosition, limit: int = 60) -> str | None:
+    """描述开头的一小段：职责优先、其次任职要求；换行和多余空白压成空格。没配置返回 None。"""
+    for value in (position.recruitment_duties, position.recruitment_requirements):
+        collapsed = " ".join((value or "").split())
+        if collapsed:
+            return collapsed if len(collapsed) <= limit else collapsed[:limit] + "…"
+    return None
+
+
+class RecruitmentPositionInfoService:
+    """招聘岗位信息：岗位库上的岗位职责 / 任职要求，新建岗位需求时带出复用。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.repo = RecruitmentPositionInfoRepository(session)
+
+    @staticmethod
+    def _is_configured(position: HrPosition) -> bool:
+        return bool(position.recruitment_duties or position.recruitment_requirements)
+
+    async def list(
+        self, *, departments: list[str] | None = None, keyword: str | None = None,
+        only_missing: bool = False,
+    ) -> list[RecruitmentPositionInfoSummary]:
+        positions = await self.repo.list_positions(
+            departments=departments, keyword=keyword, only_missing=only_missing,
+        )
+        names = await self.repo.get_user_names({p.updated_by for p in positions if p.updated_by})
+        return [
+            RecruitmentPositionInfoSummary(
+                position_id=p.id,
+                department=p.department,
+                position_name=p.name,
+                configured=self._is_configured(p),
+                duties_length=len(p.recruitment_duties or ""),
+                requirements_length=len(p.recruitment_requirements or ""),
+                excerpt=_recruitment_excerpt(p),
+                updated_at=p.updated_at,
+                updated_by_name=names.get(p.updated_by) if p.updated_by else None,
+            )
+            for p in positions
+        ]
+
+    async def get(self, position_id: UUID) -> RecruitmentPositionInfoResponse:
+        position = await self._get_position(position_id)
+        return self._to_info(position, await self._editor_name(position))
+
+    async def save(
+        self, position_id: UUID, data: RecruitmentPositionInfoUpdate, *, user_id: UUID,
+    ) -> RecruitmentPositionInfoResponse:
+        position = await self._get_position(position_id)
+        position.recruitment_duties = data.duties
+        position.recruitment_requirements = data.requirements
+        position.updated_by = user_id
+        await self.repo.session.flush()
+        refreshed = await self.repo.refresh(position)
+        if refreshed is None:
+            raise NotFoundException("岗位", str(position_id))
+        return self._to_info(refreshed, await self._editor_name(refreshed))
+
+    async def _get_position(self, position_id: UUID) -> HrPosition:
+        position = await self.repo.get_by_id(position_id)
+        if not position:
+            raise NotFoundException("岗位", str(position_id))
+        return position
+
+    async def _editor_name(self, position: HrPosition) -> str | None:
+        if not position.updated_by:
+            return None
+        names = await self.repo.get_user_names([position.updated_by])
+        return names.get(position.updated_by)
+
+    def _to_info(self, position: HrPosition, editor_name: str | None) -> RecruitmentPositionInfoResponse:
+        return RecruitmentPositionInfoResponse(
+            position_id=position.id,
+            department=position.department,
+            position_name=position.name,
+            duties=position.recruitment_duties,
+            requirements=position.recruitment_requirements,
+            configured=self._is_configured(position),
+            updated_at=position.updated_at,
+            updated_by_name=editor_name,
+        )
 
 
 class CandidateService:

@@ -8,6 +8,9 @@ import {
   CandidateStatusTransition,
   JobRequirementCreateInput,
   JobRequirementUpdateInput,
+  RecruitmentPositionInfo,
+  RecruitmentPositionInfoInput,
+  RecruitmentPositionInfoSummary,
   InterviewCreateInput,
   InterviewFeedbackInput,
   InterviewUpdateInput,
@@ -226,6 +229,39 @@ export async function deleteJobRequirement(id: string) {
     errorMessage: '删除岗位需求失败',
   })
   revalidatePath('/hr/recruitment')
+  return res
+}
+
+// ─── 招聘岗位信息（岗位库上每个岗位一份，新建岗位需求时带出） ───
+
+export async function fetchRecruitmentPositionInfos(params?: {
+  department?: string
+  keyword?: string
+  only_missing?: boolean
+}): Promise<{ data: RecruitmentPositionInfoSummary[] }> {
+  return fetchHrApi(`/hr/recruitment/position-infos${buildQueryString(params || {})}`, {
+    errorMessage: '获取招聘岗位信息失败',
+  })
+}
+
+export async function fetchRecruitmentPositionInfo(
+  positionId: string,
+): Promise<{ data: RecruitmentPositionInfo }> {
+  return fetchHrApi(`/hr/recruitment/position-infos/${positionId}`, {
+    errorMessage: '获取招聘岗位信息失败',
+  })
+}
+
+export async function saveRecruitmentPositionInfo(
+  positionId: string,
+  data: RecruitmentPositionInfoInput,
+): Promise<{ data: RecruitmentPositionInfo }> {
+  const res = await fetchHrApi(`/hr/recruitment/position-infos/${positionId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    errorMessage: '保存招聘岗位信息失败',
+  })
+  revalidatePath('/hr/recruitment/positions')
   return res
 }
 

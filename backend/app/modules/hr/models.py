@@ -992,6 +992,13 @@ class HrPosition(BaseModel):
     headcount: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="编制人数（人力看板编制达成率依据）"
     )
+    # 招聘岗位信息：每个岗位一份可复用的岗位描述。新建岗位需求时带出到需求上（需求存的是当时的副本，可单独改）
+    recruitment_duties: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="招聘岗位信息：岗位职责"
+    )
+    recruitment_requirements: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="招聘岗位信息：任职要求"
+    )
 
 
 class HeadcountPlan(BaseModel):

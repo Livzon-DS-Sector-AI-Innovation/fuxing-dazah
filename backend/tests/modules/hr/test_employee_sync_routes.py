@@ -16,6 +16,7 @@ from app.modules.hr.employee_sync.service import (
     SyncInProgressError,
 )
 from app.modules.hr.models import TrainingRosterProfile
+from app.platform.identity.models import User
 from tests.modules.hr.conftest import _rand
 
 
@@ -236,3 +237,97 @@ async def test_update_roster_entry_lifecycle(
         assert forbidden.status_code == 403
     finally:
         app.dependency_overrides.pop(get_hr_scope, None)
+
+
+# ─── 名单跟随档案规则 ───
+
+
+_FOLLOW_URL = "/api/v1/hr/employee-sync/training-roster/follow-config"
+
+
+async def test_roster_follow_config_preview_save_and_validate(
+    db_session: AsyncSession, client: AsyncClient, test_user: User,
+) -> None:
+    """apply=false 只预览不保存；apply=true 保存并立即生效（名单 meta/行带跟随信息）；非法入参 400。
+
+    断言一律相对「保存前」比较：KV 与开发库共享，不假设初始未配置。
+    测试行所在部门是随机名，部门规则扫不到真实名单。
+    """
+    dept = _rand("跟随部")
+    profile = await _add_roster(db_session, dept)
+    number = profile.employee_number
+    original = await sync_config.load_roster_follow_config(db_session)
+    try:
+        before = (await client.get(_FOLLOW_URL)).json()["data"]
+        assert [o["attr"] for o in before["followable"]] \
+            == list(sync_config.ROSTER_FOLLOWABLE_FIELDS)
+        assert [o["attr"] for o in before["locked"]] == ["status"]
+        # 可选部门清单：名单上出现过的体现部门、带人数、不含兜底占位「未分类」
+        dept_names = {d["name"] for d in before["departments"]}
+        assert all(d["count"] > 0 for d in before["departments"])
+        assert "未分类" not in dept_names
+        assert dept in dept_names
+
+        # 预览：返回影响统计，规则不落库
+        preview = await client.put(_FOLLOW_URL, json={
+            "fields": sorted(set(before["fields"]) | {"level"}), "apply": False,
+        })
+        assert preview.status_code == 200, preview.text
+        stats = preview.json()["data"]["preview"]
+        assert stats["dry_run"] is True
+        assert set(stats["field_changes"]) <= {"level"}
+        after_preview = (await client.get(_FOLLOW_URL)).json()["data"]
+        assert after_preview["fields"] == before["fields"]
+
+        # 保存并应用：全局字段原样保留；测试行所在部门设「全部跟随档案」，
+        # 该行本人再设「全部手动」——人员例外覆盖部门例外，应用时不改动这一行
+        fields = before["fields"]
+        member_modes = {**before["member_modes"], number: "manual"}
+        department_modes = {**before["department_modes"], dept: "follow"}
+        saved = await client.put(_FOLLOW_URL, json={
+            "fields": fields,
+            "member_modes": member_modes,
+            "department_modes": department_modes,
+            "apply": True,
+        })
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["data"]["preview"]["dry_run"] is False
+        data = (await client.get(_FOLLOW_URL)).json()["data"]
+        assert data["fields"] == fields
+        assert data["member_modes"] == member_modes
+        assert data["exceptions"] == [
+            *before["exceptions"],
+            {"employee_number": number, "mode": "manual",
+             "name": "名单员工", "department": dept},
+        ]
+        assert data["department_modes"] == department_modes
+        assert data["department_exceptions"] == [
+            *before["department_exceptions"],
+            {"department": dept, "mode": "follow", "count": 1},
+        ]
+        assert dept not in {d["name"] for d in data["departments"]}  # 已配置的不再可选
+
+        # 名单接口：meta 带全局跟随字段与可跟随范围，行带生效的例外模式及来源
+        res = await client.get(
+            "/api/v1/hr/employee-sync/training-roster",
+            params={"keyword": number},
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["meta"]["follow_fields"] == fields
+        assert res.json()["meta"]["followable_fields"] == list(
+            sync_config.ROSTER_FOLLOWABLE_FIELDS,
+        )
+        assert res.json()["data"][0]["follow_mode"] == "manual"
+        assert res.json()["data"][0]["follow_source"] == "member"
+
+        # 人员状态不开放配置；未知字段 / 未知部门模式 400
+        bad = await client.put(_FOLLOW_URL, json={"fields": ["status"], "apply": False})
+        assert bad.status_code == 400
+        assert "不可配置" in bad.json()["message"]
+        bad_mode = await client.put(_FOLLOW_URL, json={
+            "department_modes": {"研发部": "whatever"}, "apply": False,
+        })
+        assert bad_mode.status_code == 400
+        assert "未知的部门跟随模式" in bad_mode.json()["message"]
+    finally:
+        await sync_config.save_roster_follow_config(db_session, original)

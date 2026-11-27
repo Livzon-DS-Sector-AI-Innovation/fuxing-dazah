@@ -1,11 +1,12 @@
 """HR database queries live here."""
 
 import logging
+from collections.abc import Iterable
 from datetime import UTC, date, datetime, time
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import and_, asc, delete, desc, func, or_, select, text, update
+from sqlalchemy import ColumnElement, and_, asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.selectable import Exists
@@ -23,6 +24,7 @@ from app.modules.hr.models import (
     DepartureRecord,
     Employee,
     HrDepartment,
+    HrPosition,
     Interview,
     InterviewFeedback,
     JobRequirement,
@@ -1317,6 +1319,86 @@ class JobRequirementRepository:
             )
         )
         return result.scalar() or 0
+
+
+def _has_recruitment_info() -> ColumnElement[bool]:
+    """岗位是否已配置招聘岗位信息（岗位职责或任职要求任一有内容）。"""
+    return or_(
+        func.coalesce(HrPosition.recruitment_duties, "") != "",
+        func.coalesce(HrPosition.recruitment_requirements, "") != "",
+    )
+
+
+class RecruitmentPositionInfoRepository:
+    """招聘岗位信息：存放在 hr.positions 上的岗位职责 / 任职要求（每个岗位一份）。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_positions(
+        self, *, departments: list[str] | None = None, keyword: str | None = None,
+        only_missing: bool = False,
+    ) -> list[HrPosition]:
+        """在用岗位列表（带招聘岗位信息），按组织架构的部门顺序排。departments=None 表示不限部门。"""
+        stmt = select(HrPosition).where(HrPosition.is_deleted.is_(False))
+        if departments is not None:
+            stmt = stmt.where(HrPosition.department.in_(departments))
+        kw = (keyword or "").strip()
+        if kw:
+            pattern = f"%{kw}%"
+            stmt = stmt.where(or_(HrPosition.name.ilike(pattern), HrPosition.department.ilike(pattern)))
+        if only_missing:
+            stmt = stmt.where(~_has_recruitment_info())
+        rows = list((await self.session.execute(stmt)).scalars().all())
+        return await self._sort_by_org(rows)
+
+    async def _sort_by_org(self, rows: list[HrPosition]) -> list[HrPosition]:
+        """部门按组织架构顺序排（同「岗位管理」页），只在岗位表里出现的历史部门名排在最后。"""
+        departments = (await self.session.execute(
+            select(HrDepartment.name)
+            .where(HrDepartment.is_deleted.is_(False))
+            .order_by(HrDepartment.created_at, HrDepartment.id)
+        )).scalars().all()
+        rank = {name: index for index, name in enumerate(departments)}
+        return sorted(rows, key=lambda p: (rank.get(p.department, len(rank)), p.sort_order, p.name))
+
+    async def get_by_id(self, position_id: UUID) -> HrPosition | None:
+        return (await self.session.execute(
+            select(HrPosition).where(HrPosition.id == position_id, HrPosition.is_deleted.is_(False))
+        )).scalar_one_or_none()
+
+    async def get_by_name(self, department: str, position_name: str) -> HrPosition | None:
+        """按（部门, 岗位名）取在用岗位；同部门同名有多行时取最新的一条。"""
+        return (await self.session.execute(
+            select(HrPosition)
+            .where(
+                HrPosition.department == department,
+                HrPosition.name == position_name,
+                HrPosition.is_deleted.is_(False),
+            )
+            .order_by(HrPosition.created_at.desc().nulls_last())
+            .limit(1)
+        )).scalar_one_or_none()
+
+    async def refresh(self, position: HrPosition) -> HrPosition | None:
+        """保存后重新读取：UPDATE 不会把 onupdate 的 updated_at 回填到内存对象，要用库里的行覆盖。"""
+        return (await self.session.execute(
+            select(HrPosition)
+            .where(HrPosition.id == position.id, HrPosition.is_deleted.is_(False))
+            .execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+
+    async def get_user_names(self, user_ids: Iterable[UUID]) -> dict[UUID, str]:
+        """批量解析用户姓名（identity.users），用于显示「最后修改人」。"""
+        ids = set(user_ids)
+        if not ids:
+            return {}
+        from app.platform.identity.models import User
+
+        pairs = (
+            await self.session.execute(select(User.id, User.name).where(User.id.in_(ids)))
+        ).all()
+        return {uid: name for uid, name in pairs}
 
 
 class CandidateRepository:

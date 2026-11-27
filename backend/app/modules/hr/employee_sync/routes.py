@@ -20,11 +20,18 @@ from app.modules.hr.deps import (
     require_hr_basic,
 )
 from app.modules.hr.employee_sync.bitable_client import clean_app_token, clean_table_id
-from app.modules.hr.employee_sync.config import load_config
+from app.modules.hr.employee_sync.config import (
+    ROSTER_FOLLOWABLE_FIELDS,
+    load_config,
+    load_roster_follow_config,
+    parse_roster_follow_config,
+    save_roster_follow_config,
+)
 from app.modules.hr.employee_sync.service import (
     EmployeeSyncService,
     SyncInProgressError,
     config_payload,
+    roster_follow_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,18 +116,23 @@ async def get_training_roster(
 
     身份证/学校/专业/出生/联系方式等个人敏感字段在这里根本不存在。
     按用户数据范围过滤（与员工档案共用「用户多部门访问授权」）；meta 带
-    scoped_departments 供前端收敛部门页签（null=不受限）。
+    scoped_departments 供前端收敛部门页签（null=不受限），follow_fields 为
+    已设为跟随档案的字段、followable_fields 为可跟随的字段范围，行上的
+    follow_mode 为按人例外（编辑弹窗据此判定哪些字段置只读）。
     """
     service = EmployeeSyncService(session)
     scoped = None if hr_scope.is_unrestricted else set(hr_scope.scoped_departments)
+    follow_cfg = await load_roster_follow_config(session)
     rows, total = await service.training_roster(
         department=department, keyword=keyword,
         page=max(page, 1), page_size=min(max(page_size, 1), _ROSTER_PAGE_SIZE_CAP),
-        scoped_departments=scoped,
+        scoped_departments=scoped, follow_cfg=follow_cfg,
     )
     return success_response(data=rows, meta={
         "total": total, "page": page, "page_size": page_size,
         "scoped_departments": sorted(scoped) if scoped is not None else None,
+        "follow_fields": sorted(follow_cfg.fields),
+        "followable_fields": list(ROSTER_FOLLOWABLE_FIELDS),
     })
 
 
@@ -184,6 +196,62 @@ async def export_training_roster(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
     )
+
+
+# 跟随规则路由必须注册在 PUT /training-roster/{employee_number} 之前：
+# 否则 "follow-config" 会被当成工号匹配走（FastAPI 按注册顺序取首个命中）
+class RosterFollowConfigInput(BaseModel):
+    """名单跟随档案规则入参（apply=false 只预览影响，不保存）。"""
+
+    fields: list[str] = Field(
+        default_factory=list, description="全局跟随档案的字段名（ORM 属性名）",
+    )
+    member_modes: dict[str, str] = Field(
+        default_factory=dict,
+        description="按工号的例外：follow=全部跟随档案 / manual=全部手动（人员状态仍跟随）",
+    )
+    department_modes: dict[str, str] = Field(
+        default_factory=dict,
+        description="按名单体现部门的例外（对整个部门生效，低于人员例外）：follow / manual",
+    )
+    apply: bool = Field(False, description="true=保存并立即应用；false=只预览影响")
+
+
+@router.get("/training-roster/follow-config", summary="培训人员名单跟随档案规则")
+async def get_roster_follow_config(
+    session: AsyncSession = Depends(get_db),
+    _ctx: HrAccessContext = _MANAGE,
+) -> JSONResponse:
+    """名单字段的跟随规则：全局字段 + 部门例外 + 按工号例外 + 可选部门清单与候选项。"""
+    cfg = await load_roster_follow_config(session)
+    return success_response(data=await roster_follow_payload(session, cfg))
+
+
+@router.put(
+    "/training-roster/follow-config",
+    summary="保存名单跟随档案规则（先预览影响，确认后保存并立即应用）",
+)
+async def save_roster_follow_config_route(
+    payload: RosterFollowConfigInput,
+    session: AsyncSession = Depends(get_db),
+    _ctx: HrAccessContext = _MANAGE,
+) -> JSONResponse:
+    """apply=false 只返回预览统计不落库；apply=true 保存规则并立即按规则覆盖一遍。"""
+    try:
+        cfg = parse_roster_follow_config(
+            payload.fields, payload.member_modes, payload.department_modes,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    service = EmployeeSyncService(session)
+    if payload.apply:
+        await save_roster_follow_config(session, cfg)
+    stats = await service.sync_roster_follow_fields(cfg, dry_run=not payload.apply)
+    if payload.apply:
+        await session.commit()
+    data = {**await roster_follow_payload(session, cfg), "preview": stats}
+    message = "规则已保存并生效" if payload.apply else "预览完成（未保存）"
+    return success_response(data=data, message=message)
 
 
 class TrainingRosterUpdateInput(BaseModel):

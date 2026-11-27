@@ -1,0 +1,52 @@
+/* 招聘岗位信息页的页面级样式，CSS Modules 隔离类名。
+   antd 的类名必须包 :global()——否则会被当成本模块的类名一起哈希，选择器永远匹配不到。
+   选择器多带一层 .ant-table-container，specificity 才压得过 antd 的 :where 哈希规则。 */
+
+.table :global(.ant-table-container) :global(.ant-table-thead) > tr > th {
+  background: var(--color-surface);
+  color: var(--color-slate);
+  font-weight: 500;
+}
+
+/* 配置状态小标签：已配置用薄荷绿，未配置用中性灰 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--rounded-sm);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.chipDone {
+  background: var(--color-tint-mint);
+  color: var(--color-tint-mint-deep);
+}
+
+.chipTodo {
+  background: var(--color-tint-gray);
+  color: var(--color-slate);
+}
+
+/* 保存成功的行闪一下，指明改的是哪一行 */
+.rowFlash > td {
+  animation: rowFlash 2.4s ease-out;
+}
+
+@keyframes rowFlash {
+  from {
+    background-color: var(--color-primary-bg);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rowFlash > td {
+    animation: none;
+  }
+}

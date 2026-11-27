@@ -257,7 +257,18 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
         ],
       },
-      { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
+      {
+        // 招聘业务一区：需求管理 + 岗位信息库（用户拍板：不再单独页面，折叠为子菜单）
+        key: "recruitment",
+        label: "招聘管理",
+        path: "/hr/recruitment",
+        permissions: ["hr:recruitment:read"],
+        children: [
+          { key: "recruitment-board", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
+          // 岗位库里每个岗位保存一份岗位职责/任职要求，新建岗位需求时带出
+          { key: "recruitment-position-infos", label: "招聘岗位信息", path: "/hr/recruitment/positions", permissions: ["hr:recruitment:read"] },
+        ],
+      },
       {
         // 培训五区按业务动线：计划 → 执行 → 记录 → 资源 → 配置（分组标题式，页面项平铺不折叠）
         key: "training",

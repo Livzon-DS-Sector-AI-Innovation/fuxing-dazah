@@ -14,6 +14,7 @@ import {
   AnnualTrainingPlanItemBatchUpdateInput,
   TrainingSignInSheetData,
   TrainingNotificationData,
+  SopCatalogItem,
   SopTrainingRecord,
   SopTrainingEntry,
   SopTrainingPersonnel,
@@ -451,9 +452,24 @@ export async function fetchSopCatalog(params?: {
   department?: string
   page?: number
   page_size?: number
-}): Promise<{ data: any[]; meta?: { total: number } }> {
+}): Promise<{ data: SopCatalogItem[]; meta?: { total: number } }> {
   const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 200 })
   return fetchHrApi(`/hr/sop-catalog${qs}`, { errorMessage: '加载SOP目录失败' })
+}
+
+/** SOP 目录全量（可限一个部门）。后端单页上限 200 条：先取首页拿 total，其余页并发取。
+ *  翻页期间若有增删，页边界上可能读到重复行——按 id 去重兜住 */
+export async function fetchAllSopCatalog(department?: string): Promise<{ data: SopCatalogItem[] }> {
+  const PAGE_SIZE = 200
+  const first = await fetchSopCatalog({ department, page: 1, page_size: PAGE_SIZE })
+  const pageCount = Math.ceil((first.meta?.total ?? first.data.length) / PAGE_SIZE)
+  const rest = await Promise.all(
+    Array.from({ length: Math.max(pageCount - 1, 0) }, (_, i) =>
+      fetchSopCatalog({ department, page: i + 2, page_size: PAGE_SIZE })),
+  )
+  const byId = new Map<string, SopCatalogItem>()
+  for (const item of [first, ...rest].flatMap((page) => page.data)) byId.set(item.id, item)
+  return { data: [...byId.values()] }
 }
 
 export async function uploadSopCatalog(formData: FormData): Promise<{ code: number; message: string; data: { created: number; updated: number; errors?: string[] } }> {

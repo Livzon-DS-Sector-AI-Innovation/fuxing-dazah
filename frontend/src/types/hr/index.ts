@@ -582,6 +582,20 @@ export interface TrainingLedgerListResponse {
   }
 }
 
+// ─── SOP 目录 ───
+
+/** SOP 目录条目：某部门、某岗位需要培训的一份 SOP/文件，新员工入职培训的培训内容从这里取。
+ *  position_name 为空 = GMP 文件目录 Word 文档解析出的条目，只挂在部门下。
+ *  导入的岗位名多带部门前缀（如「提炼工程一部精制操作工」），组织架构岗位表里对不上 */
+export interface SopCatalogItem {
+  id: string
+  file_name: string
+  sop_number: string | null
+  category: string | null
+  department: string | null
+  position_name: string | null
+}
+
 // ─── SOP 培训文件登记表 / 二级表 ───
 
 export interface SopTrainingRecord {
@@ -786,6 +800,8 @@ export interface JobRequirement {
   headcount: number
   hired_count: number
   requirements?: string
+  /** 岗位职责（胜任度分析报告、AI 简历初筛用） */
+  duties?: string
   status: string
   urgency?: string
   owner?: string
@@ -798,20 +814,50 @@ export interface JobRequirementCreateInput {
   department: string
   headcount?: number
   requirements?: string
+  duties?: string
   urgency?: string
   owner?: string
   deadline?: string
 }
 
+/** 更新时没传的字段不会改；岗位描述两个传空串表示清空 */
 export interface JobRequirementUpdateInput {
   position_name?: string
   department?: string
   headcount?: number
   requirements?: string
+  duties?: string
   status?: string
   urgency?: string
   owner?: string
   deadline?: string
+}
+
+// ─── 招聘岗位信息（岗位库上每个岗位保存一份，新建岗位需求时带出） ───
+
+/** 列表概要：不带描述正文 */
+export interface RecruitmentPositionInfoSummary {
+  position_id: string
+  department: string
+  position_name: string
+  /** 岗位职责或任职要求任一有内容 */
+  configured: boolean
+  duties_length: number
+  requirements_length: number
+  /** 描述开头的一小段 */
+  excerpt: string | null
+  updated_at: string | null
+  updated_by_name: string | null
+}
+
+export interface RecruitmentPositionInfo extends RecruitmentPositionInfoSummary {
+  duties: string | null
+  requirements: string | null
+}
+
+export interface RecruitmentPositionInfoInput {
+  duties?: string | null
+  requirements?: string | null
 }
 
 export interface Candidate {
@@ -2405,4 +2451,71 @@ export interface DepartureExportLog {
 export interface DepartureLedgerQueryParams extends DepartureLedgerFilters, DepartureLedgerSort {
   page?: number
   page_size?: number
+}
+
+/** 培训人员名单「跟随员工档案」：生效的例外模式（空串 = 跟随全局字段规则） */
+export type RosterFollowMode = '' | 'follow' | 'manual'
+
+/** 例外来自哪里：member 按工号 / department 按名单体现部门；空串 = 无例外 */
+export type RosterFollowSource = '' | 'member' | 'department'
+
+export interface RosterFollowOption {
+  /** 后端 ORM 字段名 */
+  attr: string
+  label: string
+}
+
+/** 按工号的例外；已移出名单的人姓名/部门为 null（例外保留，重新进名单仍生效） */
+export interface RosterFollowException {
+  employee_number: string
+  mode: 'follow' | 'manual'
+  name: string | null
+  department: string | null
+}
+
+/** 按部门的例外：对名单上体现部门为该部门的所有人生效（低于人员例外）。
+ *  count 是名单上当前该部门的人数；为 0 说明已匹配不到人（部门改名 / 人员调走），规则暂不生效 */
+export interface RosterFollowDepartmentException {
+  department: string
+  mode: 'follow' | 'manual'
+  count: number
+}
+
+/** 名单上出现过的体现部门及人数（不含兜底占位「未分类」） */
+export interface RosterFollowDepartmentOption {
+  name: string
+  count: number
+}
+
+export interface RosterFollowConfig {
+  /** 全局跟随档案的字段（ORM 字段名） */
+  fields: string[]
+  department_modes: Record<string, 'follow' | 'manual'>
+  department_exceptions: RosterFollowDepartmentException[]
+  /** 可选部门清单（已配置的不在其中） */
+  departments: RosterFollowDepartmentOption[]
+  member_modes: Record<string, 'follow' | 'manual'>
+  exceptions: RosterFollowException[]
+  /** 可配置为跟随的字段 */
+  followable: RosterFollowOption[]
+  /** 恒跟随、不开放配置的字段（人员状态） */
+  locked: RosterFollowOption[]
+  /** 员工档案没有来源、只能在名单维护的字段 */
+  unsupported: RosterFollowOption[]
+}
+
+export interface RosterFollowConfigInput {
+  fields: string[]
+  member_modes: Record<string, 'follow' | 'manual'>
+  department_modes: Record<string, 'follow' | 'manual'>
+  /** true=保存并立即应用；false=只预览影响，不落库 */
+  apply: boolean
+}
+
+/** 保存前的影响预览：将用档案覆盖多少人、各字段多少个值 */
+export interface RosterFollowPreview {
+  total: number
+  changed: number
+  field_changes: Record<string, number>
+  dry_run: boolean
 }
