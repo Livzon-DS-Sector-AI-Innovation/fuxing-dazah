@@ -69,7 +69,7 @@ function PlanListView({ year, keyword, reloadKey, onYearChange, onKeywordChange,
         actions={
           <Space>
             <span suppressHydrationWarning>
-              <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+              <Upload accept=".xlsx" showUploadList={false} customRequest={async ({ file }) => {
                 const fd = new FormData(); fd.append('file', file as File)
                 try {
                   const r = await uploadAnnualTrainingPlans(fd)

@@ -2030,7 +2030,7 @@ async def generate_assessment_questions(
         raise HTTPException(400, "问答考核已停用 AI 出题，请从题库选题")
     try:
         content = await file.read()
-        # 尝试解码文件内容
+        # 尝试解码文件内容（入平台文件统一 .docx；旧版 .doc 不处理，提示另存）
         text = ""
         if file.filename.endswith(".txt"):
             text = content.decode("utf-8")
@@ -2041,48 +2041,7 @@ async def generate_assessment_questions(
             doc = Document(BytesIO(content))
             text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         elif file.filename.endswith(".doc"):
-            # 转换旧版 .doc 文件（兼容 macOS / Linux）
-            import asyncio
-            import os
-            import shutil
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-            try:
-                text = ""
-                if shutil.which("textutil"):
-                    out_path = tmp_path + ".txt"
-                    proc = await asyncio.create_subprocess_exec(
-                        "textutil", "-convert", "txt", tmp_path, "-output", out_path,
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    )
-                    await asyncio.wait_for(proc.communicate(), timeout=30)
-                    if proc.returncode == 0 and os.path.exists(out_path):
-                        with open(out_path) as f:
-                            text = f.read()
-                    if os.path.exists(out_path):
-                        os.unlink(out_path)
-                elif shutil.which("antiword"):
-                    proc = await asyncio.create_subprocess_exec(
-                        "antiword", tmp_path,
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                    if proc.returncode == 0:
-                        text = stdout.decode("utf-8", errors="ignore")
-                elif shutil.which("catdoc"):
-                    proc = await asyncio.create_subprocess_exec(
-                        "catdoc", tmp_path,
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                    if proc.returncode == 0:
-                        text = stdout.decode("utf-8", errors="ignore")
-                if not text:
-                    text = "（提示：服务器未安装 .doc 转换工具，请上传 .docx 或 .txt 格式文件）"
-            finally:
-                os.unlink(tmp_path)
+            raise HTTPException(400, "暂不支持旧版 .doc：请用 Word 另存为 .docx（或 .txt）后上传")
         else:
             text = content.decode("utf-8", errors="ignore")
 
@@ -5061,8 +5020,8 @@ async def upload_annual_training_plan(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel 年度培训计划，按年度+部门自动分类为计划项。受限用户仅可导入授权部门行。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式；旧版 .xls 请用 Excel 另存为 .xlsx 后上传")
     allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     try:
         content = await file.read()
@@ -5531,8 +5490,8 @@ async def upload_trainers(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel 内训师名单，按姓名+部门自动新增或更新。受限用户仅可导入本部门数据。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式；旧版 .xls 请用 Excel 另存为 .xlsx 后上传")
     allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     if not hr_scope.is_unrestricted and not allowed:
         raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
@@ -5850,8 +5809,8 @@ async def upload_dept_training_personnel(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel 部门培训人员表，按体现部门+品种去重 upsert。受限用户仅可导入本部门数据。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式；旧版 .xls 请用 Excel 另存为 .xlsx 后上传")
 
     try:
         content = await file.read()
@@ -5966,9 +5925,9 @@ async def upload_sop_catalog(
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """上传 SOP 目录（Excel 或 GMP 文件目录 Word 文档），按 SOP编号 自动新增或更新。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls", ".doc", ".docx")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls / .doc / .docx 格式")
+    """上传 SOP 目录（Excel .xlsx 或 GMP 文件目录 Word .docx），按 SOP编号 自动新增或更新。"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".docx")):
+        raise HTTPException(400, "仅支持 .xlsx / .docx 格式；旧版 .doc / .xls 请先用 Office 另存为新格式再上传")
     allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     if not hr_scope.is_unrestricted and not allowed:
         raise ForbiddenException("数据范围限制：仅可操作本人相关数据")

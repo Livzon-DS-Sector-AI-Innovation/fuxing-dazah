@@ -1,24 +1,21 @@
-"""SOP 目录 Word 文档（GMP 文件目录）解析。
+"""SOP 目录 Word 文档（GMP 文件目录 .docx）解析。
 
-人事手里的 SOP 目录是中英对照的 GMP 文件目录 Word 文档（.doc 旧二进制 / .docx）：
+入平台的数据文件统一用 .docx（系统不处理旧版 .doc）。人事手里的 SOP 目录是
+中英对照的 GMP 文件目录 Word 文档：
 - 表头合并行是大分类（如「岗位职责：提炼工程三部」）
 - 数据行四列：序号 / 文件名称（中英双语两段） / 文件编号 / 生效日期
 口径（2026-11-26 与人事对齐）：
 - 文件行只取中文文件名 → file_name
 - SOP 编号截断到版本号之前（SOP.01.3701.002 → SOP.01.3701）→ sop_number
 - 大分类整行 → category；部门从大分类冒号后推导，无冒号回退上传文件名括号内「-」尾段
-.doc 旧格式走 olefile 直接读 Word 二进制 piece table——生产镜像（Debian）里没有
-antiword/catdoc/textutil，quality/standard_doc_parser 的外部工具链在生产拿不到文本。
 """
 
 from __future__ import annotations
 
 import io
 import re
-import struct
 import zipfile
 
-_OLE_MAGIC = b"\xd0\xcf\x11\xe0"
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 # 版本号 = 编号末尾「.三位数字」段（SOP.01.3701.002 → SOP.01.3701；SOP.01.3701 本身不动）
 _VERSION_TAIL_RE = re.compile(r"^(.+)\.\d{3}$")
@@ -32,47 +29,18 @@ _HEADER_CELLS = {
     "生效日期", "effective date", "标准文件", "standard document",
 }
 
-_DOC_FAIL_MSG = "无法解析该 .doc 文件（可能是旧版或损坏的 Word 文档），请用 Word 另存为 .docx 后重试"
-
 
 def parse_catalog_document(content: bytes, filename: str = "") -> list[dict[str, str | None]]:
-    """GMP 文件目录 Word 文档 → SOP 目录条目列表。
+    """GMP 文件目录 Word 文档（.docx）→ SOP 目录条目列表。
 
     条目字段：category / file_name / sop_number / department（file_name 必有，其余可为 None）。
     """
-    if content.startswith(_OLE_MAGIC):
-        try:
-            cells = _doc_cells(content)
-        except ValueError:
-            raise
-        except Exception as e:
-            # olefile/struct 的底层异常统一转成用户可读提示，避免冒成 500
-            raise ValueError(_DOC_FAIL_MSG) from e
-    elif _is_docx(content):
-        cells = _docx_cells(content)
-    else:
-        raise ValueError("仅支持 .doc / .docx 格式的 GMP 文件目录文档")
-    entries = _walk_cells(cells, filename)
+    if not _is_docx(content):
+        raise ValueError("仅支持 .docx 格式的 GMP 文件目录文档；旧版 .doc 请用 Word 另存为 .docx 后重试")
+    entries = _walk_cells(_docx_cells(content), filename)
     if not entries:
-        raise ValueError("未从文档中解析出目录条目，请确认为 GMP 文件目录格式（或另存为 .docx 后重试）")
+        raise ValueError("未从文档中解析出目录条目，请确认为 GMP 文件目录格式")
     return entries
-
-
-def looks_like_word_document(content: bytes) -> bool:
-    """OLE 魔数且含 WordDocument 流（.doc），或含 word/document.xml 的 zip（.docx）。
-
-    旧版 .xls 同样是 OLE 复合文档但没有 WordDocument 流，须放行走 Excel 路径；
-    xlsx 与 docx 都是 zip，按内部成员区分。
-    """
-    if content.startswith(_OLE_MAGIC):
-        try:
-            import olefile
-
-            with olefile.OleFileIO(io.BytesIO(content)) as ole:
-                return ole.exists("WordDocument")
-        except Exception:
-            return False
-    return _is_docx(content)
 
 
 # ── cell 文本提取 ──
@@ -96,72 +64,6 @@ def _docx_cells(content: bytes) -> list[str]:
             texts = [_norm_cell(c.text) for c in row.cells]
             cells.extend(t for i, t in enumerate(texts) if i == 0 or t != texts[i - 1])
     return cells
-
-
-def _doc_cells(content: bytes) -> list[str]:
-    """旧 .doc 二进制 → 首个表格区段的 cell 文本序列。
-
-    WordDocument 流 FIB 定位 piece table（fcClx/lcbClx），按 fCompressed 位分段解码
-    （cp1252 半宽偏移减半 / UTF-16LE 全宽），再用单元格标记 \\x07 切 cell。
-    """
-    import olefile
-
-    ole = olefile.OleFileIO(io.BytesIO(content))
-    try:
-        wd = ole.openstream("WordDocument").read()
-        if len(wd) < 0x01A6 or struct.unpack_from("<H", wd, 0)[0] != 0xA5EC:
-            raise ValueError(_DOC_FAIL_MSG)
-        flags = struct.unpack_from("<H", wd, 0x0A)[0]
-        table_stream = ole.openstream("1Table" if (flags >> 9) & 1 else "0Table").read()
-        fc_clx, lcb_clx = struct.unpack_from("<II", wd, 0x01A2)
-        plc = _plcpcd(table_stream[fc_clx:fc_clx + lcb_clx])
-        if plc is None:
-            raise ValueError(_DOC_FAIL_MSG)
-        text = _decode_pieces(wd, plc)
-    finally:
-        ole.close()
-
-    # 大分类行文本在首个 \x07 之前（分类行 cell 先于表格区段出现），表后页脚在末段，
-    # 都不丢——walker 对空段稳健，页脚段无冒号不会被误判为大分类
-    return [_norm_cell(seg) for seg in text.split("\x07")]
-
-
-def _plcpcd(clx: bytes) -> bytes | None:
-    """CLX → PlcPcd 段（跳过 clxt=1 的 Prc 修订留痕，取 clxt=2 的 Pcdt）。"""
-    i = 0
-    while i < len(clx):
-        tag = clx[i]
-        if tag == 1:
-            if i + 3 > len(clx):
-                return None
-            i += 3 + struct.unpack_from("<H", clx, i + 1)[0]
-        elif tag == 2:
-            if i + 5 > len(clx):
-                return None
-            lcb = struct.unpack_from("<I", clx, i + 1)[0]
-            return clx[i + 5:i + 5 + lcb]
-        else:
-            return None
-    return None
-
-
-def _decode_pieces(wd: bytes, plc: bytes) -> str:
-    """PlcPcd → 全文文本（按 piece 的 fCompressed 位选编码逐段解码）。"""
-    n = (len(plc) - 4) // 12
-    if n <= 0:
-        raise ValueError(_DOC_FAIL_MSG)
-    cps = struct.unpack_from("<%dI" % (n + 1), plc, 0)
-    parts: list[str] = []
-    for k in range(n):
-        fc = struct.unpack_from("<I", plc, (n + 1) * 4 + k * 8 + 2)[0]
-        cnt = cps[k + 1] - cps[k]
-        if fc & 0x40000000:
-            off = (fc & 0x3FFFFFFF) >> 1
-            parts.append(wd[off:off + cnt].decode("cp1252", errors="replace"))
-        else:
-            off = fc & 0x3FFFFFFF
-            parts.append(wd[off:off + cnt * 2].decode("utf-16-le", errors="replace"))
-    return "".join(parts)
 
 
 # ── cell 序列 → 目录条目 ──
@@ -212,8 +114,7 @@ def _next_meaningful(cells: list[str], start: int) -> int | None:
 def _walk_cells(cells: list[str], filename: str) -> list[dict[str, str | None]]:
     """扁平 cell 序列按锚点走读：序号 cell → 中文名称 cell → 编号 cell 收敛成一条。
 
-    不重建行结构（.doc 的 \x07 行尾标记与空 cell 边界有歧义），锚点配对对两种
-    格式一致且对空 cell / 行尾标记稳健；无序号的行用「中文 cell 紧跟编号 cell」兜底。
+    不重建行结构，锚点配对对空 cell 稳健；无序号的行用「中文 cell 紧跟编号 cell」兜底。
     """
     entries: list[dict[str, str | None]] = []
     category: str | None = None

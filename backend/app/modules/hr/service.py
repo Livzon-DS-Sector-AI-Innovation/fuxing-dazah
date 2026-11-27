@@ -477,10 +477,12 @@ class EmployeeService:
         self, file_bytes: bytes, allowed_departments: set[str] | None = None,
         filename: str = "",
     ) -> dict:
-        """上传 SOP 目录：Excel 或 GMP 文件目录 Word（.doc/.docx），按 SOP 编号 + 部门 upsert。"""
-        from app.modules.hr.sop_catalog_doc_parser import looks_like_word_document
+        """上传 SOP 目录：Excel(.xlsx) 或 GMP 文件目录 Word(.docx)，按 SOP 编号 + 部门 upsert。
 
-        if looks_like_word_document(file_bytes):
+        入平台数据统一 .docx/.xlsx，旧版 .doc/.xls 在入口就被拒（另有明确提示）；
+        .docx 分流按文件扩展名判断，部门推导还要用文件名。
+        """
+        if filename.lower().endswith(".docx"):
             from app.modules.hr.sop_catalog_doc_parser import parse_catalog_document
 
             entries = await asyncio.to_thread(parse_catalog_document, file_bytes, filename)

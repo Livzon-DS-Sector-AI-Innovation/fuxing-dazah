@@ -73,7 +73,7 @@ async def _get_position_training(employee) -> tuple[list[str], list[str]]:
         r = await s.execute(select(PositionTraining).where(
             PositionTraining.department == employee.department,
             PositionTraining.position_name == employee.position,
-            PositionTraining.is_deleted == False,
+            PositionTraining.is_deleted == False,  # noqa: E712
         ))
         for pt in r.scalars().all():
             label = f"{pt.training_category}" + (f" （{pt.training_method}）" if pt.training_method else "")
@@ -86,7 +86,6 @@ async def _get_position_training(employee) -> tuple[list[str], list[str]]:
 async def generate_onboarding_certificate(employee: Employee) -> BytesIO:
     """上岗证 — 培训内容从岗位培训表自动填充。"""
     from app.core.database import async_session_factory
-
     from app.modules.hr.training_template_store import load_training_template_bytes
 
     contents, trainer_list = await _get_position_training(employee)

@@ -112,7 +112,7 @@ function TrainersTab() {
         actions={
           <Space>
             <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增内训师</Button>
-            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            <Upload accept=".xlsx" showUploadList={false} customRequest={async ({ file }) => {
               const fd = new FormData(); fd.append('file', file as File)
               try {
                 const d = await uploadTrainers(fd)
@@ -285,7 +285,7 @@ function DeptPersonnelTab() {
         actions={
           <Space>
             <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增</Button>
-            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            <Upload accept=".xlsx" showUploadList={false} customRequest={async ({ file }) => {
               const fd = new FormData(); fd.append('file', file as File)
               try {
                 const d = await uploadDeptTrainingPersonnel(fd)

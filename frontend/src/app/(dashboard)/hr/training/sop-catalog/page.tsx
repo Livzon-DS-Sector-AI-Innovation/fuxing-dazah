@@ -97,7 +97,7 @@ export default function SopCatalogPage() {
         title="SOP目录"
         actions={
           <Space>
-            <Upload accept=".xlsx,.xls,.doc,.docx" showUploadList={false} customRequest={async ({ file }) => {
+            <Upload accept=".xlsx,.docx" showUploadList={false} customRequest={async ({ file }) => {
               const fd = new FormData(); fd.append('file', file as File)
               try {
                 const d = await uploadSopCatalog(fd)
@@ -107,7 +107,7 @@ export default function SopCatalogPage() {
                 message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll()
               } catch (err) { message.error((err as Error)?.message || '上传失败') }
             }}>
-              <Tooltip title="支持 Excel 或 GMP 文件目录 Word 文档（.doc/.docx），自动解析大分类与SOP编号">
+              <Tooltip title="支持 Excel(.xlsx) 或 GMP 文件目录 Word(.docx)，自动解析大分类与SOP编号；旧版 .doc/.xls 请先用 Office 另存">
                 <Button icon={<UploadOutlined />}>上传SOP</Button>
               </Tooltip>
             </Upload>
