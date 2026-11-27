@@ -23,6 +23,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.hr.approval_credentials import approval_credentials
 from app.modules.hr.labor_contract import repository as repo
 from app.modules.hr.labor_contract import service as contract_service
 from app.modules.hr.labor_contract import settings as contract_settings
@@ -67,7 +68,8 @@ async def load_definition(approval_code: str) -> dict[str, Any] | None:
     if cached and now - cached[0] < _DEFINITION_TTL_SECONDS:
         return cached[1]
     try:
-        detail = await get_approval_detail(approval_code)
+        app_id, app_secret = approval_credentials()
+        detail = await get_approval_detail(approval_code, app_id=app_id, app_secret=app_secret)
     except ApprovalAPIError as exc:
         logger.warning("获取审批定义失败: %s → %s", approval_code, exc)
         return None
@@ -172,6 +174,7 @@ async def initiate(
     employee = await repo.get_employee(db, contract.employee_number)
     initiator = (getattr(employee, "feishu_open_id", None) if employee else None) or approver_open_id
     uuid = f"lc-renew-{contract.id}-{contract.approval_attempt or 0}"
+    app_id, app_secret = approval_credentials()
 
     try:
         instance_code = await create_instance(
@@ -180,6 +183,8 @@ async def initiate(
             form=json.dumps(form, ensure_ascii=False, separators=(",", ":")),
             node_approver_open_id_list=[{"key": node_id, "value": [approver_open_id]}],
             uuid=uuid,
+            app_id=app_id,
+            app_secret=app_secret,
         )
     except ApprovalAPIError as exc:
         recovered = await _recover_instance_code(approval_code, contract)
@@ -195,15 +200,17 @@ async def _recover_instance_code(approval_code: str, contract: LaborContract) ->
     """uuid 冲突（创建成功但保存前崩溃的窗口）→ 按 7 天内实例找回落 mark。"""
     try:
         now_ms = int(time.time() * 1000)
+        app_id, app_secret = approval_credentials()
         codes = await list_instance_codes(
-            approval_code, now_ms - 7 * 24 * 3600 * 1000, now_ms
+            approval_code, now_ms - 7 * 24 * 3600 * 1000, now_ms,
+            app_id=app_id, app_secret=app_secret,
         )
     except ApprovalAPIError:
         return None
     mark = f"{_RECOVERY_MARK_PREFIX}{contract.id}"
     for code in codes[-50:]:
         try:
-            instance = await get_instance(code)
+            instance = await get_instance(code, app_id=app_id, app_secret=app_secret)
         except ApprovalAPIError:
             continue
         fields = form_widgets_to_fields(instance.get("form", []))
@@ -228,12 +235,13 @@ async def sync_pending_results(
     pending = await repo.list_pending_approval_sync(db)
     counts = {"approved": 0, "rejected": 0, "canceled": 0}
     canceled_rows: list[LaborContract] = []
+    app_id, app_secret = approval_credentials()
     for contract in pending:
         instance_code = contract.approval_instance_code
         if not instance_code:
             continue
         try:
-            instance = await get_instance(instance_code)
+            instance = await get_instance(instance_code, app_id=app_id, app_secret=app_secret)
         except ApprovalAPIError as exc:
             logger.warning("拉取审批实例失败: %s → %s", contract.approval_instance_code, exc)
             continue

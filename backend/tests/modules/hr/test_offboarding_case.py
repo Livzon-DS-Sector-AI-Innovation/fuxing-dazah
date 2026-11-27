@@ -605,7 +605,7 @@ async def test_sync_skips_pending_and_isolates_failures(
     assert await approval.sync_pending_results(db_session) == {}
     assert (await repo.get_case(db_session, first.id)).status == OffboardingCase.STATUS_APPROVING
 
-    async def _by_code(instance_code: str) -> dict:
+    async def _by_code(instance_code: str, **kwargs) -> dict:
         if instance_code == "INST-R":
             raise RuntimeError("boom")
         return {"status": "APPROVED", "form": []}

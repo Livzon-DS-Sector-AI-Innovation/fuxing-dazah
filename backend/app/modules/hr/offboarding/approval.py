@@ -14,6 +14,8 @@
 「站内登记办结」（HR 在办理抽屉手动推进），流程不堵死；未配置是设计内路径，
 不按失败报警，只有「配置了但发起失败」才通知 HR。
 定义加载复用 labor_contract.renewal_approval.load_definition（按编码缓存）。
+审批 API 统一传 HR 审批应用凭证（hr.approval_credentials）：全局平台应用未配
+审批权限（99991672 Access denied），有权限的是福兴职称审批应用。
 """
 
 import json
@@ -26,6 +28,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.hr.approval_credentials import approval_credentials
 from app.modules.hr.labor_contract.renewal_approval import load_definition
 from app.modules.hr.models import HrDepartment as Department
 from app.modules.hr.offboarding import clearance, notify
@@ -184,6 +187,7 @@ async def _initiate(
     case.approval_attempt = (case.approval_attempt or 0) + 1
     await db.flush()
 
+    app_id, app_secret = approval_credentials()
     try:
         instance_code = await create_instance(
             approval_code,
@@ -191,6 +195,8 @@ async def _initiate(
             form=json.dumps(form, ensure_ascii=False, separators=(",", ":")),
             node_approver_open_id_list=[{"key": node_id, "value": [approver_open_id]}],
             uuid=f"ob-{stage}-{case.id}-{case.approval_attempt}",
+            app_id=app_id,
+            app_secret=app_secret,
         )
     except ApprovalAPIError as exc:
         recovered = await _recover_instance_code(approval_code, case, stage)
@@ -218,13 +224,17 @@ async def _recover_instance_code(
     """uuid 冲突（创建成功但保存前崩溃的窗口）→ 按 7 天内实例找回落库 mark。"""
     try:
         now_ms = int(time.time() * 1000)
-        codes = await list_instance_codes(approval_code, now_ms - 7 * 24 * 3600 * 1000, now_ms)
+        app_id, app_secret = approval_credentials()
+        codes = await list_instance_codes(
+            approval_code, now_ms - 7 * 24 * 3600 * 1000, now_ms,
+            app_id=app_id, app_secret=app_secret,
+        )
     except ApprovalAPIError:
         return None
     mark = f"{_RECOVERY_MARK_PREFIX}{case.id} {stage}"
     for code in codes[-50:]:
         try:
-            instance = await get_instance(code)
+            instance = await get_instance(code, app_id=app_id, app_secret=app_secret)
         except ApprovalAPIError:
             continue
         fields = form_widgets_to_fields(instance.get("form", []))
@@ -275,8 +285,9 @@ async def _fetch_instance(instance_code: str | None) -> dict[str, Any] | None:
     """拉取实例；拉取失败或尚未办结（PENDING）返回 None，下一轮再看。"""
     if not instance_code:
         return None
+    app_id, app_secret = approval_credentials()
     try:
-        instance = await get_instance(instance_code)
+        instance = await get_instance(instance_code, app_id=app_id, app_secret=app_secret)
     except ApprovalAPIError as exc:
         logger.warning("拉取离职审批实例失败: %s → %s", instance_code, exc)
         return None
