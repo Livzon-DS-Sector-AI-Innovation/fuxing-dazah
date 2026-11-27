@@ -1469,3 +1469,323 @@ class TestRosterOrgRefresh:
         assert rows2[0]["variety"] == "胶囊"
         # certificates 名单为空时从档案补齐
         assert rows2[0]["certificates"] == "GMP 证书"
+
+
+# ─── 名单字段「跟随档案」规则 ───
+
+
+class TestRosterFollow:
+    """全局字段规则 + 按工号例外；未配置即现状（只有人员状态跟随）。
+
+    用例一律用随机工号 + employee_numbers 限定范围，配置读取打桩：
+    测试库连着开发库，全局规则不得扫到真实名单数据，也不受 KV 里遗留配置影响。
+    """
+
+    @staticmethod
+    async def _seed(
+        db_session: AsyncSession,
+    ) -> tuple[hr_models.Employee, hr_models.TrainingRosterProfile]:
+        """一名员工 + 对应名单行，字段值刻意各不相同，便于断言哪些被覆盖。"""
+        number = f"E{_rand()}"
+        employee = hr_models.Employee(
+            name="档案名", employee_number=number, department="档案部", position="档案岗",
+            duty="档案职务", status="在职", hire_date=date(2024, 1, 1), education="本科",
+        )
+        profile = hr_models.TrainingRosterProfile(
+            employee_number=number, name="名单名", department="名单部", position="名单岗",
+            duty="名单职务", status="在职", education="硕士", team="一班",
+        )
+        db_session.add_all([employee, profile])
+        await db_session.flush()
+        return employee, profile
+
+    @staticmethod
+    def _stub_config(
+        monkeypatch: pytest.MonkeyPatch, cfg: sync_config.RosterFollowConfig,
+    ) -> None:
+        """配置读取固定返回给定规则（不读共享 KV）。"""
+        async def _fake_load(_session: AsyncSession) -> sync_config.RosterFollowConfig:
+            return cfg
+
+        monkeypatch.setattr(sync_service, "load_roster_follow_config", _fake_load)
+
+    async def test_follow_overwrites_only_configured_fields(
+        self, db_session: AsyncSession,
+    ) -> None:
+        employee, profile = await self._seed(db_session)
+        cfg = sync_config.RosterFollowConfig(fields=frozenset({"department", "education"}))
+
+        stats = await sync_service.EmployeeSyncService(db_session).sync_roster_follow_fields(
+            cfg, employee_numbers={employee.employee_number},
+        )
+
+        assert stats["changed"] == 1
+        assert stats["field_changes"] == {"department": 1, "education": 1}
+        await db_session.refresh(profile)
+        assert profile.department == "档案部"   # 设为跟随：档案值覆盖
+        assert profile.education == "本科"
+        assert profile.name == "名单名"        # 未设为跟随：名单值保留
+        assert profile.position == "名单岗"
+        assert profile.duty == "名单职务"
+        assert profile.team == "一班"
+
+    async def test_dry_run_reports_without_writing(self, db_session: AsyncSession) -> None:
+        employee, profile = await self._seed(db_session)
+        cfg = sync_config.RosterFollowConfig(fields=frozenset({"department"}))
+
+        stats = await sync_service.EmployeeSyncService(db_session).sync_roster_follow_fields(
+            cfg, dry_run=True, employee_numbers={employee.employee_number},
+        )
+
+        assert stats["dry_run"] is True
+        assert stats["field_changes"] == {"department": 1}
+        await db_session.refresh(profile)
+        assert profile.department == "名单部"   # 预览不落库
+
+    async def test_member_mode_overrides_global(self, db_session: AsyncSession) -> None:
+        employee, profile = await self._seed(db_session)
+        number = employee.employee_number
+        service = sync_service.EmployeeSyncService(db_session)
+
+        # 「全部手动」：全局设了跟随也不动
+        manual = sync_config.RosterFollowConfig(
+            fields=frozenset({"department"}), member_modes={number: "manual"},
+        )
+        stats = await service.sync_roster_follow_fields(manual, employee_numbers={number})
+        assert stats["changed"] == 0
+
+        # 「全部跟随档案」：全局没设也全跟（仅限档案有来源的字段）
+        follow_all = sync_config.RosterFollowConfig(member_modes={number: "follow"})
+        stats = await service.sync_roster_follow_fields(follow_all, employee_numbers={number})
+        assert stats["changed"] == 1
+        await db_session.refresh(profile)
+        assert profile.name == "档案名"
+        assert profile.department == "档案部"
+        assert profile.position == "档案岗"
+        assert profile.duty == "档案职务"
+        assert profile.education == "本科"
+        assert profile.team == "一班"          # 档案无此字段：保留名单值
+
+    async def test_department_rule_scope_and_member_override(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """部门例外对整个名单体现部门生效；人员例外覆盖部门例外；别的部门不受影响。"""
+        dept, other = _rand("跟随部"), _rand("别部")
+        e1, p1 = await self._seed(db_session)
+        e2, p2 = await self._seed(db_session)
+        e3, p3 = await self._seed(db_session)
+        # 前两人同属一个（随机命名的）部门；第三人在别的部门
+        for obj in (e1, e2, p1, p2):
+            obj.department = dept
+        e3.department = p3.department = other
+        await db_session.flush()
+        service = sync_service.EmployeeSyncService(db_session)
+        cfg = sync_config.RosterFollowConfig(
+            department_modes={dept: "follow"},
+            member_modes={e2.employee_number: "manual"},
+        )
+        self._stub_config(monkeypatch, cfg)
+
+        # 不限定范围：随机部门名保证扫不到真实名单
+        stats = await service.sync_roster_follow_fields(cfg)
+
+        assert stats["changed"] == 1
+        for profile in (p1, p2, p3):
+            await db_session.refresh(profile)
+        assert p1.name == "档案名"        # 部门例外：全部跟随档案
+        assert p2.name == "名单名"        # 人员例外覆盖部门例外
+        assert p3.name == "名单名"        # 别的部门不受影响
+        row1, _ = await service.training_roster(keyword=e1.employee_number)
+        assert (row1[0]["follow_mode"], row1[0]["follow_source"]) == ("follow", "department")
+        row2, _ = await service.training_roster(keyword=e2.employee_number)
+        assert (row2[0]["follow_mode"], row2[0]["follow_source"]) == ("manual", "member")
+
+        # 部门例外设为「全部手动」：全局设了跟随也不动这个部门，别的部门照常跟随。
+        # 全局字段非空时必须限定人员范围——不限定会按全局规则扫到共享库里的真实名单
+        p1.name = "名单名"
+        await db_session.flush()
+        shield = sync_config.RosterFollowConfig(
+            fields=frozenset({"name", "position"}), department_modes={dept: "manual"},
+        )
+        stats = await service.sync_roster_follow_fields(
+            shield,
+            employee_numbers={e1.employee_number, e2.employee_number, e3.employee_number},
+        )
+        assert stats["changed"] == 1
+        for profile in (p1, p2, p3):
+            await db_session.refresh(profile)
+        assert p1.name == "名单名"        # 部门「全部手动」挡住了全局跟随
+        assert p2.name == "名单名"
+        assert p3.name == "档案名"        # 别的部门按全局规则跟随
+        assert p3.position == "档案岗"
+
+        # 部门例外下，跟随字段同样不接受手改；手动字段照常保存
+        self._stub_config(monkeypatch, cfg)
+        await service.update_roster_entry(e1.employee_number, {"name": "手改名", "team": "三班"})
+        await db_session.refresh(p1)
+        assert p1.name == "名单名"        # 跟随字段：手改被忽略，值保持不变
+        assert p1.team == "三班"
+
+    async def test_manual_mode_still_tracks_status(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """「全部手动」只豁免可配置字段；人员状态恒跟随（病假/产假/离职统计靠它）。"""
+        employee, profile = await self._seed(db_session)
+        self._stub_config(monkeypatch, sync_config.RosterFollowConfig(
+            member_modes={employee.employee_number: "manual"},
+        ))
+        employee.status = "病假"
+        await db_session.flush()
+
+        await sync_service.EmployeeSyncService(db_session).sync_roster_membership()
+
+        await db_session.refresh(profile)
+        assert profile.status == "病假"
+
+    async def test_unconfigured_is_noop(self, db_session: AsyncSession) -> None:
+        """没有任何字段跟随时是空操作：不限定范围也不扫任何数据。"""
+        await self._seed(db_session)
+
+        stats = await sync_service.EmployeeSyncService(db_session).sync_roster_follow_fields(
+            sync_config.RosterFollowConfig(),
+        )
+
+        assert stats == {"total": 0, "changed": 0, "field_changes": {}, "dry_run": False}
+
+    async def test_config_roundtrip_and_tolerant_load(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """KV 往返保真；损坏 JSON / 代码演进后的未知字段按容错处理，不让对账整体失败。"""
+        original = await sync_config.load_roster_follow_config(db_session)
+        try:
+            cfg = sync_config.parse_roster_follow_config(
+                ["department", "level"], {" E1 ": "follow", "": "manual", "E2": "manual"},
+                {" 研发部 ": "follow"},
+            )
+            await sync_config.save_roster_follow_config(db_session, cfg)
+            await db_session.flush()
+            assert await sync_config.load_roster_follow_config(db_session) == cfg
+
+            await sync_config.save_config_values(db_session, {
+                sync_config.KEY_ROSTER_FOLLOW: "{坏 JSON",
+            })
+            await db_session.flush()
+            assert await sync_config.load_roster_follow_config(db_session) \
+                == sync_config.RosterFollowConfig()
+
+            await sync_config.save_config_values(db_session, {sync_config.KEY_ROSTER_FOLLOW: (
+                '{"fields": ["department", "nope"], '
+                '"member_modes": {"E1": "follow", "E2": "weird"}, '
+                '"department_modes": {"研发部": "manual", "生产部": "odd"}}'
+            )})
+            await db_session.flush()
+            loaded = await sync_config.load_roster_follow_config(db_session)
+            assert loaded.fields == frozenset({"department"})
+            assert loaded.member_modes == {"E1": "follow"}
+            assert loaded.department_modes == {"研发部": "manual"}
+        finally:
+            await sync_config.save_roster_follow_config(db_session, original)
+
+    def test_parse_rejects_unknown_field_and_mode(self) -> None:
+        """人员状态不开放配置；未知字段/模式报错，防拼写错误静默失效。"""
+        with pytest.raises(ValueError, match="不可配置"):
+            sync_config.parse_roster_follow_config(["status"], None)
+        with pytest.raises(ValueError, match="未知的人员跟随模式"):
+            sync_config.parse_roster_follow_config([], {"E1": "whatever"})
+        with pytest.raises(ValueError, match="未知的部门跟随模式"):
+            sync_config.parse_roster_follow_config([], None, {"研发部": "whatever"})
+        assert sync_config.parse_roster_follow_config(None, None) \
+            == sync_config.RosterFollowConfig()
+
+    def test_options_partition_roster_columns(self) -> None:
+        """候选项三分：可配置 / 恒跟随的人员状态 / 档案无来源；不重不漏，不含工号。"""
+        options = sync_config.roster_follow_options()
+
+        attrs = [o["attr"] for group in options.values() for o in group]
+
+        assert len(attrs) == len(set(attrs))
+        assert "employee_number" not in attrs
+        assert {o["attr"] for o in options["followable"]} \
+            == set(sync_config.ROSTER_FOLLOWABLE_FIELDS)
+        assert [o["attr"] for o in options["locked"]] == ["status"]
+        # 列名「部门」在配置页写作「实际部门」，避免与体现部门混淆
+        assert next(
+            o["label"] for o in options["unsupported"] if o["attr"] == "actual_department"
+        ) == "实际部门"
+        assert next(
+            o["label"] for o in options["followable"] if o["attr"] == "level"
+        ) == "级别（报表用职级）"
+        assert {o["attr"] for o in options["followable"] + options["locked"]} | {
+            o["attr"] for o in options["unsupported"]
+        } | {"employee_number"} == set(sync_config.TRAINING_ROSTER_FIELDS.values()) | {"level"}
+
+    async def test_edit_ignores_followed_fields(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """跟随档案的字段不接受手动编辑（改了也会被下一轮对账覆盖）；手动字段照常保存。"""
+        employee, profile = await self._seed(db_session)
+        self._stub_config(monkeypatch, sync_config.RosterFollowConfig(
+            fields=frozenset({"department"}),
+        ))
+
+        await sync_service.EmployeeSyncService(db_session).update_roster_entry(
+            employee.employee_number, {"department": "手改部", "team": "二班"},
+        )
+
+        await db_session.refresh(profile)
+        assert profile.department == "名单部"
+        assert profile.team == "二班"
+
+    async def test_employee_edit_applies_follow_immediately(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """同步未启用时没有定时对账兜底：档案编辑后，跟随字段当场对齐名单。"""
+        from app.modules.hr.schemas import EmployeeUpdate
+        from app.modules.hr.service import EmployeeService
+
+        employee, profile = await self._seed(db_session)
+        self._stub_config(monkeypatch, sync_config.RosterFollowConfig(
+            fields=frozenset({"position"}),
+        ))
+        monkeypatch.setattr(EmployeeService, "_ensure_employees_writable", AsyncMock())
+
+        await EmployeeService(db_session).update_employee(
+            employee.id, EmployeeUpdate(position="新岗位", duty="新职务"),
+        )
+
+        await db_session.refresh(profile)
+        assert profile.position == "新岗位"   # 跟随字段：即时对齐
+        assert profile.duty == "名单职务"     # 未跟随：不动
+
+    async def test_reconcile_applies_follow_rules(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """每轮对账按规则覆盖；未配置时对账不动名单字段（现状）。"""
+        employee, profile = await self._seed(db_session)
+        number = employee.employee_number
+        record_id = f"rec_{_rand()}"
+        employee.feishu_record_id = record_id
+        await db_session.flush()
+        await _write_config(db_session)
+        service = sync_service.EmployeeSyncService(db_session)
+        _mock_bitable(monkeypatch, source_records=[{
+            "record_id": record_id,
+            "fields": {"工号": number, "姓名": "对账新名", "体现部门": "对账部"},
+        }])
+
+        self._stub_config(monkeypatch, sync_config.RosterFollowConfig())
+        stats = await service.reconcile()
+        assert stats["roster_fields_synced"] == 0
+        await db_session.refresh(profile)
+        assert profile.name == "名单名"
+        assert profile.department == "名单部"
+
+        # 该人设为「全部跟随档案」：下一轮对账即覆盖
+        self._stub_config(monkeypatch, sync_config.RosterFollowConfig(
+            member_modes={number: "follow"},
+        ))
+        stats = await service.reconcile()
+        assert stats["roster_fields_synced"] == 1
+        await db_session.refresh(profile)
+        assert profile.name == "对账新名"
+        assert profile.department == "对账部"

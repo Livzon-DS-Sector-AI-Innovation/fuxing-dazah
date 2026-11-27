@@ -193,13 +193,3 @@ export async function deletePositionByName(name: string, department?: string) {
     errorMessage: '删除失败',
   })
 }
-
-
-export async function updatePositionHeadcount(department: string, name: string, headcount: number | null): Promise<{ message: string }> {
-  return fetchHrApi(`/hr/positions/by-name/${encodeURIComponent(name)}?department=${encodeURIComponent(department ?? '')}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ headcount }),
-    errorMessage: '编制人数更新失败',
-  })
-}

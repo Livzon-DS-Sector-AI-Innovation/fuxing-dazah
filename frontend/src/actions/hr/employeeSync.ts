@@ -1,7 +1,10 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import type { EmployeeSyncConfig, EmployeeSyncStats } from '@/types/hr'
+import type {
+  EmployeeSyncConfig, EmployeeSyncStats, RosterFollowConfig, RosterFollowConfigInput,
+  RosterFollowMode, RosterFollowPreview, RosterFollowSource,
+} from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 
 // ─── 员工档案多维表格同步 ───
@@ -73,6 +76,10 @@ export interface TrainingRosterRow {
   gmp_training_date?: string | null
   /** 人员分类标签名（随名单行下发；不含已移除的） */
   tags?: string[]
+  /** 生效的例外模式（空串/缺省 = 跟随全局字段规则） */
+  follow_mode?: RosterFollowMode
+  /** 例外来源：member 按工号 / department 按名单体现部门（缺省 = 无例外） */
+  follow_source?: RosterFollowSource
 }
 
 export async function fetchTrainingRoster(params?: {
@@ -80,7 +87,17 @@ export async function fetchTrainingRoster(params?: {
   keyword?: string
   page?: number
   page_size?: number
-}): Promise<{ data: TrainingRosterRow[]; meta?: { total: number; scoped_departments?: string[] | null } }> {
+}): Promise<{
+  data: TrainingRosterRow[]
+  meta?: {
+    total: number
+    scoped_departments?: string[] | null
+    /** 全局已设为跟随员工档案的字段 */
+    follow_fields?: string[]
+    /** 可跟随员工档案的字段范围（档案里没有来源的字段不在此列，只能在名单维护） */
+    followable_fields?: string[]
+  }
+}> {
   const qs = new URLSearchParams()
   if (params?.department) qs.set('department', params.department)
   if (params?.keyword) qs.set('keyword', params.keyword)
@@ -122,6 +139,29 @@ export async function updateTrainingRosterEntry(
     },
   )
   revalidatePath('/hr/training/personnel')
+  return res
+}
+
+export async function fetchTrainingRosterFollowConfig(): Promise<{ data: RosterFollowConfig }> {
+  return fetchHrApi('/hr/employee-sync/training-roster/follow-config', {
+    errorMessage: '加载名单跟随规则失败',
+  })
+}
+
+/** 保存名单跟随规则。apply=false 只预览影响（不落库）；apply=true 保存并立即按规则覆盖一遍。
+ * 需要系统配置权限（hr:settings:manage）。 */
+export async function saveTrainingRosterFollowConfig(
+  input: RosterFollowConfigInput,
+): Promise<{ data: RosterFollowConfig & { preview: RosterFollowPreview }; message: string }> {
+  const res = await fetchHrApi<{ data: RosterFollowConfig & { preview: RosterFollowPreview }; message: string }>(
+    '/hr/employee-sync/training-roster/follow-config',
+    {
+      method: 'PUT',
+      body: JSON.stringify(input),
+      errorMessage: '保存名单跟随规则失败',
+    },
+  )
+  if (input.apply) revalidatePath('/hr/training/personnel')
   return res
 }
 

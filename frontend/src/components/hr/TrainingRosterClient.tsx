@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, App, Button, DatePicker, Form, Input, Modal, Select, Space, Table, Tabs, Tag,
+  Alert, App, Button, DatePicker, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Tooltip,
 } from 'antd'
-import { DownloadOutlined, EditOutlined, ReloadOutlined, TagsOutlined } from '@ant-design/icons'
+import { DownloadOutlined, EditOutlined, ReloadOutlined, SettingOutlined, TagsOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import {
@@ -19,12 +19,13 @@ import {
 } from '@/actions/hr'
 import type { TrainingRosterRow } from '@/actions/hr/employeeSync'
 import { usePermission } from '@/hooks/usePermission'
-import { useUnsavedConfirm } from '@/hooks/hr'
+import { useHasPermission, useUnsavedConfirm } from '@/hooks/hr'
 import { downloadBase64File, EMPLOYEE_STATUS_TAG_COLORS, classificationChipColors, ORPHAN_TAG_CHIP_COLOR } from '@/lib/hr'
 import type { Department, EmployeeClassification } from '@/types/hr'
 import PageHeader from './PageHeader'
 import RosterTagCell from './training-roster/RosterTagCell'
 import ClassificationManagerDrawer from './training-roster/ClassificationManagerDrawer'
+import RosterFollowSettingsDrawer from './training-roster/RosterFollowSettingsDrawer'
 
 /** 固定选项（口径与员工档案表单一致） */
 const STATUS_OPTIONS = ['在职', '离职', '试用期', '待审批', '病假', '产假', '产假复岗']
@@ -144,6 +145,14 @@ export default function TrainingRosterClient() {
   const seqRef = useRef(0)
   const { hasPermission } = usePermission()
   const canManage = hasPermission('hr:training:manage')
+  // 跟随设置是影响全员的规则，走系统配置权限；订阅 store 的版本做条件渲染（水合安全）
+  const canConfigure = useHasPermission('hr:settings:manage')
+
+  // ── 跟随员工档案的字段（全局规则）；行上的 follow_mode 是按人例外，优先于全局 ──
+  const [followFields, setFollowFields] = useState<string[]>([])
+  // 可跟随的字段范围：档案里没有来源的字段（实际部门/班组/品种/培训字段…）无论怎么设都只能在名单维护
+  const [followableFields, setFollowableFields] = useState<string[]>([])
+  const [followOpen, setFollowOpen] = useState(false)
 
   // ── 人员分类（培训专用，挂在名单上；按创建人隔离） ──
   // 标签本身随名单行下发（row.tags），这里只维护分类清单：它决定胶囊配色与可勾选项
@@ -236,6 +245,8 @@ export default function TrainingRosterClient() {
       setRows(res.data || [])
       setTotal(res.meta?.total || 0)
       setScopedDepartments(res.meta?.scoped_departments ?? null)
+      setFollowFields(res.meta?.follow_fields ?? [])
+      setFollowableFields(res.meta?.followable_fields ?? [])
     } catch (err) {
       if (seq === seqRef.current) message.error(err instanceof Error ? err.message : '加载失败')
     } finally {
@@ -256,6 +267,34 @@ export default function TrainingRosterClient() {
       .catch(() => { if (!cancelled) setPositions([]) })
     return () => { cancelled = true }
   }, [load])
+
+  /** 某人的某字段是否跟随员工档案：按人例外优先于全局字段规则，
+   *  但都只作用于可跟随字段——「全部跟随」不代表档案里没有的字段也变只读 */
+  const isFollowed = useCallback(
+    (row: TrainingRosterRow, attr: string) => {
+      if (!followableFields.includes(attr)) return false
+      if (row.follow_mode === 'follow') return true
+      return row.follow_mode !== 'manual' && followFields.includes(attr)
+    },
+    [followFields, followableFields],
+  )
+
+  /** 例外标记只在「与全局规则不同」时才显示：全部跟随，或全局有跟随字段时的全部手动
+   *  （否则部门设了「全部手动」会让整个部门的人都挂一个没意义的标记） */
+  const showFollowTag = useCallback(
+    (r: TrainingRosterRow) => r.follow_mode === 'follow' || (followFields.length > 0 && !!r.follow_mode),
+    [followFields],
+  )
+
+  /** 页头说明里列出的跟随字段中文名 */
+  const followedLabels = useMemo(() => {
+    const labelOf = new Map<string, string>(
+      EDIT_GROUPS.flatMap((g) => g.fields.map((f) => [String(f.name), f.label] as [string, string])),
+    )
+    // 级别不外显，但报表用职级由它计算
+    labelOf.set('level', '级别（报表用职级）')
+    return followFields.map((attr) => labelOf.get(attr)).filter((label): label is string => !!label)
+  }, [followFields])
 
   // 分类清单决定胶囊配色与可勾选项：进页面拉一次（分类列仅管理权限可见）
   useEffect(() => {
@@ -347,6 +386,8 @@ export default function TrainingRosterClient() {
       const payload: Record<string, unknown> = {}
       for (const group of EDIT_GROUPS) {
         for (const f of group.fields) {
+          // 跟随档案的字段不可手改：不入参（后端同样会忽略）
+          if (isFollowed(editing, String(f.name))) continue
           const v = values[f.name]
           if (f.type === 'date') {
             payload[f.name] = v ? (v as Dayjs).format('YYYY-MM-DD') : null
@@ -374,7 +415,28 @@ export default function TrainingRosterClient() {
   const columns: ColumnsType<TrainingRosterRow> = useMemo(() => {
     const base: ColumnsType<TrainingRosterRow> = [
       { title: '工号', dataIndex: 'employee_number', key: 'employee_number', width: 100, fixed: 'left' },
-      { title: '姓名', dataIndex: 'name', key: 'name', width: 90, fixed: 'left' },
+      {
+        title: '姓名', dataIndex: 'name', key: 'name', width: 90, fixed: 'left',
+        // 跟随例外（来自本人或所在部门）：让人一眼看出这人的字段为什么不可手改
+        //（标签另起一行，不挤占列宽）
+        render: (v: string, r: TrainingRosterRow) => (showFollowTag(r) ? (
+          <span className="inline-flex flex-col items-start gap-0.5">
+            {v}
+            <Tooltip title={r.follow_source === 'department'
+              ? (r.follow_mode === 'follow'
+                ? '所在部门已设为全部跟随员工档案（跟随设置里的部门例外）'
+                : '所在部门已设为全部手动，不跟随员工档案；人员状态仍跟随（跟随设置里的部门例外）')
+              : (r.follow_mode === 'follow'
+                ? '已设为全部跟随员工档案（跟随设置里的人员例外）'
+                : '已设为全部手动，不跟随员工档案；人员状态仍跟随（跟随设置里的人员例外）')}
+            >
+              <Tag color={r.follow_mode === 'follow' ? 'blue' : 'default'} className="mr-0">
+                {r.follow_mode === 'follow' ? '全部跟随' : '全部手动'}
+              </Tag>
+            </Tooltip>
+          </span>
+        ) : v),
+      },
       ...(canManage ? [{
         title: '分类', key: 'tags', width: 168,
         render: (_: unknown, r: TrainingRosterRow) => (
@@ -430,7 +492,7 @@ export default function TrainingRosterClient() {
       })
     }
     return base
-  }, [canManage, openEdit, classifications, colorOf, handleTagsChange, handleCreateClassification])
+  }, [canManage, openEdit, classifications, colorOf, handleTagsChange, handleCreateClassification, showFollowTag])
 
   const visibleDepartments = scopedDepartments
     ? departments.filter(d => scopedDepartments.includes(d.name))
@@ -466,6 +528,9 @@ export default function TrainingRosterClient() {
             {canManage && (
               <Button icon={<TagsOutlined />} onClick={() => setClassDrawerOpen(true)}>分类管理</Button>
             )}
+            {canConfigure && (
+              <Button icon={<SettingOutlined />} onClick={() => setFollowOpen(true)}>跟随设置</Button>
+            )}
             <Button
               icon={<DownloadOutlined />}
               onClick={() => { void handleDownload() }}
@@ -489,7 +554,9 @@ export default function TrainingRosterClient() {
         showIcon
         closable
         title={scopedDepartments ? `独立维护的脱敏名册（当前可见部门：${scopedDepartments.join('、')}）` : '独立维护的脱敏名册'}
-        description="人员随员工档案自动增减（总表只管进出）；名单上的信息由培训管理独立编辑，不会被总表同步覆盖。身份证、毕业学校、专业、出生年月、籍贯、政治面貌、婚姻状况、银行卡、手机/邮箱、紧急联系人、合同、级别等个人信息不在此页面出现；人员状态随员工档案自动同步，无需手动维护。"
+        description={followedLabels.length
+          ? `人员随员工档案自动增减（总表只管进出）；「${followedLabels.join('、')}」随员工档案自动同步，名单上不可手动修改（个别人员可在「跟随设置」里设例外）；其余字段由培训管理独立编辑，不会被总表同步覆盖。身份证、毕业学校、专业、出生年月、籍贯、政治面貌、婚姻状况、银行卡、手机/邮箱、紧急联系人、合同等个人信息不在此页面出现；人员状态始终随员工档案自动同步，无需手动维护。`
+          : '独立维护的脱敏名册：人员随员工档案自动增减（总表只管进出）；名单上的信息由培训管理独立编辑，不会被总表同步覆盖。身份证、毕业学校、专业、出生年月、籍贯、政治面貌、婚姻状况、银行卡、手机/邮箱、紧急联系人、合同、级别等个人信息不在此页面出现；人员状态随员工档案自动同步，无需手动维护。'}
       />
 
       <Tabs
@@ -540,24 +607,38 @@ export default function TrainingRosterClient() {
                   {group.title}
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4">
-                  {group.fields.map(f => (
-                    <Form.Item key={String(f.name)} name={f.name as string} label={f.label}>
-                      {f.type === 'date' ? (
-                        <DatePicker className="w-full" allowClear />
-                      ) : f.type === 'department' ? (
-                        <Select options={departmentOptions} allowClear showSearch
-                          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
-                      ) : f.type === 'position' ? (
-                        <Select options={positionOptions} allowClear showSearch
-                          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
-                      ) : f.type === 'options' ? (
-                        <Select options={FIXED_OPTIONS[String(f.name)] || []} allowClear showSearch
-                          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
-                      ) : (
-                        <Input allowClear autoComplete="off" />
-                      )}
-                    </Form.Item>
-                  ))}
+                  {group.fields.map(f => {
+                    // 跟随档案的字段置只读：手改也会在下一轮同步被档案覆盖，容易被误当成「保存丢失」
+                    const followed = editing ? isFollowed(editing, String(f.name)) : false
+                    return (
+                      <Form.Item
+                        key={String(f.name)} name={f.name as string}
+                        label={followed ? (
+                          <span className="inline-flex items-center gap-1">
+                            {f.label}
+                            <Tooltip title="该字段已设为跟随员工档案，名单上不可修改（可在「跟随设置」里调整）">
+                              <Tag color="blue" className="mr-0">跟随档案</Tag>
+                            </Tooltip>
+                          </span>
+                        ) : f.label}
+                      >
+                        {f.type === 'date' ? (
+                          <DatePicker className="w-full" allowClear disabled={followed} />
+                        ) : f.type === 'department' ? (
+                          <Select options={departmentOptions} allowClear showSearch disabled={followed}
+                            filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
+                        ) : f.type === 'position' ? (
+                          <Select options={positionOptions} allowClear showSearch disabled={followed}
+                            filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
+                        ) : f.type === 'options' ? (
+                          <Select options={FIXED_OPTIONS[String(f.name)] || []} allowClear showSearch disabled={followed}
+                            filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
+                        ) : (
+                          <Input allowClear autoComplete="off" disabled={followed} />
+                        )}
+                      </Form.Item>
+                    )
+                  })}
                 </div>
               </div>
             ))}
@@ -572,6 +653,13 @@ export default function TrainingRosterClient() {
         onClose={() => setClassDrawerOpen(false)}
         onChanged={handleClassificationChanged}
       />
+
+      {followOpen && (
+        <RosterFollowSettingsDrawer
+          onClose={() => setFollowOpen(false)}
+          onApplied={() => { void load(page, pageSize, keyword, tabDepartment) }}
+        />
+      )}
     </div>
   )
 }
