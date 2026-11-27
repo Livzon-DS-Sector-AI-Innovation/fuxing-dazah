@@ -302,9 +302,10 @@ export interface TrainingCandidate {
   graduation_date: string | null
   /** 入职台账记录来源；无台账记录时为「新入职」 */
   source: string
-  /** 已完成入职培训：培训台账存在入职培训记录表导出写入的记录 */
+  /** 已完成入职培训：最近一次职位变动生效日期之后存在入职培训记录表导出写入的记录 */
   prejob_completed: boolean
-  transfers: unknown[]
+  /** 职位变动记录（晋升/转岗/产假复岗），按生效日期降序，[0] 为最近一次 */
+  transfers: EmployeeTransfer[]
 }
 
 /** 部门下的培训岗位及其培训大类（岗位培训关联表与 SOP 目录取并集） */

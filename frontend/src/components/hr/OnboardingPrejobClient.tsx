@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { App, Button, Card, Empty, Select, Space, Input, DatePicker, Switch, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Empty, Select, Space, Input, DatePicker, Switch, Tag, Typography } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { DepartmentTrainingPosition, Employee, TrainingCandidate } from '@/types/hr'
@@ -41,7 +41,8 @@ export default function OnboardingPrejobClient() {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
   // 已选员工单独保存：再次搜索会整体替换 employees，不能只靠 employees.find 取当前员工
   const [selectedEmployee, setSelectedEmployee] = useState<TrainingCandidate | null>(null)
-  // 与入职台账页同口径：默认只列当年入职的在职员工；已完成入职培训的默认隐藏
+  // 与入职台账页同口径：默认只列当年的在职员工（入职年份或最近职位变动年份命中）；
+  // 已完成入职培训的默认隐藏。转岗/晋升者由后端自动重置回待培训名单
   const [hireYear, setHireYear] = useState<number | undefined>(new Date().getFullYear())
   const [showCompleted, setShowCompleted] = useState(false)
   const [hireYears, setHireYears] = useState<number[]>([])
@@ -60,6 +61,12 @@ export default function OnboardingPrejobClient() {
   const keywordRef = useRef<string | undefined>(undefined)
   // 已选员工的同步镜像：刷新名单时要把它保留在选项里，但不能因此触发重新查询
   const selectedRef = useRef<TrainingCandidate | null>(null)
+
+  // 转岗/晋升员工按最近一次异动的目标部门/岗位取培训口径（transfers 降序，[0] 最近一次）。
+  // 异动记录不回写员工档案，档案同步跟进前以异动目标为准
+  const latestTransfer = selectedEmployee?.transfers[0] ?? null
+  const effectiveDepartment = latestTransfer?.to_department || selectedEmployee?.department || ''
+  const effectivePosition = latestTransfer?.to_position || selectedEmployee?.position || ''
 
   const loadEmployees = useCallback(async (keyword?: string) => {
     keywordRef.current = keyword
@@ -100,10 +107,11 @@ export default function OnboardingPrejobClient() {
     })))
   }
 
-  // 选中员工后，按其部门取培训岗位；本人岗位能对上则自动选中并加载培训内容
+  // 选中员工后，按其（异动后）部门取培训岗位；岗位能对上则自动选中并加载培训内容
   useEffect(() => {
     if (!selectedEmployee) return
-    const { department: dept, position: pos } = selectedEmployee
+    const dept = effectiveDepartment
+    const pos = effectivePosition
 
     // 员工再次切换后丢弃上一次请求的响应，避免把上一名员工的培训内容填进来
     // （加载态在 handleSelectEmployee 里进入，effect 只负责回填结果）
@@ -167,7 +175,7 @@ export default function OnboardingPrejobClient() {
   const handleTrainingPositionChange = (name: string) => {
     const position = trainingPositions.find((p) => p.position_name === name)
     if (!position || !selectedEmployee) return
-    applyTrainingPosition(position, selectedEmployee.department)
+    applyTrainingPosition(position, effectiveDepartment)
     setSopMethods({})
     setSopTrainers({})
     setSopPlanDates({})
@@ -318,10 +326,14 @@ export default function OnboardingPrejobClient() {
               value: e.id,
               label: (
                 <span className="flex items-center gap-1.5">
-                  {/* 文字可截断，已完成标签固定在右侧，不会被行尾省略号吞掉 */}
+                  {/* 文字可截断，标签固定在右侧，不会被行尾省略号吞掉 */}
                   <span className="min-w-0 flex-1 truncate">
                     {`${e.employee_number} - ${e.name} (${e.department}) [${e.source || '新入职'}]`}
                   </span>
+                  {/* 转岗/晋升等职位变动后需重新培训：异动员工在待培训名单里带标记 */}
+                  {!e.prejob_completed && e.transfers.length > 0 && (
+                    <Tag color="orange" style={{ marginInlineEnd: 0 }}>{e.transfers[0].transfer_type}重训</Tag>
+                  )}
                   {e.prejob_completed && <Tag color="green" style={{ marginInlineEnd: 0 }}>已完成</Tag>}
                 </span>
               ),
@@ -333,13 +345,14 @@ export default function OnboardingPrejobClient() {
             style={{ width: 320 }}
           />
           <Select
-            placeholder="入职年份"
+            placeholder="年份"
             allowClear
             value={hireYear}
             onChange={setHireYear}
+            // 年份语义：入职年份或最近职位变动年份（异动重训的老员工按异动年份命中）
             options={Array.from(new Set([new Date().getFullYear(), ...hireYears]))
               .sort((a, b) => b - a)
-              .map((y) => ({ value: y, label: `${y} 年入职` }))}
+              .map((y) => ({ value: y, label: `${y} 年` }))}
             style={{ width: 130 }}
           />
           <label className="flex items-center gap-1.5 whitespace-nowrap text-sm">
@@ -351,6 +364,16 @@ export default function OnboardingPrejobClient() {
           <Button icon={<DownloadOutlined />} onClick={handleExportPermit} loading={downloadingPermit} disabled={!selectedEmployee}>导出上岗证</Button>
         </Space>
       </Card>
+
+      {/* 选中员工有职位变动时提示需重新培训（transfers 按生效日期降序，[0] 为最近一次；打印时隐藏） */}
+      {selectedEmployee && selectedEmployee.transfers.length > 0 && (
+        <Alert
+          className="no-print"
+          type="warning"
+          showIcon
+          message={`该员工于 ${selectedEmployee.transfers[0].effective_date || '—'} 由 ${selectedEmployee.transfers[0].from_department || '—'} / ${selectedEmployee.transfers[0].from_position || '—'} ${selectedEmployee.transfers[0].transfer_type}至 ${selectedEmployee.transfers[0].to_department || '—'} / ${selectedEmployee.transfers[0].to_position || '—'}，按新岗位需重新参加入职培训。`}
+        />
+      )}
 
       {/* 未选员工时的空状态（打印时隐藏） */}
       {!selectedEmployee && (
@@ -378,7 +401,7 @@ export default function OnboardingPrejobClient() {
                 <tr>
                   <td style={LABEL}>姓名<br/>Name</td><td style={VALUE}>{selectedEmployee.name}</td>
                   <td style={LABEL}>学历<br/>Education</td><td style={VALUE}>{selectedEmployee.education || ''}</td>
-                  <td style={LABEL}>类别<br/>Type</td><td style={VALUE}>{selectedEmployee.source || '新入职'}</td>
+                  <td style={LABEL}>类别<br/>Type</td><td style={VALUE}>{latestTransfer ? latestTransfer.transfer_type : (selectedEmployee.source || '新入职')}</td>
                 </tr>
                 <tr>
                   <td style={LABEL}>毕业院校<br/>Graduation school</td><td style={VALUE}>{selectedEmployee.school || ''}</td>
@@ -386,9 +409,9 @@ export default function OnboardingPrejobClient() {
                   <td style={LABEL}>毕业时间<br/>Graduation time</td><td style={VALUE}>{selectedEmployee.graduation_date || ''}</td>
                 </tr>
                 <tr>
-                  <td style={LABEL}>部门<br/>Dept.</td><td style={VALUE}>{selectedEmployee.department}</td>
+                  <td style={LABEL}>部门<br/>Dept.</td><td style={VALUE}>{effectiveDepartment}</td>
                   {/* 与导出文件一致：选了培训岗位写培训岗位，否则写实际岗位 */}
-                  <td style={LABEL}>拟定岗位<br/>Intended post</td><td style={VALUE}>{trainingPosition || selectedEmployee.position || ''}</td>
+                  <td style={LABEL}>拟定岗位<br/>Intended post</td><td style={VALUE}>{trainingPosition || effectivePosition}</td>
                   <td style={LABEL}>职称<br/>Title</td><td style={VALUE}></td>
                 </tr>
                 <tr>
@@ -416,7 +439,9 @@ export default function OnboardingPrejobClient() {
                 style={{ width: 200 }}
               />
               <Typography.Text type="secondary">
-                本人岗位：{selectedEmployee.position || '-'}（{selectedEmployee.department}）
+                {latestTransfer
+                  ? `按异动后岗位培训：${effectivePosition || '-'}（${effectiveDepartment}）`
+                  : `本人岗位：${selectedEmployee.position || '-'}（${selectedEmployee.department}）`}
               </Typography.Text>
               {trainingPositions.length > 0 && !trainingPosition && (
                 <Typography.Text type="warning">本人岗位未匹配到培训内容，请选择培训岗位</Typography.Text>
@@ -481,7 +506,7 @@ export default function OnboardingPrejobClient() {
                       ? '正在加载培训岗位…'
                       : trainingPositions.length
                         ? '请选择培训岗位，加载对应的培训内容'
-                        : `「${selectedEmployee.department}」暂无培训岗位，请先在 SOP 目录中配置该部门的适用岗位`}
+                        : `「${effectiveDepartment}」暂无培训岗位，请先在 SOP 目录中配置该部门的适用岗位`}
                   </td></tr>
                 )}
                 {/* Part III: 审核批准 */}
