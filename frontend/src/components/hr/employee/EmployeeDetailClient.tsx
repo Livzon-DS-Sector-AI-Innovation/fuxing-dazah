@@ -16,6 +16,7 @@ import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr/status-color'
 import EmployeeCertificatesPanel from './EmployeeCertificatesPanel'
 import ProbationReviewModal from './ProbationReviewModal'
 import EmployeeContractsPanel from '@/components/hr/labor-contract/EmployeeContractsPanel'
+import EmployeeOffboardingPanel from './EmployeeOffboardingPanel'
 import { usePermission } from '@/hooks/usePermission'
 
 const CONCLUSION_COLOR: Record<string, string> = { 通过: 'green', 延长: 'orange', 不通过: 'red' }
@@ -45,9 +46,13 @@ export default function EmployeeDetailClient({ employeeId }: { employeeId: strin
   const canEditProfile = hasPermission('hr:profile:update')
   // 劳动合同页签按合同读权限显隐
   const canViewContracts = hasPermission('hr:contract:read')
+  // 离职材料页签按离职读权限显隐
+  const canViewDeparture = hasPermission('hr:departure:read')
+  const canStartOffboarding = hasPermission('hr:departure:manage')
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
   const [probationOpen, setProbationOpen] = useState(false)
+  const [tab, setTab] = useState('certs')
 
   useEffect(() => {
     let cancelled = false
@@ -90,8 +95,19 @@ export default function EmployeeDetailClient({ employeeId }: { employeeId: strin
         {employee.is_key_position && <Tag color="purple">重点岗位</Tag>}
         <span className="text-sm text-[var(--color-steel)]">{employee.department} · {employee.position}</span>
         {canEditProfile && employee.status === '试用期' && (
-          <Button className="ml-auto" type="primary" icon={<AuditOutlined />} onClick={() => setProbationOpen(true)}>
+          <Button type="primary" icon={<AuditOutlined />} onClick={() => setProbationOpen(true)}>
             发起转正评估
+          </Button>
+        )}
+        {/* 页级操作：在职员工可以直接从这里发起离职（跳到「离职材料」页签） */}
+        {canViewDeparture && canStartOffboarding && ['在职', '试用期'].includes(employee.status) && (
+          <Button
+            className={canEditProfile && employee.status === '试用期' ? '' : 'ml-auto'}
+            danger
+            icon={<PlusOutlined />}
+            onClick={() => setTab('offboarding')}
+          >
+            发起离职办理
           </Button>
         )}
       </div>
@@ -116,16 +132,25 @@ export default function EmployeeDetailClient({ employeeId }: { employeeId: strin
       </Card>
 
       <Card size="small">
-        <Tabs items={[
-          { key: 'certs', label: '证件档案', children: <EmployeeCertificatesPanel employeeId={employeeId} /> },
-          // 劳动合同页签（一人一事一档）：需合同读权限，没有的用户不显示，避免点进去 403
-          ...(canViewContracts ? [{
-            key: 'contracts', label: '劳动合同',
-            children: <EmployeeContractsPanel employeeNumber={employee.employee_number} />,
-          }] : []),
-          { key: 'exams', label: '安全考试', children: <SafetyExamSection employeeId={employeeId} isKeyPosition={!!employee.is_key_position} /> },
-          { key: 'probation', label: '转正历史', children: <ProbationHistorySection employeeId={employeeId} /> },
-        ]} />
+        <Tabs
+          activeKey={tab}
+          onChange={setTab}
+          items={[
+            // 一人一事一档：证件、合同、离职材料在同一个员工的档案下并排
+            { key: 'certs', label: '证件档案', children: <EmployeeCertificatesPanel employeeId={employeeId} /> },
+            // 劳动合同页签：需合同读权限，没有的用户不显示，避免点进去 403
+            ...(canViewContracts ? [{
+              key: 'contracts', label: '劳动合同',
+              children: <EmployeeContractsPanel employeeNumber={employee.employee_number} />,
+            }] : []),
+            ...(canViewDeparture ? [{
+              key: 'offboarding', label: '离职材料',
+              children: <EmployeeOffboardingPanel employee={employee} />,
+            }] : []),
+            { key: 'exams', label: '安全考试', children: <SafetyExamSection employeeId={employeeId} isKeyPosition={!!employee.is_key_position} /> },
+            { key: 'probation', label: '转正历史', children: <ProbationHistorySection employeeId={employeeId} /> },
+          ]}
+        />
       </Card>
     </div>
   )

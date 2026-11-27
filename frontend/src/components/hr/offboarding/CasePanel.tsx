@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import dayjs from 'dayjs'
 
 /**
  * 办理抽屉里的一个环节面板：步骤序号 + 标题 + 说明，右上角放该环节的状态标签。
@@ -6,6 +7,7 @@ import type { ReactNode } from 'react'
  */
 export default function CasePanel({
   step,
+  stepLabel,
   title,
   hint,
   extra,
@@ -14,6 +16,8 @@ export default function CasePanel({
 }: {
   /** 步骤序号（1 起），对应顶部步骤条 */
   step: number
+  /** 步骤标签文字；不传显示「第 N 步」。最后一步 / 回顾类面板可以换成更直白的说法 */
+  stepLabel?: string
   title: string
   hint?: ReactNode
   extra?: ReactNode
@@ -28,7 +32,7 @@ export default function CasePanel({
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-baseline gap-2">
-            <span className={`text-[11px] font-semibold tracking-[1px] ${stepColor}`}>第 {step} 步</span>
+            <span className={`text-[11px] font-semibold tracking-[1px] ${stepColor}`}>{stepLabel || `第 ${step} 步`}</span>
             <h3 className="m-0 text-[14px] font-medium leading-[1.4] text-[var(--color-ink)]">{title}</h3>
           </div>
           {hint && (
@@ -42,9 +46,10 @@ export default function CasePanel({
   )
 }
 
-/** ISO 时间 → YYYY-MM-DD HH:mm；空值给占位符 */
+/** ISO 时间 → YYYY-MM-DD HH:mm（本地时区）。后端给的是带 +00:00 的 UTC 时间串，
+ *  直接截取会差 8 小时（13:33 显示成 05:33） */
 export function fmtTime(value?: string | null, fallback = '—'): string {
-  return value ? value.slice(0, 16).replace('T', ' ') : fallback
+  return value ? dayjs(value).format('YYYY-MM-DD HH:mm') : fallback
 }
 
 export interface DaysUntil {

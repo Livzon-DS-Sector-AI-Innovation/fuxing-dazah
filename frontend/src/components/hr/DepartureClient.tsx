@@ -2,7 +2,8 @@
 
 // 离职台账：结果数据（飞书「离职人员管理表」同步 + 平台离职办理办结回写），按工号挂最近一张办结单，
 // 带出办理状态 / 证明开具签收 / 四部门清退结算。
-// 筛选、字段勾选导出、保存视图、导出记录见 ./departure/ 下的四个组件；流程操作在「离职办理」页签的抽屉里。
+// 筛选、字段勾选导出、保存视图、导出记录见 ./departure/ 下的四个组件；流程操作在办理抽屉里。
+// 还没发起办理的行可以直接「发起办理」：人、离职日期、离职类型都从这一行带出，不用重新填。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -10,7 +11,7 @@ import {
   Table, Tag, Tooltip, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import type { Dayjs } from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
 import {
   CloudSyncOutlined, DeleteOutlined, DownloadOutlined, EyeOutlined, HistoryOutlined, ImportOutlined,
   PlusOutlined, SendOutlined,
@@ -37,6 +38,7 @@ import { downloadBase64File } from '@/lib/hr'
 import { LedgerImportModal, OffboardingCaseDrawer } from '@/components/hr'
 import { useHasPermission } from '@/hooks/hr'
 import PageHeader from './PageHeader'
+import OffboardingNewCaseModal, { type OffboardingCasePrefill } from './OffboardingNewCaseModal'
 import styles from './lifecycleTable.module.css'
 import { DEPARTURE_TYPE_OPTIONS, DEPARTURE_TYPE_TAG_COLORS, OFFBOARDING_STATUS_TAG_COLORS } from '@/lib/hr'
 import DepartureExportLogDrawer from './departure/DepartureExportLogDrawer'
@@ -66,7 +68,8 @@ function compact(filters: DepartureLedgerFilters): DepartureLedgerFilters {
 }
 
 function fmtTime(value?: string | null): string {
-  return value ? value.slice(0, 16).replace('T', ' ') : '—'
+  // 按本地时区格式化：后端给的是带 +00:00 的 UTC 时间串，直接截取会差 8 小时
+  return value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—'
 }
 
 /** 清退结算摘要：金额为 0 的不显示（「扣 0，补 0」是噪音） */
@@ -99,11 +102,14 @@ export default function DepartureClient({
   initialRecords,
   initialTotal,
   syncInfo,
+  refreshKey = 0,
 }: {
   initialRecords: DepartureRecord[]
   initialTotal: number
   /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示立即同步入口 */
   syncInfo?: DepartureSyncInfo
+  /** 外层通知刷新（办理页推进了流程）：数字变了就重拉本页 */
+  refreshKey?: number
 }) {
   const { message } = AntdApp.useApp()
   const [rows, setRows] = useState<DepartureLedgerRow[]>(initialRecords)
@@ -146,12 +152,16 @@ export default function DepartureClient({
   const [syncing, setSyncing] = useState(false)
   const [caseId, setCaseId] = useState<string | null>(null)
   const [caseDrawerOpen, setCaseDrawerOpen] = useState(false)
+  const [newCaseOpen, setNewCaseOpen] = useState(false)
+  const [newCasePrefill, setNewCasePrefill] = useState<OffboardingCasePrefill | null>(null)
 
   // 同步模式：数据源为飞书离职人员管理表，本地新建/删除无意义（下轮同步会覆盖）
   const syncMode = Boolean(syncInfo)
   // 水合安全的权限判断：本页在 Suspense 边界内，直接读权限 store 首帧会与 SSR 输出对不上
   const canManage = useHasPermission('hr:settings:manage')
   const canImport = useHasPermission('hr:departure:manage')
+  // 发起离职办理与导入用的是同一个权限（hr:departure:manage）
+  const canStartCase = canImport
 
   const patchFilters = useCallback((patch: Partial<DepartureLedgerFilters>) => {
     setFilters((prev) => {
@@ -192,6 +202,14 @@ export default function DepartureClient({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 加载函数首行同步置 loading 是刻意的即时反馈
     void load()
   }, [load])
+
+  // 外层通知刷新（办理页推进了流程后）：首次挂载的那一下（0）跳过，已有上面的首拉
+  const firstRefreshKey = useRef(refreshKey)
+  useEffect(() => {
+    if (refreshKey === firstRefreshKey.current) return
+    firstRefreshKey.current = refreshKey
+    void load()
+  }, [refreshKey, load])
 
   const refreshViews = useCallback(async () => {
     const list = await fetchDepartureSavedViews()
@@ -437,6 +455,21 @@ export default function DepartureClient({
     setCaseDrawerOpen(true)
   }
 
+  /** 从这一行发起离职办理：人、离职日期、离职类型都带过去，不用重新填 */
+  const startCase = (row: DepartureLedgerRow) => {
+    if (!row.employee_id) return
+    setNewCasePrefill({
+      departureRecordId: row.id,
+      employeeId: row.employee_id,
+      employeeNumber: row.employee_number || '',
+      label: `${row.employee_number || ''} ${row.name}（${row.department} / ${row.position || '-'}）`,
+      offboardingDate: row.offboarding_date || dayjs().add(30, 'day').format('YYYY-MM-DD'),
+      offboardingType: row.offboarding_type || '辞职',
+      ledgerSynced: !!row.ledger_synced,
+    })
+    setNewCaseOpen(true)
+  }
+
   const statusTag = (row: DepartureLedgerRow) => (
     <Tag color={OFFBOARDING_STATUS_TAG_COLORS[row.approval_status || ''] || 'default'}>
       {row.approval_status_label || '未发起'}
@@ -455,7 +488,7 @@ export default function DepartureClient({
         value ? <Text copyable className="text-xs">{value}</Text> : '-',
     },
     { title: '部门', dataIndex: 'department', key: 'department', width: 150 },
-    { title: '职位', dataIndex: 'position', key: 'position', width: 120 },
+    { title: '岗位', dataIndex: 'position', key: 'position', width: 120 },
     { title: '职务', dataIndex: 'duty', key: 'duty', width: 100, render: (v: string | undefined) => v || '-' },
     {
       title: '离职日期',
@@ -484,7 +517,9 @@ export default function DepartureClient({
             {statusTag(row)}
           </Button>
         ) : (
-          <Tooltip title="没有离职办理单（线下办理 / 飞书表同步的存量记录）">{statusTag(row)}</Tooltip>
+          <Tooltip title={row.startable ? '还没发起办理：点右侧「发起办理」开始走流程' : (row.start_block_reason || '没有离职办理单')}>
+            {statusTag(row)}
+          </Tooltip>
         )
       ),
     },
@@ -500,51 +535,64 @@ export default function DepartureClient({
       ),
     },
     { title: '离职时司龄', dataIndex: 'company_tenure_at_leave', key: 'company_tenure_at_leave', width: 100 },
-    { title: '入丽珠时间', dataIndex: 'livo_entry_date', key: 'livo_entry_date', width: 110 },
+    { title: '入职日期', dataIndex: 'livo_entry_date', key: 'livo_entry_date', width: 110 },
     { title: '学历', dataIndex: 'education', key: 'education', width: 80 },
     {
       title: '操作',
       key: 'action',
-      width: 200,
+      width: 220,
       fixed: 'right',
-      render: (_v: unknown, row) => (
-        <Space size="small">
-          <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => { setDetailRow(row); setDetailOpen(true) }}>
-            详情
-          </Button>
-          {row.case_id && (
-            <Button type="text" size="small" icon={<HistoryOutlined />} onClick={() => openCase(row)}>
-              办理
-            </Button>
-          )}
-          <Button
-            type="text"
-            size="small"
-            icon={<SendOutlined />}
-            onClick={() => { setCertRow(row); setCertEmail(''); setCertOpen(true) }}
-          >
-            证明
-          </Button>
-          {!syncMode && (
-            <Popconfirm
-              title="确认删除？"
-              onConfirm={async () => {
-                try {
-                  await deleteDepartureRecordAction(row.id)
-                  message.success('已删除')
-                  void load()
-                } catch (err) {
-                  message.error(err instanceof Error ? err.message : '删除失败')
-                }
-              }}
-            >
-              <Button type="text" size="small" danger icon={<DeleteOutlined />}>
-                删除
+      render: (_v: unknown, row) => {
+        // 已取消的办理单不挡路：这一行还能重新发起
+        const cancelled = !!row.case_id && row.approval_status === 'canceled'
+        return (
+          <Space size="small">
+            {row.case_id && !cancelled ? (
+              // 有办理单：进抽屉接着办（已办结的也能进去看证明、签名和清退结果）
+              <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => openCase(row)}>
+                办理
               </Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+            ) : row.startable && canStartCase ? (
+              <Button type="link" size="small" icon={<PlusOutlined />} onClick={() => startCase(row)}>
+                {cancelled ? '重新发起' : '发起办理'}
+              </Button>
+            ) : (
+              // 没有办理单、也没法再发起（员工已是离职状态的历史记录）：只能单独补开证明
+              <Tooltip title="该员工未在系统内办理离职（历史记录）：只能单独生成并发送证明，不走清退会签流程">
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<SendOutlined />}
+                  onClick={() => { setCertRow(row); setCertEmail(row.phone || ''); setCertOpen(true) }}
+                >
+                  补开证明
+                </Button>
+              </Tooltip>
+            )}
+            <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => { setDetailRow(row); setDetailOpen(true) }}>
+              详情
+            </Button>
+            {!syncMode && (
+              <Popconfirm
+                title="确认删除？"
+                onConfirm={async () => {
+                  try {
+                    await deleteDepartureRecordAction(row.id)
+                    message.success('已删除')
+                    void load()
+                  } catch (err) {
+                    message.error(err instanceof Error ? err.message : '删除失败')
+                  }
+                }}
+              >
+                <Button type="text" size="small" danger icon={<DeleteOutlined />}>
+                  删除
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+        )
+      },
     },
   ]
 
@@ -557,7 +605,7 @@ export default function DepartureClient({
       <PageHeader
         title="离职台账"
         description={syncMode
-          ? `数据来源：飞书「${syncInfo!.departure_table_name}」单向同步 · 只读展示 · 每小时自动对账 · 上次同步：${formatSyncTime(syncInfo!.last_sync_at)}`
+          ? `数据来源：飞书「${syncInfo!.departure_table_name}」单向同步 · 每小时自动对账 · 上次同步：${formatSyncTime(syncInfo!.last_sync_at)}。离职日期、离职类型以飞书表为准；要在系统里走离职流程的，点该行「发起办理」。`
           : undefined}
       />
 
@@ -662,18 +710,16 @@ export default function DepartureClient({
         </Form>
       </Modal>
 
-      <Modal title="发送离职证明" open={certOpen} onCancel={() => setCertOpen(false)}
+      <Modal title="补开离职证明（历史记录）" open={certOpen} onCancel={() => setCertOpen(false)}
         footer={[
           <Button key="preview" onClick={() => void handlePreviewCert()}>预览</Button>,
           <Button key="send" type="primary" loading={certSending} onClick={() => void handleSendCert()}>发送</Button>,
         ]}>
         <div className="space-y-3 py-2">
           <div>收件人：<b>{certRow?.name}</b>（{certRow?.department} / {certRow?.position}）</div>
-          {certRow?.case_id && (
-            <div className="text-[12px] text-[var(--color-slate)]">
-              该员工有离职办理单：建议在「办理」里开具并送达，证明会随签署链接一起送达。
-            </div>
-          )}
+          <div className="text-[12px] text-[var(--color-slate)]">
+            该员工没有在系统里办离职：这里只生成证明并发到邮箱，不走清退会签，也不会回写办理状态。
+          </div>
           <Input placeholder="请输入收件邮箱" value={certEmail} onChange={(e) => setCertEmail(e.target.value)} type="email" />
         </div>
       </Modal>
@@ -714,11 +760,12 @@ export default function DepartureClient({
               items={[
                 detailItem('申请编号', detailRow.case_no),
                 { key: 'status', label: '办理状态', children: statusTag(detailRow) },
+                detailItem('HR 负责人', detailRow.hr_owner),
                 detailItem('证明开具时间', fmtTime(detailRow.cert_issued_at)),
                 detailItem('签收时间', fmtTime(detailRow.cert_signed_at)),
                 detailItem('签收人', detailRow.cert_sign_name),
                 detailItem('签收方式', detailRow.cert_signed
-                  ? (detailRow.has_sign_image ? '线上手写签名' : '纸质当面签收')
+                  ? (detailRow.has_sign_image ? '当面手写签名' : '纸质签收登记')
                   : '未签收'),
                 ...(['admin', 'finance', 'hr', 'work'] as ClearanceCategory[]).map((category) => {
                   const bucket = detailRow.clearance?.[category]
@@ -784,6 +831,18 @@ export default function DepartureClient({
         caseId={caseId}
         onClose={() => setCaseDrawerOpen(false)}
         onChanged={() => void load()}
+      />
+      <OffboardingNewCaseModal
+        open={newCaseOpen}
+        prefill={newCasePrefill}
+        onClose={() => setNewCaseOpen(false)}
+        onCreated={(id) => {
+          // 发起后原地接着办：刷新台账，直接打开这张办理单的抽屉
+          setNewCaseOpen(false)
+          void load()
+          setCaseId(id)
+          setCaseDrawerOpen(true)
+        }}
       />
     </div>
   )

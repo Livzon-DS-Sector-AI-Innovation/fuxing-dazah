@@ -1,6 +1,6 @@
 """离职管理（OffboardingCase 状态机）— 业务规则测试。
 
-覆盖：建单快照与台账关联、体检门禁、站内降级全链路到办结、电子 / 纸质两种签收、
+覆盖：建单快照与台账关联、体检门禁、站内降级全链路到办结、当面手写签名 / 纸质签收两种签收、
 取消时撤下台账行、飞书审批轮询回写（mock）、清退表单回读、节点提醒扫描规则。
 走 service 层 + API（真实 DB 回滚）；飞书 / 邮件 / 对象存储一律打桩，不外连不落盘。
 """
@@ -31,7 +31,6 @@ from app.modules.hr.schemas import EmployeeCreate
 from app.modules.hr.service import EmployeeService
 from tests.modules.hr.conftest import _rand
 
-SIGN_BASE = "http://test.local/api/departure-cert-sign"
 # 合法签名：PNG 文件头的 base64 dataURL
 PNG_SIGNATURE = "data:image/png;base64," + base64.b64encode(
     b"\x89PNG\r\n\x1a\n" + bytes(16)
@@ -273,12 +272,11 @@ async def test_lead_time_warning_without_blocking(db_session: AsyncSession):
 # 全链路（站内降级）
 # ═══════════════════════════════════════════════════════════════
 
-async def test_manual_flow_electronic_sign_to_closed(
+async def test_manual_flow_office_signature_to_closed(
     db_session: AsyncSession, object_store: dict, no_mail: AsyncMock,
 ):
-    """站内降级全链路：建单 → 发起 → 审批 → 清退（默认清单）→ 开证（邮件+签署链接）
-    → 员工 H5 手写签字 → 办结五联动。"""
-    await _set_settings(db_session, **{"hr_offboarding.sign_page_base_url": SIGN_BASE})
+    """站内降级全链路：建单 → 发起 → 审批 → 清退（默认清单）→ 开证（邮件送达，不带链接）
+    → 员工到人事办公室在公司电脑上手写签名 → 办结五联动。"""
     employee = await _make_employee(db_session)
     db_session.add(EmployeeCertificate(
         employee_id=employee.id, category="身份证", storage_key="k", filename="a.jpg",
@@ -294,9 +292,9 @@ async def test_manual_flow_electronic_sign_to_closed(
 
     case = await service.manual_stage_done(db_session, case, stage="approving", note="部门已批")
     assert case.status == OffboardingCase.STATUS_CLEARING and case.resignation_finished_at is not None
-    assert case.remark == "建单备注；站内登记（离职审批中）：部门已批"  # 追加不覆盖
+    assert case.remark == "建单备注；站内登记（部门审批中）：部门已批"  # 追加不覆盖
     items = await repo.list_clearance_items(db_session, case.id)
-    assert len(items) == 11  # 四部门默认清单 4+3+3+1
+    assert len(items) == 20  # 四部门默认清单 7+3+5+5（需求列明的清退事项）
     assert {i.category for i in items} == {"admin", "finance", "hr", "work"}
     assert all(i.source == "seed" and i.status == "pending" for i in items)
 
@@ -314,30 +312,30 @@ async def test_manual_flow_electronic_sign_to_closed(
     case = await service.manual_stage_done(db_session, case, stage="clearing")
     assert case.status == OffboardingCase.STATUS_CERT_ISSUING
 
-    case, note, sign_url = await service.issue_certificate(
+    case, note = await service.issue_certificate(
         db_session, case, mail_recipient="a@b.com", issued_by="HR甲",
     )
     assert case.status == OffboardingCase.STATUS_DELIVERING
     assert case.cert_template == "electronic" and case.cert_issued_by == "HR甲"
     assert case.mail_status == "sent" and no_mail.await_count == 1
-    assert sign_url and sign_url.startswith(f"{SIGN_BASE}?token=")
+    assert note == ""  # 邮件发出去了，没有需要提醒的事
     assert f"hr/offboarding/{case.id}/termination_certificate_electronic.pdf" in object_store
-    token = sign_url.split("token=")[1]
 
     record = await repo.get_departure_record(db_session, case.departure_record_id)
     assert record.cert_issued_at is not None
-    assert record.cert_sign_status == "pending" and record.cert_sign_token == service.hash_token(token)
+    assert record.cert_sign_status is None and record.cert_signed_at is None  # 开证不等于签收
 
-    signed_case, signed_record = await service.confirm_sign_by_token(
-        db_session, token, signature=PNG_SIGNATURE, confirm_name=employee.name,
+    case = await service.register_signature(
+        db_session, case, signature=PNG_SIGNATURE, signed_name=employee.name,
     )
-    assert signed_case.status == OffboardingCase.STATUS_SIGNED
+    assert case.status == OffboardingCase.STATUS_SIGNED
+    assert case.delivery_channel == "handwriting"
+    signed_record = await repo.get_departure_record(db_session, case.departure_record_id)
     assert signed_record.cert_sign_status == "signed"
     assert signed_record.cert_signed_at is not None and signed_record.cert_sign_name == employee.name
     assert signed_record.cert_sign_image == PNG_SIGNATURE
-    assert signed_record.cert_sign_token is None  # 一次性：确认即作废
-    with pytest.raises(AppException):
-        await service.confirm_sign_by_token(db_session, token, signature=PNG_SIGNATURE)
+    with pytest.raises(AppException):  # 已签收，不能再签
+        await service.register_signature(db_session, case, signature=PNG_SIGNATURE)
 
     case = await service.close_case(db_session, case, account_deactivated=True)
     assert case.status == OffboardingCase.STATUS_CLOSED and case.closed_at is not None
@@ -368,15 +366,15 @@ async def test_manual_flow_electronic_sign_to_closed(
 async def test_paper_template_signs_in_person(
     db_session: AsyncSession, object_store: dict,
 ):
-    """纸质两联版：不开线上签署链接，HR 登记当面签收（时间 / 签收人 / 方式留存）。"""
+    """纸质两联版：员工在纸质件上签字，HR 登记签收（时间 / 签收人 / 方式留存）。"""
     case = await _to_cert_issuing(db_session, await _create_case(
         db_session, await _make_employee(db_session),
     ))
-    case, _note, sign_url = await service.issue_certificate(db_session, case, cert_template="paper")
-    assert case.status == OffboardingCase.STATUS_DELIVERING and sign_url is None
+    case, note = await service.issue_certificate(db_session, case, cert_template="paper")
+    assert case.status == OffboardingCase.STATUS_DELIVERING and note == "未填写送达邮箱，证明未自动发送"
     assert f"hr/offboarding/{case.id}/termination_certificate_paper.pdf" in object_store
     record = await repo.get_departure_record(db_session, case.departure_record_id)
-    assert record.cert_sign_token is None  # 纸质版不签发 token
+    assert record.cert_sign_status is None  # 开证不等于签收
 
     case = await service.register_paper_sign(db_session, case, signed_by="  员工亲笔  ")
     assert case.status == OffboardingCase.STATUS_SIGNED
@@ -384,53 +382,56 @@ async def test_paper_template_signs_in_person(
     assert case.delivery_channel == "paper"
     record = await repo.get_departure_record(db_session, case.departure_record_id)
     assert record.cert_sign_status == "signed" and record.cert_signed_at == case.paper_signed_at
+    assert record.cert_sign_image is None  # 纸质签字不留签名图
 
 
-async def test_resend_delivery_sms_only_returns_sign_link(
-    db_session: AsyncSession, object_store: dict,
+async def test_register_sms_records_send_and_resend_mail(
+    db_session: AsyncSession, object_store: dict, no_mail: AsyncMock,
 ):
-    """短信通道未接入：只登记手机号，签署链接必须交回 HR 人工转发；旧链接随重发作废。"""
-    await _set_settings(db_session, **{"hr_offboarding.sign_page_base_url": SIGN_BASE})
+    """短信闭环（通道未真接）：登记短信 = 记下号码与发送时间；补发邮件只带证明附件、
+    邮件失败时把原因带回（面板顶部逐条提醒）。"""
     case = await _to_cert_issuing(db_session, await _create_case(
         db_session, await _make_employee(db_session),
     ))
-    case, _note, first_url = await service.issue_certificate(db_session, case)
-    first_token = first_url.split("token=")[1]
+    case, _note = await service.issue_certificate(db_session, case)
 
-    case, note, second_url = await service.resend_delivery(db_session, case, sms_phone="13800000000")
-    assert second_url and second_url != first_url
-    assert case.sms_phone == "13800000000" and case.sms_status == "not_configured"
-    assert note and "短信通道未接入" in note
-    record = await repo.get_departure_record(db_session, case.departure_record_id)
-    assert record.cert_sign_token == service.hash_token(second_url.split("token=")[1])
-    with pytest.raises(AppException):  # 旧链接已作废
-        await service.confirm_sign_by_token(db_session, first_token, signature=PNG_SIGNATURE)
+    case = await service.register_sms_sent(db_session, case, phone="13800000000")
+    assert case.sms_phone == "13800000000" and case.sms_status == "manual"
+    assert case.sms_sent_at is not None
+
+    case, note = await service.resend_delivery(db_session, case, mail_recipient="a@b.com")
+    assert note == "" and case.mail_status == "sent" and no_mail.await_count == 1
+    # 打桩的邮件函数只收 to / subject / html_body / attachments / session：正文里没有签署链接可带
+    kwargs = no_mail.await_args.kwargs
+    assert "sign_url" not in kwargs and "签署链接" not in kwargs["html_body"]
+
+    no_mail.side_effect = RuntimeError("SMTP 未配置")
+    case, note = await service.resend_delivery(db_session, case, mail_recipient="a@b.com")
+    assert case.mail_status == "failed" and note.startswith("邮件发送失败：SMTP 未配置")
 
 
-async def test_issue_certificate_without_sign_base_warns(db_session: AsyncSession, object_store: dict):
-    """没配签字页基地址：证明照常开具，但明确提示配不出签署链接。"""
-    # 共享测试库里可能已配过地址，显式清空（事务内，回滚后不影响库里的真实配置）
-    await _set_settings(db_session, **{"hr_offboarding.sign_page_base_url": ""})
+async def test_register_signature_validates_payload_and_stage(db_session: AsyncSession, object_store: dict):
+    """当面手写签名：只认 PNG/JPEG dataURL，且只在「证明送达中」可登记。"""
     case = await _to_cert_issuing(db_session, await _create_case(
         db_session, await _make_employee(db_session),
     ))
-    case, note, sign_url = await service.issue_certificate(db_session, case)
-    assert sign_url is None and "签字页基地址" in note
-
-
-async def test_sign_rejects_malformed_signature(db_session: AsyncSession, object_store: dict):
-    await _set_settings(db_session, **{"hr_offboarding.sign_page_base_url": SIGN_BASE})
-    case = await _to_cert_issuing(db_session, await _create_case(
-        db_session, await _make_employee(db_session),
-    ))
-    _case, _note, sign_url = await service.issue_certificate(db_session, case)
-    token = sign_url.split("token=")[1]
+    with pytest.raises(AppException, match="证明送达中"):
+        await service.register_signature(db_session, case, signature=PNG_SIGNATURE)
+    case, _note = await service.issue_certificate(db_session, case)
     with pytest.raises(AppException, match="签名数据格式"):
-        await service.confirm_sign_by_token(
-            db_session, token, signature="data:text/html;base64,PHNjcmlwdD4=",
+        await service.register_signature(
+            db_session, case, signature="data:text/html;base64,PHNjcmlwdD4=",
         )
     with pytest.raises(AppException, match="签名数据格式"):
-        await service.confirm_sign_by_token(db_session, token, signature=PNG_SIGNATURE[:-4] + "!!!!")
+        await service.register_signature(db_session, case, signature=PNG_SIGNATURE[:-4] + "!!!!")
+    assert case.status == OffboardingCase.STATUS_DELIVERING  # 被拒的签名不落任何东西
+    record = await repo.get_departure_record(db_session, case.departure_record_id)
+    assert record.cert_sign_status is None
+
+    # 签署人姓名留空取员工姓名
+    case = await service.register_signature(db_session, case, signature=PNG_SIGNATURE, signed_name="  ")
+    record = await repo.get_departure_record(db_session, case.departure_record_id)
+    assert record.cert_sign_name == case.name
 
 
 async def test_clearance_validation_saves_nothing_on_error(db_session: AsyncSession):
@@ -504,7 +505,7 @@ async def test_sync_resignation_approved_advances_to_clearing(
     case = await repo.get_case(db_session, case.id)
     assert case.status == OffboardingCase.STATUS_CLEARING and case.resignation_finished_at is not None
     assert case.clearance_instance_code is None  # 清退交接未配置定义编码
-    assert len(await repo.list_clearance_items(db_session, case.id)) == 11
+    assert len(await repo.list_clearance_items(db_session, case.id)) == 20
 
 
 async def test_sync_resignation_rejection_cancels_case(
@@ -566,7 +567,9 @@ async def test_sync_clearance_approved_reads_form_into_items(
     # 金额列 numeric(12,2)，读回固定两位小数
     assert [(r.item_name, r.deduction_amount) for r in by_category["finance"]] == [("扣补结算", Decimal("120.00"))]
     # 人力资源 / 工作部门没有回读明细：默认清单留着等 HR 确认
-    assert [r.item_name for r in by_category["hr"]] == ["工号牌", "社保医保", "培训费"]
+    assert [r.item_name for r in by_category["hr"]] == [
+        "社保医保公积金", "厂牌考勤卡", "培训费", "违约金", "工资结算至",
+    ]
     assert {r.source for r in by_category["admin"] + by_category["finance"]} == {"feishu_form"}
 
 
@@ -782,7 +785,7 @@ async def test_api_case_lifecycle_and_detail_flags(client, db_session: AsyncSess
     })
     assert done.json()["data"]["status"] == "clearing"
     detail = (await client.get(f"/api/v1/hr/offboarding-cases/{case_id}")).json()["data"]
-    assert detail["status"] == "clearing" and len(detail["clearance_items"]) == 11
+    assert detail["status"] == "clearing" and len(detail["clearance_items"]) == 20
 
     listed = await client.get("/api/v1/hr/offboarding-cases", params={"status": "clearing"})
     assert case_id in [row["id"] for row in listed.json()["data"]]
@@ -817,44 +820,45 @@ async def test_api_health_check_upload(client, db_session: AsyncSession, object_
     assert (await client.post(f"/api/v1/hr/offboarding-cases/{case_id}/submit-approval")).status_code == 200
 
 
-async def test_api_public_sign_page_escapes_html_and_returns_pdf(
+async def test_api_office_signature_and_no_public_sign_routes(
     client, db_session: AsyncSession, object_store: dict, no_mail: AsyncMock,
 ):
-    """免登签字页：证明 HTML 里的字段必须转义（离职原因是 HR 手填的自由文本）；
-    确认后响应自带 PDF（token 已作废，不能再按 token 下载）。"""
-    await _set_settings(db_session, **{"hr_offboarding.sign_page_base_url": SIGN_BASE})
-    employee = await _make_employee(db_session, name="张<b>三</b>")
+    """当面手写签名走登录态接口（公司电脑上由 HR 提交）；签名图随档案可查；
+    免登的公开签字路由已随链接一起下线。"""
+    employee = await _make_employee(db_session, name="张三")
     case = await _to_cert_issuing(db_session, await _create_case(db_session, employee))
-    _case, _note, sign_url = await service.issue_certificate(db_session, case)
-    token = sign_url.split("token=")[1]
+    case, _note = await service.issue_certificate(db_session, case)
 
-    page = await client.get(f"/api/v1/hr/departure-cert-sign/{token}")
-    assert page.status_code == 200, page.text
-    data = page.json()["data"]
-    assert "<b>三</b>" not in data["certificate_html"] and "&lt;b&gt;三&lt;/b&gt;" in data["certificate_html"]
-    assert data["has_pdf"] is True and data["contact"] == "人力资源部"
-
-    before = await client.get(f"/api/v1/hr/departure-cert-sign/{token}/pdf")
-    assert before.status_code == 200 and before.content.startswith(b"%PDF")
-
-    confirmed = await client.post(
-        f"/api/v1/hr/departure-cert-sign/{token}/confirm",
-        json={"signature": PNG_SIGNATURE, "confirm_name": "张三"},
-    )
-    assert confirmed.status_code == 200, confirmed.text
-    body = confirmed.json()["data"]
-    assert body["has_pdf"] is True and base64.b64decode(body["pdf_base64"]).startswith(b"%PDF")
-    assert body["pdf_filename"] == "解除劳动关系证明_张<b>三</b>.pdf"
-    assert body["case_status"] == "signed"
-
-    # token 一次性：页面 / PDF / 再次确认全部失效
-    assert (await client.get(f"/api/v1/hr/departure-cert-sign/{token}")).status_code == 404
-    assert (await client.get(f"/api/v1/hr/departure-cert-sign/{token}/pdf")).status_code == 404
+    # 旧的外部链接入口不复存在：拿着任何 token 都打不开
+    assert (await client.get("/api/v1/hr/departure-cert-sign/anything")).status_code == 404
     assert (await client.post(
-        f"/api/v1/hr/departure-cert-sign/{token}/confirm", json={"signature": PNG_SIGNATURE},
+        "/api/v1/hr/departure-cert-sign/anything/confirm", json={"signature": PNG_SIGNATURE},
     )).status_code == 404
 
-    assert (await client.get("/api/v1/hr/departure-cert-sign/not-a-token")).status_code == 404
+    bad = await client.post(
+        f"/api/v1/hr/offboarding-cases/{case.id}/signature", json={"signature": "not-an-image"},
+    )
+    assert bad.status_code == 400
+
+    signed = await client.post(
+        f"/api/v1/hr/offboarding-cases/{case.id}/signature",
+        json={"signature": PNG_SIGNATURE, "signed_name": "张三"},
+    )
+    assert signed.status_code == 200, signed.text
+    assert signed.json()["data"]["status"] == "signed"
+    assert signed.json()["data"]["delivery_channel"] == "handwriting"
+    assert "sign_url" not in signed.json()["data"]
+
+    # 默认测试账号没有敏感信息权限：只告知已签，不给图（有权限给图的路径见 test_offboarding_gap_fill）
+    image = await client.get(f"/api/v1/hr/offboarding-cases/{case.id}/signature-image")
+    assert image.status_code == 200, image.text
+    assert image.json()["data"]["masked"] is True
+    assert image.json()["data"]["signed_name"] == "张三"
+
+    detail = (await client.get(f"/api/v1/hr/offboarding-cases/{case.id}")).json()["data"]
+    assert detail["sign_state"]["cert_sign_status"] == "signed"
+    assert detail["sign_state"]["has_sign_image"] is True
+    assert "{联系人}" in detail["sms_template"] and "{链接}" not in detail["sms_template"]
 
 
 async def test_api_certificate_preview_escapes_fields(client, db_session: AsyncSession):

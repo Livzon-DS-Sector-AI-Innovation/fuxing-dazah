@@ -7,17 +7,20 @@
 import { useEffect, useRef, useState } from 'react'
 
 const A4_WIDTH = 794 // A4 宽 @ 96dpi
-const A4_HEIGHT = 1123
+export const A4_HEIGHT = 1123
 
 export default function CertificateFrame({
   html,
   height = A4_HEIGHT,
   title = '解除劳动关系证明',
+  viewportHeight,
 }: {
   html: string
   /** 文档高度（px）；两联版传 2 倍 */
   height?: number
   title?: string
+  /** 可视区高度上限（CSS 长度）；传了就在纸面内部滚动，外层的按钮始终留在视野里 */
+  viewportHeight?: string
 }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
@@ -37,7 +40,12 @@ export default function CertificateFrame({
       ref={wrapRef}
       className="overflow-hidden rounded-[var(--rounded-md)] border border-[var(--color-hairline)] bg-[var(--color-canvas)]"
     >
-      <div style={{ height: Math.round(height * scale) }}>
+      <div
+        style={{
+          height: viewportHeight ? `min(${viewportHeight}, ${Math.round(height * scale)}px)` : Math.round(height * scale),
+          overflowY: viewportHeight ? 'auto' : undefined,
+        }}
+      >
         <iframe
           title={title}
           srcDoc={html}

@@ -4,7 +4,6 @@ import { Spin } from 'antd'
 import PositionManager from '@/components/hr/PositionManager'
 
 export const dynamic = 'force-dynamic'
-export const metadata = { title: '岗位管理' }
 
 export default function PositionsPage() {
   return (

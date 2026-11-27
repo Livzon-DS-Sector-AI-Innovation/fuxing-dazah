@@ -68,23 +68,44 @@ export function toPayload(rows: ClearanceRow[]): Record<string, unknown>[] {
   }))
 }
 
-function Summary({ rows }: { rows: ClearanceRow[] }) {
+function Summary({
+  rows,
+  onConfirmAll,
+}: {
+  rows: ClearanceRow[]
+  /** 某部门口头 / 飞书回复「都清完了」时，一键把该部门剩下的「待确认」标成「已清退」；已标「有扣补」的不动 */
+  onConfirmAll?: (category: ClearanceCategory) => void
+}) {
   return (
     <div className="flex flex-wrap gap-2">
       {CATEGORY_ORDER.map((category) => {
         const own = rows.filter((row) => row.category === category)
         const done = own.filter((row) => row.status !== 'pending').length
+        const hasPending = own.some((row) => row.status === 'pending')
         const deduct = own.reduce((sum, row) => sum + (row.deduction_amount || 0), 0)
         const supplement = own.reduce((sum, row) => sum + (row.supplement_amount || 0), 0)
         return (
           <span
             key={category}
-            className="rounded-[var(--rounded-sm)] bg-[var(--color-surface)] px-2 py-1 text-[12px] text-[var(--color-slate)]"
+            className="inline-flex items-center gap-1 rounded-[var(--rounded-sm)] bg-[var(--color-surface)] px-2 py-0.5 text-[12px] text-[var(--color-slate)]"
           >
-            <b className="font-medium text-[var(--color-ink)]">{CATEGORY_LABELS[category]}</b>
-            {' '}· 已确认 {done}/{own.length}
-            {deduct > 0 && <span className="ml-1">扣 {deduct}</span>}
-            {supplement > 0 && <span className="ml-1">补 {supplement}</span>}
+            <span>
+              <b className="font-medium text-[var(--color-ink)]">{CATEGORY_LABELS[category]}</b>
+              {' '}· 已确认 {done}/{own.length}
+              {deduct > 0 && <span className="ml-1">扣 {deduct}</span>}
+              {supplement > 0 && <span className="ml-1">补 {supplement}</span>}
+            </span>
+            {hasPending && onConfirmAll && (
+              <Button
+                type="link"
+                size="small"
+                // 跟着汇总条的字号行高走，别撑高整条（仓库口径：antd 高度要 ! 才压得住）
+                className="!h-auto !px-1 !text-[12px] !leading-[18px]"
+                onClick={() => onConfirmAll(category)}
+              >
+                全部已清退
+              </Button>
+            )}
           </span>
         )
       })}
@@ -234,7 +255,15 @@ export default function ClearanceTable({
 
   return (
     <div className="space-y-2">
-      <Summary rows={rows} />
+      <Summary
+        rows={rows}
+        onConfirmAll={disabled ? undefined : (category) =>
+          onChange(
+            rows.map((row) =>
+              row.category === category && row.status === 'pending' ? { ...row, status: 'confirmed' } : row,
+            ),
+          )}
+      />
       <Table<ClearanceRow>
         size="small"
         columns={columns}

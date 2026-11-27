@@ -1,10 +1,13 @@
-"""离职证明送达通道抽象：邮件（现有 send_email）+ 短信（通道预留）。
+"""离职证明送达通道：邮件（现有 send_email）+ 短信（人工发送 + 登记）。
 
-需求口径：离职办结后员工飞书账号随即注销，邮件 + 短信（附签署链接）是
-主要送达与签署入口；发送时间、接收号码/邮箱与送达结果需留存。
-2026-11-25 拍板：短信暂不接，本模块留统一适配点——后续接入服务商时实现
-`_send_via_provider` 并在 hr_offboarding.* 增加凭证配置键即可，调用方
-（service.resend_delivery）无需改动。通道未接入期间签署链接交回 HR 人工转发。
+需求口径：离职办结后员工飞书账号随即注销，邮件 + 短信通知是主要送达入口；
+发送时间、接收号码/邮箱与送达结果需留存。
+2026-11-27 拍板：短信通道不接服务商，先做闭环——短信文案按模板生成交 HR 一键复制，
+用手机或飞书发出后在本系统登记接收号码与发送时间（service.register_sms_sent）。
+`send_certificate_sms` / `_send_via_provider` 保留为后续接入服务商的适配点，接入后只需把
+service 层的登记动作换成调用它。
+同日拍板：系统只部署在公司内网，员工在手机 / 外网打不开任何指向本系统的链接，
+所以邮件与短信里都不带签署链接，只做通知；员工签字改为到人事办公室当面办理。
 """
 
 import logging
@@ -14,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.hr.mail_service import send_email
 from app.modules.hr.models import EmailLog
-from app.modules.hr.offboarding import settings as offboarding_settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,20 +34,15 @@ async def send_certificate_mail(
     to: str,
     employee_name: str,
     pdf_bytes: bytes,
-    sign_url: str,
 ) -> DeliveryResult:
-    """离职证明邮件：PDF 附件 + 签署链接正文；结果写 EmailLog 留痕。"""
+    """离职证明邮件：PDF 附件；结果写 EmailLog 留痕。"""
     filename = f"解除劳动关系证明_{employee_name}.pdf"
-    sign_html = (
-        f'<p>您也可以点击 <a href="{sign_url}">签署链接</a> 查看证明并完成线上签字确认。</p>'
-        if sign_url else ""
-    )
     html = (
         f"<html><body style=\"font-family:sans-serif;padding:20px;\">"
         f"<h2>解除劳动关系证明</h2>"
         f"<p>{employee_name}，您好！</p>"
         f"<p>附件是您的解除劳动关系证明，请查收。</p>"
-        f"{sign_html}</body></html>"
+        f"</body></html>"
     )
     try:
         await send_email(
@@ -70,13 +67,12 @@ async def send_certificate_sms(
     *,
     to: str,
     employee_name: str,
-    sign_url: str,
     contact: str,
 ) -> DeliveryResult:
-    """离职证明短信（附签署链接）。通道未接入时返回 not_configured（不视为失败）。"""
+    """离职证明短信通知（只告知已开具，不带链接）。通道未接入时返回 not_configured（不视为失败）。"""
     content = (
         f"【丽珠集团福兴医药】{employee_name}您好，您的解除劳动关系证明已开具，"
-        f"请点击 {sign_url} 查看并完成签字确认。如有疑问请联系{contact}。"
+        f"请到人力资源部签收。如有疑问请联系{contact}。"
     )
     ok, error, status = await _send_via_provider(to=to, content=content)
     logger.info("离职证明短信: to=%s status=%s", to, status)
@@ -90,13 +86,3 @@ async def _send_via_provider(*, to: str, content: str) -> tuple[bool, str | None
     返回 (True, None, "sent")；失败返回 (False, 错误, "failed")。
     """
     return False, "短信通道未接入（服务商确定后实现 _send_via_provider）", "not_configured"
-
-
-async def build_sign_url(db: AsyncSession, token: str) -> str:
-    """签字 H5 链接：基地址配置 hr_offboarding.sign_page_base_url；未配置返回空串。
-
-    基地址须是静态段页面（…/api/departure-cert-sign），token 走查询参数。
-    """
-    kv = await offboarding_settings.load_offboarding_settings(db)
-    base = offboarding_settings.sign_base_url(kv)
-    return f"{base}?token={token}" if base else ""

@@ -10,9 +10,11 @@ import type {
   DepartureLedgerRow,
   DepartureSavedView,
   OffboardingCase,
+  OffboardingCaseByEmployee,
   OffboardingCaseDetail,
-  OffboardingCaseDeliveryResponse,
   OffboardingCaseStats,
+  OffboardingSignatureImage,
+  OffboardingSignatureInput,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload, fetchHrText } from './_helpers'
 
@@ -53,7 +55,10 @@ export async function fetchOffboardingCase(id: string): Promise<{ code: number; 
   })
 }
 
-/** 发起离职办理（按员工档案建单） */
+/**
+ * 发起离职办理（按员工档案建单）。从离职台账行发起时带 departure_record_id：
+ * 离职日期与类型取台账行的值（离职台账以飞书表为准），不用前端传的。
+ */
 export async function createOffboardingCase(payload: {
   employee_id: string
   offboarding_date: string
@@ -62,6 +67,7 @@ export async function createOffboardingCase(payload: {
   application_submitted?: boolean
   health_check_required?: boolean
   remark?: string
+  departure_record_id?: string
 }): Promise<{ code: number; message: string; data: OffboardingCase }> {
   const res = await fetchHrApi('/hr/offboarding-cases', {
     method: 'POST',
@@ -152,11 +158,11 @@ export async function previewOffboardingCertificate(id: string, template: 'elect
   })
 }
 
-/** 开具证明（生成 PDF 存档 + 台账回写 + 自动发邮件）；sign_url 供 HR 人工转发 */
+/** 开具证明（生成 PDF 存档 + 台账回写 + 自动发邮件）；message 里带没办成的事（如邮件发送失败） */
 export async function issueOffboardingCertificate(
   id: string,
   payload: { cert_template: 'electronic' | 'paper'; mail_recipient?: string },
-): Promise<{ code: number; message: string; data: OffboardingCaseDeliveryResponse }> {
+): Promise<{ code: number; message: string; data: OffboardingCase }> {
   const res = await fetchHrApi(`/hr/offboarding-cases/${id}/issue-certificate`, {
     method: 'POST',
     headers: JSON_HEADERS,
@@ -167,14 +173,11 @@ export async function issueOffboardingCertificate(
   return res
 }
 
-/**
- * 送达阶段补发 / 取签署链接：不传邮箱和手机号时只重新签发链接（旧链接作废）。
- * 短信通道未接入，签署链接靠这里取回后人工转发给员工。
- */
+/** 送达阶段补发邮件（附证明 PDF）；只登记短信不走这里（见 registerOffboardingSms） */
 export async function resendOffboardingDelivery(
   id: string,
-  payload: { mail_recipient?: string; sms_phone?: string } = {},
-): Promise<{ code: number; message: string; data: OffboardingCaseDeliveryResponse }> {
+  payload: { mail_recipient?: string } = {},
+): Promise<{ code: number; message: string; data: OffboardingCase }> {
   return fetchHrApi(`/hr/offboarding-cases/${id}/resend-delivery`, {
     method: 'POST',
     headers: JSON_HEADERS,
@@ -183,7 +186,56 @@ export async function resendOffboardingDelivery(
   })
 }
 
-/** 纸质两联版签收登记（当面签字） */
+/** 登记短信已发送：短信通道未接服务商，HR 复制文案用手机 / 飞书发出后登记号码与时间 */
+export async function registerOffboardingSms(id: string, phone: string) {
+  return fetchHrApi(`/hr/offboarding-cases/${id}/resend-delivery`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ sms_phone: phone }),
+    errorMessage: '登记短信失败',
+  })
+}
+
+/** HR 手动发起清退交接飞书审批（没到建议发起日但需要提前办时） */
+export async function submitOffboardingClearance(id: string): Promise<{ code: number; message: string; data: OffboardingCase }> {
+  return fetchHrApi(`/hr/offboarding-cases/${id}/submit-clearance`, {
+    method: 'POST',
+    errorMessage: '发起清退交接审批失败',
+  })
+}
+
+/** 登记交接人与部门办事员（传空字符串清空） */
+export async function saveOffboardingHandover(
+  id: string,
+  payload: { handover_to?: string | null; dept_clerk?: string | null },
+) {
+  return fetchHrApi(`/hr/offboarding-cases/${id}/handover`, {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+    errorMessage: '保存交接信息失败',
+  })
+}
+
+/** 员工手写签名图：随档案调取；没有敏感信息权限时 masked=true */
+export async function fetchOffboardingSignatureImage(id: string): Promise<OffboardingSignatureImage> {
+  const res = await fetchHrApi<{ code: number; message: string; data: OffboardingSignatureImage }>(
+    `/hr/offboarding-cases/${id}/signature-image`,
+    { errorMessage: '加载签名失败' },
+  )
+  return res.data
+}
+
+/** 某员工最近的离职办理单（员工档案「离职材料」用）；没有办理单时 case 为 null */
+export async function fetchOffboardingCaseByEmployee(employeeNumber: string): Promise<OffboardingCaseByEmployee> {
+  const res = await fetchHrApi<{ code: number; message: string; data: OffboardingCaseByEmployee }>(
+    `/hr/offboarding-cases/by-employee/${encodeURIComponent(employeeNumber)}`,
+    { errorMessage: '加载离职办理信息失败' },
+  )
+  return res.data
+}
+
+/** 纸质签收登记（员工在纸质证明上签字后由 HR 登记） */
 export async function paperSignOffboardingCase(id: string, payload: { signed_by: string }) {
   return fetchHrApi(`/hr/offboarding-cases/${id}/paper-sign`, {
     method: 'POST',
@@ -191,6 +243,18 @@ export async function paperSignOffboardingCase(id: string, payload: { signed_by:
     body: JSON.stringify(payload),
     errorMessage: '登记签收失败',
   })
+}
+
+/** 当面手写签名：员工到人事办公室，在 HR 登录的公司电脑上签名，签名图随档案留存 */
+export async function signOffboardingSignature(id: string, payload: OffboardingSignatureInput) {
+  const res = await fetchHrApi(`/hr/offboarding-cases/${id}/signature`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+    errorMessage: '签名提交失败',
+  })
+  revalidatePath('/hr/departure')
+  return res
 }
 
 /** 办结（档案 / 证件 / 花名册 / 入职台账 / 离职台账联动） */

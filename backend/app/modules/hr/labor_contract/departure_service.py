@@ -4,7 +4,9 @@
   合同到期日 = 到期终止，再按离职类型归类），离职类型取值以离职台账真实数据为准
   （个人原因/实习结束/退休/部门劝退/调合成公司…）
 - 办结衔接：已离职人员的未完结合同统一置 terminated 并关联离职记录（两本台账不交叉、
-  不再参与到期预警）；离职日期未到（办理中）的不动，撤销离职后状态不必回滚
+  不再参与到期预警）；离职日期未到（办理中）的不动，撤销离职后状态不必回滚。
+  每日扫描见 reconcile_departed_contracts；离职办结时按单个员工执行见
+  terminate_for_employee（判定与写法相同，只 flush 不 commit，由调用方提交）
 - 没有合同行的历史离职人员，归档扫描件时按离职记录合同信息建一份已终止合同
 
 列表查询与行装配见 departure_ledger.py。SQLAlchemy async 铁律：UPDATE 后不直接
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 TERMINATION_EXPIRY = "expiry"          # 合同到期终止
 TERMINATION_RESIGN = "resign"          # 员工辞职解除
 TERMINATION_EMPLOYER = "employer"      # 公司解除
+TERMINATION_NEGOTIATED = "negotiated"  # 协商解除
 TERMINATION_RETIRE = "retire"          # 退休终止
 TERMINATION_TRANSFER = "transfer"      # 调动转签解除
 TERMINATION_OTHER = "other"            # 其他
@@ -36,6 +39,7 @@ TERMINATION_LABELS = {
     TERMINATION_EXPIRY: "合同到期终止",
     TERMINATION_RESIGN: "员工辞职解除",
     TERMINATION_EMPLOYER: "公司解除",
+    TERMINATION_NEGOTIATED: "协商解除",
     TERMINATION_RETIRE: "退休终止",
     TERMINATION_TRANSFER: "调动转签解除",
     TERMINATION_OTHER: "其他",
@@ -49,6 +53,7 @@ RETIRE_TYPES = ("退休",)
 EXPIRY_TYPES = ("合同到期", "实习结束", "退休返聘到期")
 RESIGN_TYPES = ("辞职", "个人原因")
 EMPLOYER_TYPES = ("辞退", "部门劝退", "劝退", "裁员")
+NEGOTIATED_TYPES = ("协商解除", "协商", "协商离职", "双方协商解除")
 TRANSFER_TYPES = ("调合成公司", "调动", "转签")
 
 # ─── 离职证明开具/送达状态 ───
@@ -89,7 +94,7 @@ def derive_termination_type(
 
     没有任何合同信息 → 无合同记录（合同都没有，谈不上怎么终止）；否则
     退休 > 到期类离职类型 > 离职日期不早于合同到期日（合同已期满）> 辞职类 >
-    公司解除类 > 调动转签类 > 其他。
+    公司解除类 > 协商解除类 > 调动转签类 > 其他。
     """
     if not has_contract:
         return TERMINATION_NONE
@@ -103,6 +108,8 @@ def derive_termination_type(
         return TERMINATION_RESIGN
     if offboarding_type in EMPLOYER_TYPES:
         return TERMINATION_EMPLOYER
+    if offboarding_type in NEGOTIATED_TYPES:
+        return TERMINATION_NEGOTIATED
     if offboarding_type in TRANSFER_TYPES:
         return TERMINATION_TRANSFER
     return TERMINATION_OTHER
@@ -132,9 +139,9 @@ def term_label(term_type: str | None, term_years: int | None) -> str | None:
 
 
 def derive_certificate_status(departure: DepartureRecord, case=None) -> str:
-    """离职证明开具/送达状态：有离职办结单以办结单为准（case 为空即没有办结单），否则看台账签字/开具字段。"""
+    """离职证明开具/送达状态：有离职办结单以办结单为准（case 为空即没有办结单），否则看台账签收/开具字段。"""
     case_status = getattr(case, "status", None)
-    # 签收优先于开具：电子签收记在台账 cert_sign_status，纸质签收与办结态记在办结单
+    # 签收优先于开具：手写签名与纸质登记都会回写台账 cert_sign_status，办结单上另记纸质签收时间
     if departure.cert_sign_status == "signed" or getattr(case, "paper_signed_at", None):
         return CERT_SIGNED
     if case_status in (CASE_SIGNED, CASE_CLOSED):
@@ -176,11 +183,34 @@ async def latest_departures(db: AsyncSession, numbers: list[str]) -> dict[str, D
     return result
 
 
+def _has_departed(departure: DepartureRecord | None, employee_number: str, left: set[str], as_of: date) -> bool:
+    """「已离职」判定：有离职记录且离职日期不晚于 as_of，或员工档案状态为离职。"""
+    left_date = departure.offboarding_date if departure else None
+    return (left_date is not None and left_date <= as_of) or employee_number in left
+
+
+async def _terminate_for_departure(
+    contract: LaborContract, departure: DepartureRecord | None, left_date: date | None,
+) -> None:
+    """已离职员工的合同置 terminated：原因按离职类型 / 离职日期推导，关联离职记录。"""
+    termination_type = derive_termination_type(
+        departure.offboarding_type if departure else None, left_date, contract.end_date,
+    )
+    contract.status = LaborContract.STATUS_TERMINATED
+    contract.terminated_reason = (
+        TERMINATION_LABELS[termination_type]
+        if termination_type != TERMINATION_NONE else "员工离职，合同解除"
+    )
+    contract.terminated_at = datetime.now(UTC)
+    if departure is not None and contract.departure_record_id is None:
+        contract.departure_record_id = departure.id
+
+
 async def reconcile_departed_contracts(db: AsyncSession) -> list[LaborContract]:
     """已离职人员的未完结合同统一归入离职台账：置 terminated 并关联离职记录。
 
     「已离职」= 有离职记录且离职日期已到，或员工档案状态为离职。归入后不再参与
-    到期预警（扫描按状态过滤）。
+    到期预警（扫描按状态过滤）。离职日期未到（办理中）的不动。
     """
     open_rows = await repo.list_open_contracts(db)
     if not open_rows:
@@ -193,25 +223,39 @@ async def reconcile_departed_contracts(db: AsyncSession) -> list[LaborContract]:
     for contract in open_rows:
         departure = departure_map.get(contract.employee_number)
         left_date = departure.offboarding_date if departure else None
-        if not ((left_date is not None and left_date <= today) or contract.employee_number in left):
+        if not _has_departed(departure, contract.employee_number, left, today):
             continue
-        termination_type = derive_termination_type(
-            departure.offboarding_type if departure else None, left_date, contract.end_date,
-        )
-        contract.status = LaborContract.STATUS_TERMINATED
-        contract.terminated_reason = (
-            TERMINATION_LABELS[termination_type]
-            if termination_type != TERMINATION_NONE else "员工离职，合同解除"
-        )
-        contract.terminated_at = datetime.now(UTC)
-        contract.sign_token_hash = None
-        if departure is not None and contract.departure_record_id is None:
-            contract.departure_record_id = departure.id
+        await _terminate_for_departure(contract, departure, left_date)
         reconciled.append(contract)
     if reconciled:
         await db.flush()
         logger.info("离职人员合同归入离职台账: %d 份", len(reconciled))
     return reconciled
+
+
+async def terminate_for_employee(
+    db: AsyncSession, *, employee_number: str, departed_on: date,
+) -> int:
+    """离职办结时按单个员工终止未完结合同（判定与写法同 reconcile_departed_contracts）。
+
+    以 departed_on 为判定基准日：该工号最新一条离职记录的离职日期不晚于它，或员工档案
+    已是离职状态，即视为已离职。只 flush 不 commit，由调用方（离职办结）统一提交。
+    返回处理条数；不满足条件或没有未完结合同时返回 0，可重复调用。
+    """
+    open_rows = await repo.list_open_contracts(db, employee_number=employee_number)
+    if not open_rows:
+        return 0
+    departure = (await latest_departures(db, [employee_number])).get(employee_number)
+    left = await repo.map_left_employees(db, [employee_number])
+    if not _has_departed(departure, employee_number, left, departed_on):
+        return 0
+    for contract in open_rows:
+        await _terminate_for_departure(
+            contract, departure, departure.offboarding_date if departure else None,
+        )
+    await db.flush()
+    logger.info("离职办结终止合同: %s %d 份", employee_number, len(open_rows))
+    return len(open_rows)
 
 
 async def ensure_departure_contract(
@@ -249,6 +293,7 @@ async def ensure_departure_contract(
         terminated_reason=TERMINATION_LABELS[termination_type],
         terminated_at=datetime.combine(departure.offboarding_date or date.today(), time.min, tzinfo=UTC),
         departure_record_id=departure.id,
+        origin=LaborContract.ORIGIN_MIGRATION,
         remark="离职合同台账建档（按离职记录合同信息）",
         created_by=user.id if user is not None else None,
     )

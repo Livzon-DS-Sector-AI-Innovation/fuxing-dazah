@@ -4,6 +4,7 @@
 // 每次导出后端都会写一条；这里只读展示，有离职台账管理权限的人才能看。
 
 import { useEffect, useState } from 'react'
+import dayjs from 'dayjs'
 import { Alert, Drawer, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { fetchDepartureExportLogs } from '@/actions/hr'
@@ -12,7 +13,8 @@ import type { DepartureExportLog } from '@/types/hr'
 const { Text } = Typography
 
 function fmtTime(value?: string | null): string {
-  return value ? value.slice(0, 16).replace('T', ' ') : '—'
+  // 按本地时区格式化：后端给的是带 +00:00 的 UTC 时间串，直接截取会差 8 小时
+  return value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—'
 }
 
 export default function DepartureExportLogDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {

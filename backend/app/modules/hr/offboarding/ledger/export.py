@@ -99,7 +99,8 @@ def _cert_signed_at(row: dict[str, Any], _ctx: dict[str, Any]) -> str:
 def _sign_channel(row: dict[str, Any], _ctx: dict[str, Any]) -> str:
     if not row.get("cert_signed"):
         return ""
-    return "线上手写签名" if row.get("has_sign_image") else "纸质当面签收"
+    # 手写签名图只可能来自人事办公室电脑上的当面签名；没有图的（含早期线上签字）按纸质登记展示
+    return "当面手写签名" if row.get("has_sign_image") else "纸质签收登记"
 
 
 def _cert_template(row: dict[str, Any], _ctx: dict[str, Any]) -> str:

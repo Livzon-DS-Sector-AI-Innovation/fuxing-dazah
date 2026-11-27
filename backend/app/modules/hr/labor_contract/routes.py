@@ -1,7 +1,8 @@
-"""劳动合同 HTTP 路由：台账 CRUD、续签、审批、盖章/领取、终止、公开签字。
+"""劳动合同 HTTP 路由：台账 CRUD、续签、审批、盖章/领取、终止。
 
-本 router 挂在 hr 模块路由下（require_hr_basic 门禁 + _HR_PATH_PERMISSIONS
-映射）；公开签字路由 sign_router 挂在全局 api_router（免登，token 即凭证）。
+本 router 挂在 hr 模块路由下（require_hr_basic 门禁 + _HR_PATH_PERMISSIONS 映射）。
+系统只在公司内网可达，员工在手机上打不开本系统的链接，所以没有「线上签字」：
+员工到人事办公室领取合同即完成签收，由 HR 登记领取。
 """
 
 import logging
@@ -18,10 +19,15 @@ from app.core.database import get_db
 from app.core.exceptions import AppException, ForbiddenException, NotFoundException
 from app.core.response import paginated_response, success_response
 from app.modules.hr.deps import HrAccessContext, require_hr_access
-from app.modules.hr.labor_contract import archive_service, renewal_approval, service
+from app.modules.hr.labor_contract import (
+    archive_service,
+    offboarding_handoff,
+    renewal_approval,
+    service,
+)
 from app.modules.hr.labor_contract import repository as repo
 from app.modules.hr.labor_contract import settings as contract_settings
-from app.modules.hr.labor_contract.models import LaborContract
+from app.modules.hr.labor_contract.models import ContractNoticeLog, LaborContract
 from app.platform.audit.service import record_audit_log
 
 logger = logging.getLogger(__name__)
@@ -29,6 +35,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["HR-劳动合同"])
 
 RESOURCE_TYPE = "hr_labor_contract"
+# 详情页通知留痕条数上限
+NOTICE_LOG_LIMIT = 20
+# 「待我处理」口径取值（与 /labor-contracts/stats 的键名一致，另加 attention = 五项待办并集）
+_TODO_PATTERN = "^(" + "|".join(repo.LIST_TODO_KEYS) + ")$"
 
 # ─── 请求体 ───
 
@@ -63,10 +73,28 @@ class TerminateInput(BaseModel):
     reason: str | None = Field(None, max_length=128)
 
 
+class TransferOffboardingInput(BaseModel):
+    offboarding_date: date | None = Field(
+        None, description="离职日期；不传则合同到期日未过用到期日，否则用今天",
+    )
+    reason: str | None = Field(None, max_length=512, description="离职原因；不传则按部门意见自动生成")
+
+
+class ResendNoticeInput(BaseModel):
+    kind: Literal["renew", "collect"] = Field(..., description="renew 续签通知 / collect 领取通知")
+
+
 # ─── 序列化 ───
 
 _DECISION_LABELS: dict[str | None, str] = {"agree": "同意续签", "disagree": "不同意续签"}
 _APPROVAL_MODE_LABELS: dict[str | None, str] = {"feishu": "飞书审批", "manual": "站内审批"}
+
+
+def _split_csv(raw: str | None) -> list[str] | None:
+    """逗号分隔的筛选项 → 去空白的非空列表；没传或全为空返回 None（即不筛选）。"""
+    if not raw:
+        return None
+    return [item.strip() for item in raw.split(",") if item.strip()] or None
 
 
 def _contract_dict(c: LaborContract) -> dict[str, Any]:
@@ -86,6 +114,8 @@ def _contract_dict(c: LaborContract) -> dict[str, Any]:
         "sign_date": c.sign_date.isoformat() if c.sign_date else None,
         "status": c.status,
         "status_label": c.status_label,
+        "origin": c.origin,
+        "origin_label": c.origin_label,
         "remark": c.remark,
         "dept_decision": c.dept_decision,
         "dept_decision_label": _DECISION_LABELS.get(c.dept_decision),
@@ -96,7 +126,6 @@ def _contract_dict(c: LaborContract) -> dict[str, Any]:
         "approval_instance_code": c.approval_instance_code,
         "stamped_at": c.stamped_at.isoformat() if c.stamped_at else None,
         "delivered_at": c.delivered_at.isoformat() if c.delivered_at else None,
-        "sign_confirmed_at": c.sign_confirmed_at.isoformat() if c.sign_confirmed_at else None,
         "terminated_reason": c.terminated_reason,
         "terminated_at": c.terminated_at.isoformat() if c.terminated_at else None,
         "departure_record_id": str(c.departure_record_id) if c.departure_record_id else None,
@@ -107,6 +136,31 @@ def _contract_dict(c: LaborContract) -> dict[str, Any]:
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
+
+
+def _notice_dict(log: ContractNoticeLog) -> dict[str, Any]:
+    return {
+        "kind": log.kind,
+        "recipient_name": log.recipient_name,
+        "status": log.status,
+        "error_message": log.error_message,
+        "created_at": log.created_at.isoformat() if log.created_at else None,
+    }
+
+
+def _progress_dicts(contract: LaborContract, notices: list[ContractNoticeLog]) -> list[dict[str, Any]]:
+    """进度步骤的 JSON 形态（时间统一 ISO 字符串，与本模块其余接口一致）。"""
+    return [
+        {**step, "at": step["at"].isoformat() if step["at"] else None}
+        for step in service.build_progress(contract, notices)
+    ]
+
+
+def _notice_suffix(notice: dict[str, Any]) -> str:
+    """通知没送达时在提示语后追加原因（送达则不追加）。"""
+    if notice["status"] == ContractNoticeLog.STATUS_SENT:
+        return ""
+    return f"（通知未送达：{notice['error'] or '发送失败'}）"
 
 
 async def _ensure_in_scope(
@@ -167,7 +221,7 @@ def _list_scope(
 # ─── 台账 ───
 
 
-@router.get("/labor-contracts", summary="劳动合同台账（分页，支持到期窗口/状态/关键字筛选）")
+@router.get("/labor-contracts", summary="劳动合同台账（分页，支持到期窗口/状态/待办口径/学历筛选）")
 async def list_contracts(
     status: str | None = Query(None, description="逗号分隔状态过滤"),
     keyword: str | None = Query(None, max_length=64, description="姓名/工号模糊"),
@@ -176,29 +230,63 @@ async def list_contracts(
     archive_status: str | None = Query(
         None, pattern="^(unarchived|archived)$", description="归档状态过滤",
     ),
+    education: str | None = Query(
+        None, max_length=128, description="学历过滤（逗号分隔多值；取自员工档案）",
+    ),
+    todo: str | None = Query(
+        None, pattern=_TODO_PATTERN,
+        description="「待我处理」口径（键名同 /labor-contracts/stats）",
+    ),
+    include_history: bool = Query(
+        False,
+        description="true 时返回已续签取代 / 已终止的历史行（缺省且未传 status、todo 时不返回）",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:read")),
 ) -> JSONResponse:
-    statuses = [s.strip() for s in status.split(",") if s.strip()] if status else None
     # 在职台账只放在职人员合同（两本台账不交叉），离职人员合同见离职台账「合同台账」页签
     employee_number, departments = _list_scope(ctx, department)
 
     total, rows = await repo.list_page(
         db,
         departments=departments,
-        statuses=statuses,
+        statuses=_split_csv(status),
         keyword=keyword,
         expiring_within_days=expiring_days,
         employee_number=employee_number,
         archive_status=archive_status,
+        educations=_split_csv(education),
+        todo=todo,
+        exclude_history=not include_history,
         offset=(page - 1) * page_size,
         limit=page_size,
     )
+    education_map = await repo.map_education(db, [c.employee_number for c in rows])
     return paginated_response(
-        data=[_contract_dict(c) for c in rows], total=total, page=page, page_size=page_size
+        data=[
+            {**_contract_dict(c), "education": education_map.get(c.employee_number)}
+            for c in rows
+        ],
+        total=total, page=page, page_size=page_size,
     )
+
+
+@router.get(
+    "/labor-contracts/stats",
+    summary="劳动合同「待我处理」统计（口径与列表 todo 筛选一致；人群同在职台账）",
+)
+async def contract_stats(
+    department: str | None = Query(None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:contract:read")),
+) -> JSONResponse:
+    # 必须登记在 /labor-contracts/{contract_id} 之前，否则 stats 会被当成 contract_id
+    employee_number, departments = _list_scope(ctx, department)
+    return success_response(data=await service.contract_stats(
+        db, departments=departments, employee_number=employee_number,
+    ))
 
 
 @router.get("/labor-contracts/entry-preview", summary="录入预推：签订次序与期限（按入职日期推算）")
@@ -264,8 +352,12 @@ async def get_contract(
     contract = await service.get_or_404(db, contract_id)
     await _ensure_in_scope(db, ctx, contract)
     history = await service.contract_history(db, contract)
+    notices = await repo.list_notices(db, contract.id, limit=NOTICE_LOG_LIMIT)
     data = _contract_dict(contract)
     data["history"] = [_contract_dict(c) for c in history]
+    # 通知留痕（新→旧）与状态驱动的进度步骤：前端只渲染，不再按字段自行推断
+    data["notices"] = [_notice_dict(log) for log in notices]
+    data["progress"] = _progress_dicts(contract, notices)
     data.update(_archive_caps(ctx, contract))
     # 飞书原生审批为可选增强：配置了定义编码才展示「转飞书审批」入口（默认站内审批）
     kv = await contract_settings.load_contract_settings(db)
@@ -325,13 +417,14 @@ async def renew_contract(
 
 @router.post(
     "/labor-contracts/{contract_id}/dept-decision",
-    summary="部门审批（站内勾选；飞书审批由轮询回写）",
+    summary="登记部门续签意见（同意 / 不同意）",
 )
 async def dept_decision(
     contract_id: UUID,
     payload: DecisionInput,
     db: AsyncSession = Depends(get_db),
-    ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
+    # 部门负责人只需 approve；HR 持 manage 可代登记（任一即可，仍走数据范围校验）
+    ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage", "hr:contract:approve")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
     await _ensure_in_scope(db, ctx, contract)
@@ -377,15 +470,21 @@ async def stamp_contract(
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
     await _ensure_in_scope(db, ctx, contract)
-    contract = await service.mark_stamped(db, contract, user_id=ctx.user.id)
+    contract, notice = await service.mark_stamped(
+        db, contract, user_id=ctx.user.id, user_name=ctx.user.name,
+    )
     await record_audit_log(
         db, action="hr.contract.stamp", user=ctx.user,
         resource_type=RESOURCE_TYPE, resource_id=contract.id,
     )
-    return success_response(data=_contract_dict(contract), message="已标记盖章完成")
+    notice_data = notice.as_dict()
+    return success_response(
+        data={**_contract_dict(contract), "notice": notice_data},
+        message="已标记盖章完成" + _notice_suffix(notice_data),
+    )
 
 
-@router.post("/labor-contracts/{contract_id}/deliver", summary="标记已领取（签发签字链接并推送提醒）")
+@router.post("/labor-contracts/{contract_id}/deliver", summary="登记已领取（员工到人事办公室领取合同即签收）")
 async def deliver_contract(
     contract_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -393,15 +492,70 @@ async def deliver_contract(
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
     await _ensure_in_scope(db, ctx, contract)
-    contract, sign_url = await service.mark_delivered(db, contract, user_id=ctx.user.id)
+    contract = await service.mark_delivered(
+        db, contract, user_id=ctx.user.id, user_name=ctx.user.name,
+    )
     await record_audit_log(
         db, action="hr.contract.deliver", user=ctx.user,
         resource_type=RESOURCE_TYPE, resource_id=contract.id,
     )
-    return success_response(
-        data={**_contract_dict(contract), "sign_url": sign_url},
-        message="已标记领取" + ("" if sign_url else "（未配置签字页地址，链接未生成）"),
+    return success_response(data=_contract_dict(contract), message="已登记领取")
+
+
+@router.post(
+    "/labor-contracts/{contract_id}/resend-notice",
+    summary="重发员工通知（续签通知 / 领取通知）",
+)
+async def resend_notice(
+    contract_id: UUID,
+    payload: ResendNoticeInput,
+    db: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
+) -> JSONResponse:
+    contract = await service.get_or_404(db, contract_id)
+    await _ensure_in_scope(db, ctx, contract)
+    notice = await service.resend_notice(
+        db, contract, kind=payload.kind, user_id=ctx.user.id, user_name=ctx.user.name,
     )
+    await record_audit_log(
+        db, action="hr.contract.resend_notice", user=ctx.user,
+        resource_type=RESOURCE_TYPE, resource_id=contract.id,
+        new_value={"kind": payload.kind, "status": notice.status, "error": notice.error},
+    )
+    notice_data = notice.as_dict()
+    if notice.status == ContractNoticeLog.STATUS_SENT:
+        message = "通知已发送"
+    else:
+        message = f"通知未发送：{notice.error or '发送失败'}"
+    return success_response(data=notice_data, message=message)
+
+
+@router.post(
+    "/labor-contracts/{contract_id}/transfer-offboarding",
+    summary="转入离职办理（为员工创建离职办理单；合同未终止的置已终止并关联）",
+)
+async def transfer_offboarding(
+    contract_id: UUID,
+    payload: TransferOffboardingInput,
+    db: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
+) -> JSONResponse:
+    contract = await service.get_or_404(db, contract_id)
+    await _ensure_in_scope(db, ctx, contract)
+    case = await offboarding_handoff.transfer_to_offboarding(
+        db, contract,
+        offboarding_date=payload.offboarding_date, reason=payload.reason,
+        user_id=ctx.user.id, initiator_name=ctx.user.name,
+    )
+    await record_audit_log(
+        db, action="hr.contract.transfer_offboarding", user=ctx.user,
+        resource_type=RESOURCE_TYPE, resource_id=contract.id,
+        new_value={
+            "case_id": case["id"], "case_no": case["case_no"],
+            "offboarding_date": case["offboarding_date"],
+        },
+    )
+    return success_response(data=case, message="已转入离职办理")
 
 
 @router.post("/labor-contracts/{contract_id}/re-announce", summary="重新发起飞书审批（撤销/降级后补救）")
@@ -426,39 +580,3 @@ async def re_announce(
         resource_type=RESOURCE_TYPE, resource_id=contract.id,
     )
     return success_response(data=_contract_dict(contract), message="已重新发起审批")
-
-
-# ─── 公开签字（免登；挂全局 api_router，不走 hr 门禁）───
-
-sign_router = APIRouter(tags=["HR-劳动合同"])
-
-
-def _sign_view(contract: LaborContract) -> dict[str, Any]:
-    """签字页最小视图：不含 id/工号等可枚举信息。"""
-    return {
-        "name": contract.name,
-        "department": contract.department,
-        "seq_no": contract.seq_no,
-        "seq_label": contract.seq_label,
-        "term_label": contract.term_label,
-        "start_date": contract.start_date.isoformat() if contract.start_date else None,
-        "end_date": contract.end_date.isoformat() if contract.end_date else None,
-        "delivered_at": contract.delivered_at.isoformat() if contract.delivered_at else None,
-        "sign_confirmed_at": (
-            contract.sign_confirmed_at.isoformat() if contract.sign_confirmed_at else None
-        ),
-    }
-
-
-@sign_router.get("/contract-sign/{token}", summary="签字页信息（token 即凭证，免登）")
-async def sign_page_info(token: str, db: AsyncSession = Depends(get_db)) -> JSONResponse:
-    contract = await service.find_by_sign_token(db, token)
-    if not contract:
-        raise AppException(message="签字链接无效或已失效", status_code=404)
-    return success_response(data=_sign_view(contract))
-
-
-@sign_router.post("/contract-sign/{token}/confirm", summary="确认签字（一次性，成功后链接作废）")
-async def sign_confirm(token: str, db: AsyncSession = Depends(get_db)) -> JSONResponse:
-    contract = await service.confirm_sign_by_token(db, token)
-    return success_response(data=_sign_view(contract), message="签字确认成功")

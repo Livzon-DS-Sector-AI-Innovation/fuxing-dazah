@@ -809,9 +809,15 @@ class EmployeeSyncService:
             logger.error("离职表拉取结果为空，跳过软删以保护本地离职台账")
 
         await self.session.flush()
+        # 离职台账以飞书表为准：挂在同步行上、还在「待发起审批 / 离职审批中」的办理单，
+        # 离职日期与类型跟着台账走（否则飞书表改了日期，平台开的证明还是旧日期）
+        from app.modules.hr.offboarding import (
+            service as offboarding_service,  # 延迟导入避免包间环
+        )
+        cases_followed = await offboarding_service.sync_open_cases_from_ledger(self.session, list(by_number))
         return {
             "created": created, "updated": updated, "deleted": deleted,
-            "total": len(records), "errors": errors,
+            "total": len(records), "errors": errors, "cases_followed": cases_followed,
         }
 
     def _convert_departure_fields(

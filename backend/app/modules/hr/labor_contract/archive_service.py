@@ -12,6 +12,7 @@ SQLAlchemy async 铁律：INSERT flush 返回即可；UPDATE 后不直接读 upd
 
 import logging
 import uuid as uuid_mod
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -53,9 +54,27 @@ _ALLOWED_EXTENSIONS: dict[str, str] = {
 _MAX_SIZE = 20 * 1024 * 1024
 
 UNARCHIVED_EXPORT_HEADERS = [
-    "部门", "工号", "姓名", "岗位", "签订次数", "合同期限", "起始日", "到期日",
-    "签订日", "领取时间", "签字确认时间", "人员状态", "合同状态",
+    "部门", "工号", "姓名", "岗位", "学历", "签订次数", "合同期限", "起始日", "到期日",
+    "签订日", "领取时间", "人员状态", "合同状态",
 ]
+
+# 换传（已有当前版本再上传）必须写明原因：作废或重签的保留原版本并注明原因，不直接覆盖
+REPLACE_REASON_REQUIRED_MESSAGE = "已有扫描件，换传新版本必须填写换传原因"
+
+# 学历筛选项：由高到低的已知取值；未列出的排其后。明显脏值（含「-」或超过 8 个字）不进字典
+EDUCATION_RANK = ("博士", "硕士", "本科", "大专", "中专", "高中", "初中", "小学")
+_EDUCATION_MAX_LENGTH = 8
+
+
+def sort_education_options(values: Iterable[str | None]) -> list[str]:
+    """学历筛选项字典：去空、去脏值，按由高到低排列（未列明的取值按字典序排在其后）。"""
+    cleaned = {
+        value.strip() for value in values
+        if value and value.strip() and "-" not in value and len(value.strip()) <= _EDUCATION_MAX_LENGTH
+    }
+    return sorted(cleaned, key=lambda v: (
+        EDUCATION_RANK.index(v) if v in EDUCATION_RANK else len(EDUCATION_RANK), v,
+    ))
 
 
 def archive_display_name(contract: LaborContract, ext: str) -> str:
@@ -76,6 +95,7 @@ def version_dict(version: ContractArchiveVersion) -> dict[str, Any]:
         "file_name": version.file_name,
         "content_type": version.content_type,
         "size": version.size,
+        "reason": version.reason,
         "remark": version.remark,
         "source": version.source,
         "uploaded_by": str(version.created_by) if version.created_by else None,
@@ -106,21 +126,26 @@ async def create_archive_version(
     db: AsyncSession, *, contract: LaborContract, file_bytes: bytes,
     filename: str | None, remark: str | None = None, user=None,
     source: str = ContractArchiveVersion.SOURCE_SINGLE,
+    reason: str | None = None,
 ) -> ContractArchiveVersion:
     """校验文件并写入新版本（旧版本转历史），同步合同行归档快照。不 commit 不写审计。
 
-    文件校验失败抛 AppException(422)；落库失败时清掉已写入的对象。
+    文件校验失败抛 AppException(422)；换传（已有当前版本）必须带 reason，否则同样 422——
+    在落文件之前拦下，被拒的换传不留孤儿对象。落库失败时清掉已写入的对象。
     """
     _, ext, mime = validate_upload(
         filename, file_bytes,
         allowed=_ALLOWED_EXTENSIONS, max_size=_MAX_SIZE,
         kind_label="图片/PDF 扫描件", default_name="contract",
     )
+    old_current = await repo.get_current_version(db, contract.id)
+    reason_text = (reason or "").strip() or None
+    if old_current is not None and not reason_text:
+        raise AppException(message=REPLACE_REASON_REQUIRED_MESSAGE, status_code=422)
     # 存储 key 只用英文安全字符（中文名、日期放展示名）
     key = f"contracts/{contract.id}/{uuid_mod.uuid4().hex}.{ext}"
     store_object(MODULE, key, file_bytes, mime)
     try:
-        old_current = await repo.get_current_version(db, contract.id)
         if old_current is not None:
             old_current.is_current = False
             await db.flush()  # 先落 UPDATE，避免当前版唯一索引与 INSERT 冲突
@@ -133,6 +158,7 @@ async def create_archive_version(
             file_name=archive_display_name(contract, ext),
             content_type=mime,
             size=len(file_bytes),
+            reason=reason_text[:255] if reason_text else None,
             remark=(remark or "").strip() or None,
             source=source,
             created_by=uploader_id,
@@ -277,18 +303,20 @@ async def resolve_departed(
 
 def unarchived_export_rows(
     contracts: list[LaborContract], departed: set[str],
+    education: Mapping[str, str | None] | None = None,
 ) -> list[list[str]]:
-    """补扫清单行（调用前已按部门-工号-签订次数排好序）。"""
+    """补扫清单行（调用前已按部门-工号-签订次数排好序）；education 为 {工号: 学历}。"""
+    taught = education or {}
     rows: list[list[str]] = []
     for c in contracts:
         rows.append([
             c.department, c.employee_number, c.name, c.position or "",
+            taught.get(c.employee_number) or "",
             c.seq_label, c.term_label,
             c.start_date.isoformat() if c.start_date else "",
             c.end_date.isoformat() if c.end_date else "无固定期限",
             c.sign_date.isoformat() if c.sign_date else "",
             c.delivered_at.strftime("%Y-%m-%d %H:%M") if c.delivered_at else "",
-            c.sign_confirmed_at.strftime("%Y-%m-%d %H:%M") if c.sign_confirmed_at else "",
             "离职" if c.employee_number in departed else "在职",
             c.status_label,
         ])

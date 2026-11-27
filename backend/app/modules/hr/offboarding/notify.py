@@ -7,7 +7,6 @@ open_id 两种填法，为空则不发）；员工侧通知收件人取 Employee
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,17 +32,16 @@ NEXT_STEP: dict[str, str] = {
     OffboardingCase.STATUS_APPROVING: "待部门负责人审批；未接飞书审批的，审批通过后在平台登记办结",
     OffboardingCase.STATUS_CLEARING: "跟进各部门清退会签并登记清退明细，完成后登记会签办结",
     OffboardingCase.STATUS_CERT_ISSUING: "核对员工信息，开具解除劳动关系证明",
-    OffboardingCase.STATUS_DELIVERING: "将证明送达员工（邮件 / 签署链接），等待签字确认",
+    OffboardingCase.STATUS_DELIVERING: "把证明交给员工（邮件 / 当面），员工签字后登记签收",
     OffboardingCase.STATUS_SIGNED: "确认飞书账号已注销后办结",
     OffboardingCase.STATUS_CLOSED: "无需操作，档案与台账已同步",
     OffboardingCase.STATUS_CANCELED: "无需操作；如仍需办理请重新发起",
 }
 
 
-async def _send(open_id: str, title: str, markdown: str,
-                elements: list[dict[str, Any]] | None = None) -> bool:
+async def _send(open_id: str, title: str, markdown: str) -> bool:
     try:
-        ok = await send_user_card(open_id, title=title, content=markdown, elements=elements)
+        ok = await send_user_card(open_id, title=title, content=markdown)
     except Exception as exc:  # 单个接收人失败不影响其余
         logger.warning("离职管理卡片发送异常: open_id=%s → %s", open_id, exc)
         return False
@@ -67,13 +65,13 @@ async def notify_hr_receivers(
 
 async def notify_stage_advanced(
     db: AsyncSession, case: OffboardingCase, ctx: NotifyContext, *,
-    note: str | None = None, sign_url: str | None = None,
-    employee_notice: str | None = None,
+    note: str | None = None, employee_notice: str | None = None,
 ) -> None:
     """阶段推进通知：HR 摘要 + （可选）员工侧卡片。
 
     note：本次推进的补充说明（如「飞书审批定义未配置，走站内登记办结」）；
-    employee_notice：传文案时才给员工发卡，sign_url 为员工卡上的「点击签字」按钮。
+    employee_notice：传文案时才给员工发卡。系统只在公司内网可达，员工在手机上点不开
+    任何指向本系统的链接，所以卡片只带文字，不带跳转按钮。
     """
     try:
         lines = [
@@ -91,7 +89,7 @@ async def notify_stage_advanced(
         await notify_hr_receivers(db, ctx.hr_copy, f"离职办理推进 · {case.name}", "\n".join(lines))
 
         if employee_notice:
-            await _notify_employee(db, case, employee_notice, sign_url)
+            await _notify_employee(db, case, employee_notice)
     except Exception as exc:  # 通知失败不影响状态机
         logger.warning("离职阶段推进通知失败: case=%s → %s", case.id, exc)
 
@@ -113,24 +111,11 @@ async def notify_initiate_failed(
         logger.warning("离职审批发起失败通知发送失败: case=%s → %s", case.id, exc)
 
 
-async def _notify_employee(
-    db: AsyncSession, case: OffboardingCase, notice: str, sign_url: str | None,
-) -> None:
-    """员工侧卡片：无飞书账号（或已注销）时跳过——邮件/短信才是离职员工的主通道。"""
+async def _notify_employee(db: AsyncSession, case: OffboardingCase, notice: str) -> None:
+    """员工侧卡片（纯文字）：无飞书账号（或已注销）时跳过——邮件 / 短信才是离职员工的主通道。"""
     employee = await repo.get_employee(db, case.employee_id)
     open_id = getattr(employee, "feishu_open_id", None) if employee else None
     if not open_id:
         logger.info("员工无飞书 open_id，跳过离职办理员工通知: case=%s", case.id)
         return
-    elements = None
-    if sign_url:
-        elements = [{
-            "tag": "action",
-            "actions": [{
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "点击签字"},
-                "type": "primary",
-                "url": sign_url,
-            }],
-        }]
-    await _send(open_id, "离职办理通知", f"{case.name}您好，{notice}", elements)
+    await _send(open_id, "离职办理通知", f"{case.name}您好，{notice}")

@@ -243,17 +243,18 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "dashboard", label: "人事看板", path: "/hr/dashboard", permissions: ["hr:profile:read"] },
       { key: "departments", label: "部门管理", path: "/hr/departments", permissions: ["hr:org:read"] },
       {
-        // 人员全周期：编制 → 入职 → 在职档案 → 离职（用户拍板：作为 HR 板块内的分组菜单）
+        // 人员全周期。2026-11-27 按办事员的使用频率重排：档案 → 合同 → 离职 三个日常入口排在最前，
+        // 台账类（证件 / 入职 / 编制 / 工伤）在后；「离职台账」改名「离职管理」（页内含办理与台账）
         key: "lifecycle",
         label: "人员管理",
         path: "/hr/profile",
         children: [
-          { key: "headcount", label: "编制管理", path: "/hr/headcount", permissions: ["hr:profile:read"] },
           { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
-          { key: "certificates", label: "证件资料库", path: "/hr/certificates", permissions: ["hr:certificate:read"] },
           { key: "labor-contracts", label: "劳动合同", path: "/hr/labor-contracts", permissions: ["hr:contract:read"] },
+          { key: "departure", label: "离职管理", path: "/hr/departure", permissions: ["hr:departure:read"] },
+          { key: "certificates", label: "证件资料库", path: "/hr/certificates", permissions: ["hr:certificate:read"] },
           { key: "onboarding", label: "入职台账", path: "/hr/onboarding", permissions: ["hr:onboarding:read"] },
-          { key: "departure", label: "离职台账", path: "/hr/departure", permissions: ["hr:departure:read"] },
+          { key: "headcount", label: "编制管理", path: "/hr/headcount", permissions: ["hr:profile:read"] },
           { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
         ],
       },

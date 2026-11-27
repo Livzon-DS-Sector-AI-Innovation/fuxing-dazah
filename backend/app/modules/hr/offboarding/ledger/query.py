@@ -10,16 +10,28 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import date
 from typing import Any
 
-from sqlalchemy import Row, Select, String, and_, asc, cast, desc, func, or_, select
+from sqlalchemy import (
+    Row,
+    Select,
+    String,
+    and_,
+    asc,
+    cast,
+    desc,
+    func,
+    or_,
+    select,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Subquery
 
 from app.core.exceptions import AppException, ForbiddenException
 from app.modules.hr.deps import HrAccessContext
-from app.modules.hr.models import DepartureRecord
+from app.modules.hr.models import DepartureRecord, Employee
 from app.modules.hr.offboarding.models import OffboardingCase, OffboardingClearanceItem
 from app.modules.hr.schemas import DepartureRecordResponse, mask_sensitive_fields
 
@@ -164,10 +176,62 @@ def clearance_summary(items: Sequence[OffboardingClearanceItem]) -> dict[str, di
     return summary
 
 
+def start_block_reason(
+    case_status: str | None, employee_id: Any, employee_status: str | None, *,
+    employee_alive: bool = True, offboarding_date: date | None = None, today: date | None = None,
+) -> str | None:
+    """台账行能否直接发起离职办理；不能时返回原因（给前端在按钮上说明）。
+
+    员工档案被同步软删的人（人已从飞书员工表移到离职表）只要离职日期还没到就能发起；
+    档案仍在职状态的人沿用「在职 / 试用期才可发起」的口径。
+    """
+    if case_status and case_status not in (
+        OffboardingCase.STATUS_CLOSED, OffboardingCase.STATUS_CANCELED,
+    ):
+        return f"已有进行中的离职办理（{OffboardingCase.STATUS_LABELS.get(case_status, case_status)}）"
+    if employee_id is None:
+        return "员工档案中找不到该员工（仅台账登记）"
+    if employee_alive and employee_status == "离职":
+        return "员工档案已是离职状态"
+    if offboarding_date and offboarding_date < (today or date.today()):
+        return "已过离职日期"
+    return None
+
+
+def _employee_lookup_subquery() -> Subquery:
+    """每个工号取一条员工档案：未软删的优先，否则取被同步软删的那条（rn = 1）。"""
+    ranked = func.row_number().over(
+        partition_by=Employee.employee_number,
+        order_by=(Employee.is_deleted.asc(), Employee.created_at.desc()),
+    ).label("rn")
+    inner = (
+        select(
+            Employee.employee_number.label("employee_number"),
+            Employee.id.label("emp_id"),
+            Employee.is_deleted.is_(False).label("emp_alive"),
+            Employee.status.label("emp_status"),
+            ranked,
+        )
+        .where(Employee.employee_number.is_not(None))
+        .subquery()
+    )
+    return (
+        select(
+            inner.c.employee_number, inner.c.emp_id, inner.c.emp_alive, inner.c.emp_status,
+        )
+        .where(inner.c.rn == 1)
+        .subquery()
+    )
+
+
 async def assemble(
     db: AsyncSession, rows: Sequence[Row[Any]], *, with_case: bool = False,
 ) -> list[dict[str, Any]]:
-    """台账行 + 办理流程信息。with_case 时额外挂办结单对象（仅供导出取值，不进接口响应）。"""
+    """台账行 + 办理流程信息。with_case 时额外挂办结单对象（仅供导出取值，不进接口响应）。
+
+    rows 前四列固定为 (台账行, 办结单 id, 编号, 状态)；后四列（有则带）为员工档案 id、
+    是否在职档案、档案状态、离职日期——用来告诉前端这一行能不能直接「发起离职办理」。
+    """
     case_ids = [row.case_id for row in rows if row.case_id]
     cases_by_id: dict[Any, OffboardingCase] = {}
     items_by_case: dict[Any, list[OffboardingClearanceItem]] = defaultdict(list)
@@ -185,13 +249,22 @@ async def assemble(
             items_by_case[item.case_id].append(item)
 
     result: list[dict[str, Any]] = []
-    for record, case_id, case_no, case_status in rows:
+    for row in rows:
+        record, case_id, case_no, case_status = row[:4]
+        employee_id = row[4] if len(row) > 4 else None
+        employee_alive = bool(row[5]) if len(row) > 5 else True
+        employee_status = row[6] if len(row) > 6 else None
+        case = cases_by_id.get(case_id)
         data = DepartureRecordResponse.model_validate(record).model_dump(mode="json")
         # 签名图 base64 不进列表 / 导出（详情按需取）
         has_sign_image = bool(data.pop("cert_sign_image", None))
         status_label = (
             OffboardingCase.STATUS_LABELS.get(case_status or "", APPROVAL_NONE_LABEL)
             if case_status else APPROVAL_NONE_LABEL
+        )
+        blocked = start_block_reason(
+            case_status, employee_id, employee_status,
+            employee_alive=employee_alive, offboarding_date=record.offboarding_date,
         )
         data.update(
             has_sign_image=has_sign_image,
@@ -201,10 +274,19 @@ async def assemble(
             approval_status_label=status_label,
             cert_issued=bool(record.cert_issued_at),
             cert_signed=record.cert_sign_status == "signed",
+            # 台账行来自飞书离职表同步（离职日期/类型以飞书表为准）
+            ledger_synced=bool(record.feishu_record_id),
+            # 发起离职办理：能不能直接发起、不行的话为什么
+            employee_id=str(employee_id) if employee_id else None,
+            startable=blocked is None,
+            start_block_reason=blocked,
+            # 证明信息：模板与 HR 负责人（开具人）
+            cert_template=case.cert_template if case else None,
+            hr_owner=case.cert_issued_by if case else None,
             clearance=clearance_summary(items_by_case.get(case_id, [])),
         )
         if with_case:
-            data["_case"] = cases_by_id.get(case_id)
+            data["_case"] = case
         result.append(data)
     return result
 
@@ -229,9 +311,17 @@ async def query(
 
     sort_column = getattr(DepartureRecord, sort_by if sort_by in _SORT_FIELDS else "offboarding_date")
     order = desc(sort_column) if sort_order == "desc" else asc(sort_column)
+    emp = _employee_lookup_subquery().alias("emp")
     stmt = (
-        select(DepartureRecord, base.c.case_id, base.c.case_no, base.c.case_status)
+        select(
+            DepartureRecord, base.c.case_id, base.c.case_no, base.c.case_status,
+            emp.c.emp_id,
+            emp.c.emp_alive,
+            emp.c.emp_status,
+            DepartureRecord.offboarding_date,
+        )
         .join(base, base.c.record_id == DepartureRecord.id)
+        .outerjoin(emp, emp.c.employee_number == DepartureRecord.employee_number)
         .order_by(order, DepartureRecord.name, DepartureRecord.id)
     )
     if limit is None:

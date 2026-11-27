@@ -1,7 +1,12 @@
 """清退会签明细：默认清单落库 + 飞书清退交接实例表单回读（方案 §3.4）。
 
 平台清退单是工作数据源：进入清退阶段先落一份四部门默认清单（需求「多部门会签」
-列明的事项），HR 在办理抽屉逐项确认；飞书清退交接实例办结后再按控件名约定回读。
+列明的事项，可在系统配置里改），HR 在办理抽屉逐项确认；飞书清退交接实例办结后再按
+控件名约定回读。
+
+发起时点（需求「离职审批办结后，于离职日前 2 天发起清退交接流程」）：审批办结时
+平台即进入清退阶段并落清单；飞书清退审批实例未到建议发起日不发起（挂起），到了
+建议发起日由轮询自动发起，HR 也可以在办理页提前手动发起。
 
 控件名约定（人事在清退交接审批定义里按名称建控件；缺失不报错，HR 手工登记兜底）：
 - 每部门一个多行文本控件，一行一条清退事项，竖线分隔，后四段可省：
@@ -17,7 +22,7 @@ HR 手工登记/确认过的行（manual）不动。
 
 import logging
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -39,12 +44,18 @@ _WIDGET_DEPT = {
     "admin": "行政后勤", "finance": "财务", "hr": "人力资源", "work": "工作部门",
 }
 # 需求「多部门会签」列明的清退事项，进入清退阶段时作为默认清单落库
+# （系统配置 hr_offboarding.clearance_items 可整体替换，见 settings.clearance_items）
 DEFAULT_ITEMS: dict[str, tuple[str, ...]] = {
-    "admin": ("宿舍钥匙", "个人物品", "餐卡", "车辆通行证"),
-    "finance": ("电脑", "借款", "U盘"),
-    "hr": ("工号牌", "社保医保", "培训费"),
-    "work": ("业务往来",),
+    "admin": (
+        "宿舍钥匙", "寝室个人物品", "饭卡余额", "通信补贴", "车辆通行证", "办公室钥匙", "工本费",
+    ),
+    "finance": ("电脑等电子设备", "U盘", "个人欠款"),
+    "hr": ("社保医保公积金", "厂牌考勤卡", "培训费", "违约金", "工资结算至"),
+    "work": ("业务往来", "考勤统计", "劳保用品", "工作服", "岗位技术资料"),
 }
+
+# 清退交接的建议发起日 = 离职日前 2 天
+CLEARANCE_LEAD_DAYS = 2
 
 # 状态写法 → 清退状态。待办/扣补词优先于「已清退」（「已清退，有扣补」应记为有扣补）
 _STATUS_WORDS: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -75,10 +86,27 @@ def in_entry_order(rows: list[OffboardingClearanceItem]) -> list[OffboardingClea
     return rows
 
 
-async def seed_default_items(db: AsyncSession, case: OffboardingCase) -> int:
-    """进入清退阶段时落默认清单；已有明细（重复推进/回读先到）则不动。"""
+def clearance_due_date(case: OffboardingCase) -> date:
+    """清退交接的建议发起日：离职日前 2 天。"""
+    return case.offboarding_date - timedelta(days=CLEARANCE_LEAD_DAYS)
+
+
+def should_defer_clearance(case: OffboardingCase, *, today: date | None = None) -> bool:
+    """还没到建议发起日 → 清退交接审批先不发起（挂起到期）。"""
+    return (today or date.today()) < clearance_due_date(case)
+
+
+async def seed_default_items(
+    db: AsyncSession, case: OffboardingCase, *,
+    items: dict[str, list[str]] | None = None,
+) -> int:
+    """进入清退阶段时落默认清单；已有明细（重复推进/回读先到）则不动。
+
+    items 为系统配置里的清退清单；不传用需求默认清单。
+    """
     if await repo.list_clearance_items(db, case.id):
         return 0
+    catalog = items or {category: list(names) for category, names in DEFAULT_ITEMS.items()}
     rows = [
         OffboardingClearanceItem(
             case_id=case.id, category=category, item_name=item_name,
@@ -86,7 +114,7 @@ async def seed_default_items(db: AsyncSession, case: OffboardingCase) -> int:
             source=OffboardingClearanceItem.SOURCE_SEED,
         )
         for category in CATEGORY_ORDER
-        for item_name in DEFAULT_ITEMS[category]
+        for item_name in catalog.get(category, ())
     ]
     db.add_all(in_entry_order(rows))
     await db.flush()

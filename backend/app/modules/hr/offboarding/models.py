@@ -1,6 +1,6 @@
 """离职管理 ORM 模型：办结单状态机 + 清退交接项 + 台账保存视图 + 导出留痕。
 
-流程主干 OffboardingCase 一次离职一行；员工签字沿用 DepartureRecord.cert_sign_*
+流程主干 OffboardingCase 一次离职一行；员工签收结果沿用 DepartureRecord.cert_sign_*
 （已建好、employee_sync 同步不触碰），Case 经 departure_record_id 逻辑关联读写。
 """
 
@@ -58,8 +58,8 @@ class OffboardingCase(BaseModel):
     STATUS_CLOSED = "closed"
     STATUS_CANCELED = "canceled"
     STATUS_LABELS = {
-        STATUS_DRAFT: "待发起审批",
-        STATUS_APPROVING: "离职审批中",
+        STATUS_DRAFT: "待提交审批",
+        STATUS_APPROVING: "部门审批中",
         STATUS_CLEARING: "清退会签中",
         STATUS_CERT_ISSUING: "待开具证明",
         STATUS_DELIVERING: "证明送达中",
@@ -151,6 +151,18 @@ class OffboardingCase(BaseModel):
     clearance_finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="清退会签办结时间",
     )
+    clearance_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="清退交接审批挂起待发起（未到建议发起日，到期由轮询自动发起）",
+    )
+
+    # ─── 交接转办（部门审批后转办交接人与部门办事员）───
+    handover_to: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="交接人（工作交接承接人）",
+    )
+    dept_clerk: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="部门办事员（确认工作交接事项）",
+    )
 
     # ─── 离岗体检（重点岗位门禁）───
     health_check_required: Mapped[bool] = mapped_column(
@@ -200,15 +212,20 @@ class OffboardingCase(BaseModel):
         String(32), nullable=True, comment="短信接收号码（送达留痕）",
     )
     sms_status: Mapped[str | None] = mapped_column(
-        String(16), nullable=True, comment="短信状态: sent/not_configured/failed（通道预留）",
+        String(16), nullable=True,
+        comment="短信状态: manual 已人工发送并登记 / sent / failed / not_configured（通道预留）",
+    )
+    sms_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="短信发送时间（人工登记）",
     )
     delivery_channel: Mapped[str | None] = mapped_column(
-        String(16), nullable=True, comment="签收渠道: mail/sms/paper",
+        String(16), nullable=True,
+        comment="签收方式: handwriting 当面手写签名 / paper 纸质签收登记（存量 mail 为早期线上签字）",
     )
 
-    # ─── 纸质两联版签收登记 ───
+    # ─── 纸质签收登记 ───
     paper_signed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="纸质证明当面签收时间",
+        DateTime(timezone=True), nullable=True, comment="纸质证明签收时间",
     )
     paper_signed_by: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="纸质证明签收人（员工本人）",

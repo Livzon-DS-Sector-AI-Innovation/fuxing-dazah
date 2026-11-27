@@ -3,11 +3,14 @@
 import { fetchHrApi } from './_helpers'
 import type {
   ContractEntryPreview,
+  ContractNoticeResult,
+  ContractOffboardingHandoff,
   LaborContract,
   LaborContractCreateInput,
   LaborContractDetail,
   LaborContractListParams,
   LaborContractRenewInput,
+  LaborContractStats,
   LaborContractUpdateInput,
 } from '@/types/hr'
 
@@ -16,7 +19,9 @@ interface PagedEnvelope<T> {
   meta: { total: number; page: number; page_size: number }
 }
 
-/** 劳动合同台账（分页；status 逗号分隔，expiring_days=公告期视图） */
+const JSON_HEADERS = { 'Content-Type': 'application/json' }
+
+/** 劳动合同台账（分页；status 逗号分隔，expiring_days=公告期视图，todo=「待我处理」口径） */
 export async function fetchLaborContracts(
   params: LaborContractListParams
 ): Promise<PagedEnvelope<LaborContract>> {
@@ -25,6 +30,9 @@ export async function fetchLaborContracts(
   if (params.keyword) qs.set('keyword', params.keyword)
   if (params.expiring_days) qs.set('expiring_days', String(params.expiring_days))
   if (params.department) qs.set('department', params.department)
+  if (params.todo) qs.set('todo', params.todo)
+  if (params.include_history) qs.set('include_history', 'true')
+  if (params.education) qs.set('education', params.education)
   qs.set('page', String(params.page ?? 1))
   qs.set('page_size', String(params.page_size ?? 20))
   return fetchHrApi(`/hr/labor-contracts?${qs.toString()}`, {
@@ -32,7 +40,15 @@ export async function fetchLaborContracts(
   })
 }
 
-/** 合同详情（含同一员工历次合同） */
+/** 「待我处理」统计（口径与列表 todo 筛选一致） */
+export async function fetchLaborContractStats(
+  department?: string
+): Promise<{ data: LaborContractStats }> {
+  const qs = department ? `?department=${encodeURIComponent(department)}` : ''
+  return fetchHrApi(`/hr/labor-contracts/stats${qs}`, { errorMessage: '获取合同待办统计失败' })
+}
+
+/** 合同详情（含同一员工历次合同、七步进度、通知留痕） */
 export async function fetchLaborContractDetail(id: string): Promise<{ data: LaborContractDetail }> {
   return fetchHrApi(`/hr/labor-contracts/${id}`, { errorMessage: '获取合同详情失败' })
 }
@@ -54,7 +70,7 @@ export async function createLaborContract(
 ): Promise<{ data: LaborContract; message: string }> {
   return fetchHrApi(`/hr/labor-contracts`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(input),
     errorMessage: '录入合同失败',
   })
@@ -67,66 +83,94 @@ export async function updateLaborContract(
 ): Promise<{ data: LaborContract; message: string }> {
   return fetchHrApi(`/hr/labor-contracts/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(input),
     errorMessage: '保存合同失败',
   })
 }
 
-/** 办理续签（生成新合同行，旧行被取代） */
+/** 办理续签（生成新合同行，旧行被取代；须先登记部门同意续签）。返回的是新合同 */
 export async function renewLaborContract(
   id: string,
   input: LaborContractRenewInput
 ): Promise<{ data: LaborContract; message: string }> {
   return fetchHrApi(`/hr/labor-contracts/${id}/renew`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(input),
     errorMessage: '续签办理失败',
   })
 }
 
-/** 部门审批（站内勾选；飞书审批由后端轮询回写） */
+/** 登记部门续签意见（部门负责人凭 approve 权限登记；HR 的 manage 可代登记，记录登记人） */
 export async function decideLaborContract(
   id: string,
   decision: 'agree' | 'disagree'
 ): Promise<{ data: LaborContract; message: string }> {
   return fetchHrApi(`/hr/labor-contracts/${id}/dept-decision`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ decision }),
-    errorMessage: '审批操作失败',
+    errorMessage: '登记部门意见失败',
   })
 }
 
-/** 终止合同（不同意续签/到期未续签等） */
+/** 转入离职办理（到期未续签 / 部门不同意续签）：为员工建离职办理单，返回精简视图供跳转 */
+export async function transferLaborContractToOffboarding(
+  id: string,
+  payload: { offboarding_date?: string | null; reason?: string | null } = {}
+): Promise<{ data: ContractOffboardingHandoff; message: string }> {
+  return fetchHrApi(`/hr/labor-contracts/${id}/transfer-offboarding`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+    errorMessage: '转入离职办理失败',
+  })
+}
+
+/** 终止合同（人工终止；原因写台账） */
 export async function terminateLaborContract(
   id: string,
   reason?: string
 ): Promise<{ data: LaborContract; message: string }> {
   return fetchHrApi(`/hr/labor-contracts/${id}/terminate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ reason: reason ?? null }),
     errorMessage: '终止操作失败',
   })
 }
 
-/** 标记盖章完成（后端推送领取通知） */
-export async function stampLaborContract(id: string): Promise<{ data: LaborContract; message: string }> {
+/** 标记盖章完成（后端推送领取通知，notice 带送达结果） */
+export async function stampLaborContract(
+  id: string
+): Promise<{ data: LaborContract & { notice?: ContractNoticeResult }; message: string }> {
   return fetchHrApi(`/hr/labor-contracts/${id}/stamp`, {
     method: 'POST',
     errorMessage: '标记盖章失败',
   })
 }
 
-/** 标记已领取（后端签发签字链接并推送提醒） */
+/** 登记已领取（员工到人事办公室领取合同原件即签收；系统仅内网可达，没有领取后的线上签字） */
 export async function deliverLaborContract(
   id: string
-): Promise<{ data: LaborContract & { sign_url?: string }; message: string }> {
+): Promise<{ data: LaborContract; message: string }> {
   return fetchHrApi(`/hr/labor-contracts/${id}/deliver`, {
     method: 'POST',
-    errorMessage: '标记领取失败',
+    errorMessage: '登记领取失败',
+  })
+}
+
+/** 重发员工通知（续签通知 / 领取通知） */
+export async function resendLaborContractNotice(
+  id: string,
+  kind: 'renew' | 'collect'
+): Promise<{ data: ContractNoticeResult; message: string }> {
+  return fetchHrApi(`/hr/labor-contracts/${id}/resend-notice`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ kind }),
+    errorMessage: '重发通知失败',
   })
 }
 

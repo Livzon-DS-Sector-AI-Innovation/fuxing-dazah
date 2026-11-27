@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["HR-离职合同台账"])
 
 PROCEDURE_RESOURCE = "hr_departure_contract"
+# 合同终止方式的查询参数校验（列表与导出共用；取值见 departure_service.TERMINATION_LABELS）
+_TERMINATION_TYPE_PATTERN = "^(expiry|resign|negotiated|employer|retire|transfer|other|none)$"
 # 情况说明各列宽度（与 STATEMENT_HEADERS 对齐）
 _STATEMENT_WIDTHS = (6, 10, 12, 20, 16, 12, 12, 12, 34, 12, 16, 12, 28, 20, 10, 10, 10)
 
@@ -108,7 +110,7 @@ async def list_departure_contracts(
     date_from: date | None = Query(None, description="离职日期起"),
     date_to: date | None = Query(None, description="离职日期止"),
     termination_type: str | None = Query(
-        None, pattern="^(expiry|resign|employer|retire|transfer|other|none)$",
+        None, pattern=_TERMINATION_TYPE_PATTERN,
         description="合同终止方式",
     ),
     keyword: str | None = Query(None, max_length=64, description="姓名/工号模糊"),
@@ -138,7 +140,7 @@ async def export_departure_contracts(
     department: str | None = Query(None, max_length=64),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
-    termination_type: str | None = Query(None, pattern="^(expiry|resign|employer|retire|transfer|other|none)$"),
+    termination_type: str | None = Query(None, pattern=_TERMINATION_TYPE_PATTERN),
     keyword: str | None = Query(None, max_length=64),
     db: AsyncSession = Depends(get_db),
     ctx: HrAccessContext = Depends(require_hr_access("hr:departure:read")),

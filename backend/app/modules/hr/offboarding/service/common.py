@@ -5,16 +5,16 @@ service/ 按「办结单（case）→ 证明签收（certify）→ 办结联动�
 依赖方向单向：service → notify / approval → repository，notify 与 approval 不反向依赖 service。
 """
 
-import hashlib
 import logging
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundException
 from app.modules.hr.models import DepartureRecord, Employee
-from app.modules.hr.offboarding import notify
+from app.modules.hr.offboarding import clearance, notify
 from app.modules.hr.offboarding import repository as repo
 from app.modules.hr.offboarding import settings as offboarding_settings
 from app.modules.hr.offboarding.models import OffboardingCase
@@ -24,11 +24,6 @@ logger = logging.getLogger(__name__)
 
 def now() -> datetime:
     return datetime.now(UTC)
-
-
-def hash_token(token: str) -> str:
-    """签字 token 落库存 sha256（64 字符恰合列宽），明文只出现在链接里。"""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 async def refetch(db: AsyncSession, case_id: UUID) -> OffboardingCase:
@@ -62,6 +57,38 @@ async def linked_record(db: AsyncSession, case: OffboardingCase) -> DepartureRec
     return await repo.find_departure_record(db, case.employee_number)
 
 
+# ─── 清退阶段 ───
+
+async def seed_clearance_items(db: AsyncSession, case: OffboardingCase) -> int:
+    """进入清退阶段落默认清单：系统配置里的清退清单优先，没配用需求列明的清单。"""
+    kv = await offboarding_settings.load_offboarding_settings(db)
+    return await clearance.seed_default_items(
+        db, case, items=offboarding_settings.clearance_items(kv),
+    )
+
+
+async def should_hold_clearance(db: AsyncSession, case: OffboardingCase) -> bool:
+    """清退交接接了飞书审批、且还没到建议发起日（离职日前 2 天）→ 实例先不发起（挂起）。"""
+    kv = await offboarding_settings.load_offboarding_settings(db)
+    configured = offboarding_settings.stage_configured(
+        kv, stage="clearance", track=case.approval_track, level=case.level,
+    )
+    return configured and clearance.should_defer_clearance(case)
+
+
+def clearance_stage_note(case: OffboardingCase, result: Any | None) -> str | None:
+    """进入清退阶段后通知里的「下一步」：挂起 / 未接飞书 / 已发起各说各话。"""
+    if case.clearance_pending:
+        due = clearance.clearance_due_date(case)
+        return (
+            f"还没到清退交接的建议发起日（{due.month}月{due.day}日，离职日前 2 天），"
+            "到期后自动发起；需要提前办可在办理页手动发起"
+        )
+    if result is not None and getattr(result, "unconfigured", False):
+        return "飞书审批定义未配置，走站内登记办结"
+    return None
+
+
 async def upsert_departure_record(
     db: AsyncSession,
     case: OffboardingCase,
@@ -73,7 +100,7 @@ async def upsert_departure_record(
 
     overwrite=False（建单/编辑/开证）：只补空字段——飞书同步来的行以源表为准，
     平台不抢先改写；overwrite=True（办结）：办结结果是权威口径，回写覆盖。
-    cert_sign_* 只由签字流程写，这里不碰。
+    cert_sign_* 只由签收登记写，这里不碰。
     """
     record = await linked_record(db, case)
     if record is None:

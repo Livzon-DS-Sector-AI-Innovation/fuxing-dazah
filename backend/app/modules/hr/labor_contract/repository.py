@@ -3,16 +3,23 @@
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, exists, func, not_, or_, select
+from sqlalchemy import ColumnElement, and_, exists, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.hr.labor_contract.models import ContractArchiveVersion, LaborContract
+from app.modules.hr.labor_contract.models import (
+    ContractArchiveVersion,
+    ContractNoticeLog,
+    LaborContract,
+)
 from app.modules.hr.models import DepartureRecord, Employee
 
 # 台账人群口径（两本台账不交叉）：在职台账只放在职人员合同，离职人员合同归离职台账
 POPULATION_IN_SERVICE = "in_service"
 POPULATION_DEPARTED = "departed"
 POPULATION_ALL = "all"
+
+# 历史行：已续签取代 / 已终止。在职台账缺省视图不展示（显式要历史或按状态筛时才返回）
+HISTORY_STATUSES = (LaborContract.STATUS_SUPERSEDED, LaborContract.STATUS_TERMINATED)
 
 
 def departed_expr() -> ColumnElement[bool]:
@@ -31,6 +38,87 @@ def departed_expr() -> ColumnElement[bool]:
         Employee.status == "离职",
     )
     return or_(has_departure, emp_left)
+
+
+def pending_offboarding_expr() -> ColumnElement[bool]:
+    """「离职办理中」：离职台账里有未删除、且离职日期 ≥ 今天的记录（登记了将要离职的人）。
+
+    这些人已在走离职流程，合同不再进入到期预警 / 公告期，也不给部门负责人发审批提醒。
+    """
+    return exists().where(
+        DepartureRecord.employee_number == LaborContract.employee_number,
+        DepartureRecord.is_deleted.is_(False),
+        DepartureRecord.offboarding_date.is_not(None),
+        DepartureRecord.offboarding_date >= date.today(),
+    )
+
+
+# ─── 「待我处理」口径（统计与列表筛选共用同一组谓词，避免两处漂移）───
+
+TODO_PENDING_DEPT_APPROVAL = "pending_dept_approval"
+TODO_TO_RENEW = "to_renew"
+TODO_TO_STAMP = "to_stamp"
+TODO_TO_DELIVER = "to_deliver"
+TODO_TO_ARCHIVE = "to_archive"
+TODO_PENDING_RENEWAL = "pending_renewal"
+TODO_EXPIRED_UNRENEWED = "expired_unrenewed"
+# 前 5 项是 HR 手上要办的事（合计 = attention_total），后 2 项是存量提示
+ATTENTION_KEYS = (
+    TODO_PENDING_DEPT_APPROVAL, TODO_TO_RENEW, TODO_TO_STAMP,
+    TODO_TO_DELIVER, TODO_TO_ARCHIVE,
+)
+TODO_KEYS = (*ATTENTION_KEYS, TODO_PENDING_RENEWAL, TODO_EXPIRED_UNRENEWED)
+# 列表筛选额外支持「全部待办」= 五项的并集（合同页默认视图，等于 stats 的 attention_total）
+TODO_ATTENTION = "attention"
+LIST_TODO_KEYS = (*TODO_KEYS, TODO_ATTENTION)
+
+
+def todo_expr(todo: str) -> ColumnElement[bool]:
+    """某个「待我处理」口径的 SQL 谓词（count_todos 与 list_page 都用这一份）。"""
+    lc = LaborContract
+    predicates: dict[str, ColumnElement[bool]] = {
+        # 公告期且还没登记部门意见
+        TODO_PENDING_DEPT_APPROVAL: and_(
+            lc.status == lc.STATUS_PENDING_RENEWAL, lc.dept_decision.is_(None),
+        ),
+        # 部门已同意、新合同还没生成
+        TODO_TO_RENEW: lc.status == lc.STATUS_RENEWING,
+        # 续签生成的新合同：盖章 → 领取（领取即签收）
+        TODO_TO_STAMP: and_(
+            lc.origin == lc.ORIGIN_RENEWAL, lc.status == lc.STATUS_ACTIVE, lc.stamped_at.is_(None),
+        ),
+        TODO_TO_DELIVER: and_(
+            lc.origin == lc.ORIGIN_RENEWAL, lc.stamped_at.is_not(None), lc.delivered_at.is_(None),
+        ),
+        TODO_TO_ARCHIVE: and_(
+            lc.delivered_at.is_not(None), lc.archive_status == lc.ARCHIVE_UNARCHIVED,
+        ),
+        TODO_PENDING_RENEWAL: lc.status == lc.STATUS_PENDING_RENEWAL,
+        TODO_EXPIRED_UNRENEWED: lc.status == lc.STATUS_EXPIRED_UNRENEWED,
+    }
+    predicates[TODO_ATTENTION] = or_(*(predicates[key] for key in ATTENTION_KEYS))
+    if todo not in predicates:
+        raise ValueError(f"未知的待办口径: {todo}")
+    return predicates[todo]
+
+
+def population_conds(population: str) -> list[ColumnElement[bool]]:
+    """台账人群条件：in_service 在职 / departed 离职 / all 全部（始终排除软删行）。"""
+    conds: list[ColumnElement[bool]] = [LaborContract.is_deleted.is_(False)]
+    if population == POPULATION_IN_SERVICE:
+        conds.append(not_(departed_expr()))
+    elif population == POPULATION_DEPARTED:
+        conds.append(departed_expr())
+    return conds
+
+
+def education_in_expr(educations: list[str]) -> ColumnElement[bool]:
+    """员工档案学历命中任一取值（合同行按工号关联 hr.employees）。"""
+    return exists().where(
+        Employee.employee_number == LaborContract.employee_number,
+        Employee.is_deleted.is_(False),
+        Employee.education.in_(educations),
+    )
 
 
 async def get(db: AsyncSession, contract_id: UUID) -> LaborContract | None:
@@ -66,6 +154,9 @@ async def list_page(
     population: str = POPULATION_IN_SERVICE,
     archive_status: str | None = None,
     order_by: str = "default",
+    todo: str | None = None,
+    educations: list[str] | None = None,
+    exclude_history: bool = False,
     offset: int = 0,
     limit: int = 20,
 ) -> tuple[int, list[LaborContract]]:
@@ -73,19 +164,20 @@ async def list_page(
 
     employee_number：self_only 数据范围按工号收敛到本人；
     population：in_service（缺省，在职台账）/ departed（离职人员合同）/ all（电子档案库全量）；
-    order_by="department"：按部门-工号-签订次数排序（档案库/补扫清单按部门分组用）。
+    order_by="department"：按部门-工号-签订次数排序（档案库/补扫清单按部门分组用）；
+    todo：「待我处理」口径键（谓词见 todo_expr，与 count_todos 同一份）；
+    educations：员工档案学历 IN 过滤；
+    exclude_history：未按 status / todo 筛选时排除已续签取代、已终止的历史行。
     """
-    conds: list[ColumnElement[bool]] = [LaborContract.is_deleted.is_(False)]
-    if population == POPULATION_IN_SERVICE:
-        conds.append(not_(departed_expr()))
-    elif population == POPULATION_DEPARTED:
-        conds.append(departed_expr())
+    conds = population_conds(population)
     if departments is not None:
         if not departments:
             return 0, []
         conds.append(LaborContract.department.in_(departments))
     if statuses:
         conds.append(LaborContract.status.in_(statuses))
+    if todo:
+        conds.append(todo_expr(todo))
     if keyword:
         kw = f"%{keyword.strip()}%"
         conds.append(or_(
@@ -96,12 +188,16 @@ async def list_page(
         conds.append(LaborContract.employee_number == employee_number)
     if archive_status:
         conds.append(LaborContract.archive_status == archive_status)
+    if educations:
+        conds.append(education_in_expr(educations))
     if expiring_within_days is not None:
         today = date.today()
         deadline = today.fromordinal(today.toordinal() + expiring_within_days)
         conds.append(LaborContract.end_date.is_not(None))
         conds.append(LaborContract.end_date >= today)
         conds.append(LaborContract.end_date <= deadline)
+    if exclude_history and not statuses and not todo:
+        conds.append(LaborContract.status.notin_(HISTORY_STATUSES))
 
     total = (await db.execute(
         select(func.count()).select_from(LaborContract).where(*conds)
@@ -119,6 +215,29 @@ async def list_page(
         .offset(offset).limit(limit)
     )).scalars().all()
     return int(total), list(rows)
+
+
+async def count_todos(
+    db: AsyncSession, *,
+    departments: frozenset[str] | None = None,
+    employee_number: str | None = None,
+    population: str = POPULATION_IN_SERVICE,
+) -> dict[str, int]:
+    """各「待我处理」口径的计数（人群、数据范围、谓词都与 list_page 一致）。"""
+    counts = dict.fromkeys(TODO_KEYS, 0)
+    if departments is not None and not departments:
+        return counts
+    conds = population_conds(population)
+    if departments is not None:
+        conds.append(LaborContract.department.in_(departments))
+    if employee_number:
+        conds.append(LaborContract.employee_number == employee_number)
+    row = (await db.execute(
+        select(*(func.count().filter(todo_expr(key)).label(key) for key in TODO_KEYS))
+        .select_from(LaborContract).where(*conds)
+    )).one()
+    # 按位置取值：列顺序即 TODO_KEYS 的顺序（异步驱动的 Row 不保证支持按列名取值）
+    return {key: int(value) for key, value in zip(TODO_KEYS, row, strict=True)}
 
 
 async def get_active_with_seq(
@@ -164,6 +283,65 @@ async def get_employee(db: AsyncSession, employee_number: str) -> Employee | Non
             Employee.is_deleted.is_(False),
         )
     )).scalar_one_or_none()
+
+
+async def map_education(
+    db: AsyncSession, employee_numbers: list[str],
+) -> dict[str, str | None]:
+    """按工号批量取学历 {工号: 学历}（台账行展示用；员工档案一个工号只有一行）。"""
+    if not employee_numbers:
+        return {}
+    rows = (await db.execute(
+        select(Employee.employee_number, Employee.education).where(
+            Employee.employee_number.in_(employee_numbers),
+            Employee.is_deleted.is_(False),
+        )
+    )).all()
+    return {number: education for number, education in rows}
+
+
+async def distinct_departments(
+    db: AsyncSession, *, departments: frozenset[str] | None = None,
+    employee_number: str | None = None,
+) -> list[str]:
+    """有合同行的部门（去重升序）。departments=None 不限，空集即无范围。"""
+    if departments is not None and not departments:
+        return []
+    conds: list[ColumnElement[bool]] = [LaborContract.is_deleted.is_(False)]
+    if departments is not None:
+        conds.append(LaborContract.department.in_(departments))
+    if employee_number:
+        conds.append(LaborContract.employee_number == employee_number)
+    rows = (await db.execute(
+        select(LaborContract.department).where(*conds)
+        .distinct().order_by(LaborContract.department.asc())
+    )).scalars().all()
+    return list(rows)
+
+
+async def distinct_education(
+    db: AsyncSession, *, departments: frozenset[str] | None = None,
+    employee_number: str | None = None,
+) -> list[str]:
+    """有合同行的员工档案学历取值（去重；排序与脏值过滤由 archive_service 处理）。"""
+    if departments is not None and not departments:
+        return []
+    contract_conds: list[ColumnElement[bool]] = [
+        LaborContract.employee_number == Employee.employee_number,
+        LaborContract.is_deleted.is_(False),
+    ]
+    if departments is not None:
+        contract_conds.append(LaborContract.department.in_(departments))
+    if employee_number:
+        contract_conds.append(LaborContract.employee_number == employee_number)
+    rows = (await db.execute(
+        select(Employee.education).where(
+            Employee.is_deleted.is_(False),
+            Employee.education.is_not(None),
+            exists().where(*contract_conds),
+        ).distinct()
+    )).scalars().all()
+    return [value for value in rows if value]
 
 
 async def find_departure_record_id(
@@ -222,24 +400,34 @@ async def is_departed(db: AsyncSession, employee_number: str) -> bool:
     return employee_number in await map_left_employees(db, [employee_number])
 
 
-async def list_open_contracts(db: AsyncSession) -> list[LaborContract]:
-    """未完结合同（active / pending_renewal / renewing / expired_unrenewed）。"""
+# 未完结合同的状态（离职归入、办结终止、续签范围共用）
+OPEN_STATUSES = (
+    LaborContract.STATUS_ACTIVE,
+    LaborContract.STATUS_PENDING_RENEWAL,
+    LaborContract.STATUS_RENEWING,
+    LaborContract.STATUS_EXPIRED_UNRENEWED,
+)
+
+
+async def list_open_contracts(
+    db: AsyncSession, *, employee_number: str | None = None,
+) -> list[LaborContract]:
+    """未完结合同（active / pending_renewal / renewing / expired_unrenewed）；指定工号只取该员工。"""
+    conds: list[ColumnElement[bool]] = [
+        LaborContract.is_deleted.is_(False),
+        LaborContract.status.in_(OPEN_STATUSES),
+    ]
+    if employee_number:
+        conds.append(LaborContract.employee_number == employee_number)
     rows = (await db.execute(
-        select(LaborContract).where(
-            LaborContract.is_deleted.is_(False),
-            LaborContract.status.in_([
-                LaborContract.STATUS_ACTIVE,
-                LaborContract.STATUS_PENDING_RENEWAL,
-                LaborContract.STATUS_RENEWING,
-                LaborContract.STATUS_EXPIRED_UNRENEWED,
-            ]),
-        ).order_by(LaborContract.employee_number.asc())
+        select(LaborContract).where(*conds).order_by(LaborContract.employee_number.asc())
     )).scalars().all()
     return list(rows)
 
 
 async def list_unarchived(
     db: AsyncSession, *, department: str | None = None,
+    educations: list[str] | None = None,
 ) -> list[LaborContract]:
     """未归档合同（在职 + 离职；含已续签取代/已终止——原合同同样要归档保留）。"""
     conds: list[ColumnElement[bool]] = [
@@ -248,6 +436,8 @@ async def list_unarchived(
     ]
     if department:
         conds.append(LaborContract.department == department)
+    if educations:
+        conds.append(education_in_expr(educations))
     rows = (await db.execute(
         select(LaborContract).where(*conds).order_by(
             LaborContract.department.asc(),
@@ -274,6 +464,22 @@ async def map_contracts_for_numbers(
     for contract in rows:
         result.setdefault(contract.employee_number, []).append(contract)
     return result
+
+
+# ─── 通知留痕 ───
+
+
+async def list_notices(
+    db: AsyncSession, contract_id: UUID, *, limit: int = 20,
+) -> list[ContractNoticeLog]:
+    """某份合同的通知留痕（新→旧）。"""
+    rows = (await db.execute(
+        select(ContractNoticeLog).where(
+            ContractNoticeLog.contract_id == contract_id,
+            ContractNoticeLog.is_deleted.is_(False),
+        ).order_by(ContractNoticeLog.created_at.desc()).limit(limit)
+    )).scalars().all()
+    return list(rows)
 
 
 # ─── 扫描件版本 ───

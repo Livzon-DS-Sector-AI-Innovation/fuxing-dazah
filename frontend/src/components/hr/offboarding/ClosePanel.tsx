@@ -1,13 +1,16 @@
 'use client'
 
-// 办结收尾（第 6 步）：员工签字确认后，由 HR 确认「飞书账号已注销」并办结。
-// 办结是唯一改写员工档案状态的节点，一次联动五处；平台不自动操作飞书账号，只登记 HR 的确认。
+// 办结收尾（最后一步）：员工签收后（到人事办公室在公司电脑上手写签名，或纸质签收登记），
+// HR 在飞书侧注销账号、在这里勾选确认并办结。
+// 办结是唯一改写员工档案状态的节点，一次联动多处；平台不自动操作飞书账号，只登记 HR 的确认。
 
 import { useState } from 'react'
-import { App as AntdApp, Button, Popconfirm, Switch } from 'antd'
+import { App as AntdApp, Button, Checkbox, Popconfirm } from 'antd'
 import type { OffboardingCaseDetail } from '@/types/hr'
 import { closeOffboardingCase } from '@/actions/hr'
+import { signWayLabel } from '@/lib/hr'
 import CasePanel, { fmtTime } from './CasePanel'
+import SignatureImage from './SignatureImage'
 
 const LINKAGES = [
   '员工档案：用工状态置为离职，回写离职日期与离职原因',
@@ -15,6 +18,7 @@ const LINKAGES = [
   '培训花名册：同步为离职，不再出现在培训选人里',
   '入职台账：用工状态置为不在职',
   '离职台账：回写办结结果（离职日期 / 类型 / 原因、证明开具与签收）',
+  '劳动合同：名下未完结的合同置为已终止，不再进入到期预警与续签提醒',
 ]
 
 export default function ClosePanel({
@@ -31,9 +35,7 @@ export default function ClosePanel({
 
   const signed = detail.sign_state
   const signedAt = detail.paper_signed_at || signed?.cert_signed_at
-  const signWay = detail.delivery_channel === 'paper'
-    ? '纸质当面签收'
-    : signed?.has_sign_image ? '线上手写签名' : '线上确认'
+  const signWay = signWayLabel(detail.delivery_channel)
 
   const close = async () => {
     setBusy(true)
@@ -50,20 +52,25 @@ export default function ClosePanel({
 
   return (
     <CasePanel
-      step={6}
+      step={7}
+      stepLabel="最后一步"
       tone="warning"
       title="办结收尾"
-      hint={`员工已于 ${fmtTime(signedAt)} ${signWay}${signed?.cert_sign_name ? `（签署人 ${signed.cert_sign_name}）` : ''}。确认账号已注销后办结。`}
+      hint={`员工已于 ${fmtTime(signedAt)} ${signWay}${signed?.cert_sign_name ? `（签收人 ${signed.cert_sign_name}）` : ''}。注销账号后办结。`}
     >
+      <SignatureImage caseId={detail.id} />
+
+      <div className="text-[13px] font-medium text-[var(--color-ink)]">办结后系统自动完成</div>
       <ul className="m-0 list-disc space-y-1 pl-5 text-[13px] leading-[1.6] text-[var(--color-slate)]">
         {LINKAGES.map((text) => (
           <li key={text}>{text}</li>
         ))}
       </ul>
-      <div className="flex items-center gap-2">
-        <Switch checked={deactivated} onChange={setDeactivated} aria-label="飞书账号已注销" />
-        <span className="text-[13px] text-[var(--color-ink)]">飞书账号已注销</span>
-      </div>
+
+      <Checkbox checked={deactivated} onChange={(e) => setDeactivated(e.target.checked)}>
+        我已在飞书管理后台注销该员工的账号
+      </Checkbox>
+
       <Popconfirm
         title="确认办结？"
         description="办结后员工档案与各台账同步更新，不可撤销。"

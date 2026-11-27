@@ -11,6 +11,7 @@ from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.modules.hr.labor_contract import departure_service
 from app.modules.hr.models import (
     EmployeeCertificate,
     OnboardingRecord,
@@ -80,11 +81,20 @@ async def close_case(
     # 5) 离职台账：办结结果是权威口径，回写覆盖
     await upsert_departure_record(db, case, employee, overwrite=True)
 
+    # 6) 劳动合同：办结即终止，不等次日的合同扫描——此人此后不再进入到期预警与续签提醒
+    terminated = await departure_service.terminate_for_employee(
+        db, employee_number=case.employee_number, departed_on=case.offboarding_date,
+    )
+    if terminated:
+        logger.info("离职办结同步终止劳动合同: %s(%s) %d 份", case.name, case.employee_number, terminated)
+
     case.account_deactivated = account_deactivated
     case.closed_at = now()
     case.status = OffboardingCase.STATUS_CLOSED
     case.updated_by = user_id
     await db.commit()
     await notify.notify_stage_advanced(db, case, await notify_context(db))
-    logger.info("离职办结: %s(%s) 档案/证件/花名册/入职台账/离职台账已联动", case.name, case.case_no)
+    logger.info(
+        "离职办结: %s(%s) 档案/证件/花名册/入职台账/离职台账/劳动合同已联动", case.name, case.case_no,
+    )
     return await refetch(db, case.id)

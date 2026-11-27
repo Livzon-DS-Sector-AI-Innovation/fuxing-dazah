@@ -23,7 +23,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -471,6 +471,8 @@ class ArchiveImportCommitRow(BaseModel):
     # 离职人员无合同行时传工号：按离职记录合同信息建档后挂接
     employee_number: str | None = None
     remark: str | None = None
+    # 换传原因：该合同已有扫描件时必填（同单个上传的换传规则）
+    reason: str | None = Field(None, max_length=255)
 
 
 class ArchiveImportCommitPayload(BaseModel):
@@ -533,6 +535,7 @@ async def commit_import(
                 db, contract=contract, file_bytes=data, filename=r.filename,
                 remark=r.remark, user=ctx.user,
                 source=ContractArchiveVersion.SOURCE_BATCH,
+                reason=r.reason,
             )
         except AppException as e:
             results.append(result | {"error": str(e.message)})

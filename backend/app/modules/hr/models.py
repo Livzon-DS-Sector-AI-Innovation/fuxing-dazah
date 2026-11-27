@@ -508,24 +508,23 @@ class DepartureRecord(BaseModel):
         Date, nullable=True, comment="上次飞书同步时间"
     )
 
-    # ─── 离职证明签署 ───
+    # ─── 离职证明签收 ───
+    # 系统只在公司内网可达，员工签收不走外部链接：到人事办公室在公司电脑上手写签名，
+    # 或在纸质件上签字后由 HR 登记；下面几列是签收结果（employee_sync 同步不触碰）。
     cert_issued_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="解除劳动关系证明开具时间（离职办理流程回写）"
     )
-    cert_sign_token: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, unique=True, comment="签署链接 token"
-    )
     cert_sign_status: Mapped[str | None] = mapped_column(
-        String(16), nullable=True, comment="签署状态: pending / signed"
+        String(16), nullable=True, comment="签收状态: signed（存量数据里可能有早期线上签字留下的 pending）"
     )
     cert_signed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="签署时间"
+        DateTime(timezone=True), nullable=True, comment="签收时间"
     )
     cert_sign_image: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="手写签名图片 base64"
+        Text, nullable=True, comment="手写签名图片 base64（人事办公室电脑上当面手写）"
     )
     cert_sign_name: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="签署人确认姓名"
+        String(64), nullable=True, comment="签收人姓名"
     )
 
     # ─── 离职合同台账（劳动合同管理 P3）───

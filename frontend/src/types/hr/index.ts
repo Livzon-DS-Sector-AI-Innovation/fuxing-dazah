@@ -1861,11 +1861,16 @@ export interface LaborContract {
   approval_mode_label?: string | null
   approval_instance_code?: string | null
   stamped_at?: string | null
+  /** 员工领取时间（到人事办公室领取合同原件即签收） */
   delivered_at?: string | null
-  sign_confirmed_at?: string | null
   terminated_reason?: string | null
   terminated_at?: string | null
   departure_record_id?: string | null
+  /** 这份合同怎么来的：续签生成 / 手工录入 / Excel 导入 / 存量迁移（null 视同存量迁移） */
+  origin?: ContractOrigin | null
+  origin_label?: string | null
+  /** 员工档案学历（按工号带出；「先本科及以上」补扫用） */
+  education?: string | null
   /** 电子归档（与合同状态正交）：合同行上的当前版扫描件快照 */
   archive_status?: ContractArchiveStatus
   archive_status_label?: string
@@ -1873,6 +1878,34 @@ export interface LaborContract {
   archive_uploaded_at?: string | null
   created_at?: string | null
   updated_at?: string | null
+}
+
+export type ContractOrigin = 'renewal' | 'manual' | 'import' | 'migration'
+
+/** 进度步骤（后端按合同状态推导，前端只渲染） */
+export interface ContractProgressStep {
+  /** expiry_alert / dept_approval / renew_notice / stamp / deliver / archive */
+  key: string
+  title: string
+  state: 'done' | 'current' | 'pending' | 'skipped'
+  at?: string | null
+  note?: string | null
+}
+
+/** 通知留痕（部门审批提醒 / 续签 / 领取；存量数据里可能还有早期下线的 sign，按历史通知展示） */
+export interface ContractNotice {
+  kind: 'dept_approval' | 'renew' | 'collect' | 'sign' | string
+  recipient_name?: string | null
+  status: 'sent' | 'failed' | 'skipped'
+  error_message?: string | null
+  created_at?: string | null
+}
+
+/** 发送一次通知的结果 */
+export interface ContractNoticeResult {
+  status: 'sent' | 'failed' | 'skipped'
+  error?: string | null
+  recipient_name?: string | null
 }
 
 /** 合同详情（含同一员工历次合同） */
@@ -1884,6 +1917,41 @@ export interface LaborContractDetail extends LaborContract {
    *  can_access_file 原件预览/下载（HR 与员工本人） */
   can_archive?: boolean
   can_access_file?: boolean
+  /** 六步进度与通知留痕（后端推导） */
+  progress?: ContractProgressStep[]
+  notices?: ContractNotice[]
+}
+
+/** 「待我处理」口径键（与后端 stats 一致）；attention = 五项待办的并集 */
+export type ContractTodoKey =
+  | 'pending_dept_approval'
+  | 'to_renew'
+  | 'to_stamp'
+  | 'to_deliver'
+  | 'to_archive'
+  | 'pending_renewal'
+  | 'expired_unrenewed'
+  | 'attention'
+
+export interface LaborContractStats {
+  pending_dept_approval: number
+  to_renew: number
+  to_stamp: number
+  to_deliver: number
+  to_archive: number
+  pending_renewal: number
+  expired_unrenewed: number
+  attention_total: number
+}
+
+/** 转入离职办理后新建的离职办理单（精简视图，用于跳转） */
+export interface ContractOffboardingHandoff {
+  id: string
+  case_no: string
+  status: string
+  status_label: string
+  offboarding_date: string
+  offboarding_type: string
 }
 
 export interface LaborContractListParams {
@@ -1891,6 +1959,11 @@ export interface LaborContractListParams {
   keyword?: string
   expiring_days?: number
   department?: string
+  /** 「待我处理」口径（键名同 stats） */
+  todo?: ContractTodoKey
+  /** true 时返回已续签取代 / 已终止的历史行 */
+  include_history?: boolean
+  education?: string
   page?: number
   page_size?: number
 }
@@ -1927,19 +2000,6 @@ export interface LaborContractRenewInput {
   sign_date?: string | null
 }
 
-/** 签字页最小视图（免登；不含工号等可枚举信息） */
-export interface ContractSignView {
-  name: string
-  department: string
-  seq_no: number
-  seq_label: string
-  term_label: string
-  start_date?: string | null
-  end_date?: string | null
-  delivered_at?: string | null
-  sign_confirmed_at?: string | null
-}
-
 // ─── 劳动合同 · 电子档案库（P2）───
 
 export type ContractArchiveStatus = 'unarchived' | 'archived'
@@ -1955,6 +2015,8 @@ export interface ContractArchiveVersion {
   content_type: string
   size: number
   remark?: string | null
+  /** 换传原因：已有扫描件时再传必须填写 */
+  reason?: string | null
   source: 'single' | 'batch'
   uploaded_by?: string | null
   uploaded_at?: string | null
@@ -1998,6 +2060,8 @@ export interface ContractArchiveListParams {
   population?: 'in_service' | 'departed' | 'all'
   keyword?: string
   department?: string
+  /** 学历（逗号分隔多值，IN 匹配员工档案学历） */
+  education?: string
   page?: number
   page_size?: number
 }
@@ -2238,12 +2302,21 @@ export interface OffboardingCase {
   resignation_finished_at?: string | null
   clearance_instance_code?: string | null
   clearance_finished_at?: string | null
+  /** 清退交接审批挂起待发起：还没到建议发起日（离职日前 2 天），到期由轮询自动发起 */
+  clearance_pending?: boolean
+  /** 清退交接建议发起日（离职日前 2 天） */
+  clearance_due_date?: string
+  /** 交接人（部门审批后转办） */
+  handover_to?: string | null
+  /** 部门办事员（确认工作交接事项） */
+  dept_clerk?: string | null
   health_check_required: boolean
   health_check_done: boolean
   health_check_date?: string | null
   health_check_file_name?: string | null
   has_health_check_file?: boolean
-  /** electronic 电子单张（链接线上签收）/ paper 纸质两联（当面签收） */
+  /** electronic 电子单张（可邮件发送 PDF）/ paper 纸质两联（含员工签收栏）；
+   *  两种都在员工到人事办公室时签收：公司电脑上手写签名，或纸质件上签字后登记 */
   cert_template?: 'electronic' | 'paper' | null
   cert_issued_at?: string | null
   /** 开具人（HR 经办人姓名快照） */
@@ -2253,7 +2326,10 @@ export interface OffboardingCase {
   mail_sent_at?: string | null
   mail_status?: string | null
   sms_phone?: string | null
+  /** manual = HR 用手机 / 飞书发出后登记（短信通道未接服务商） */
   sms_status?: string | null
+  sms_sent_at?: string | null
+  /** 签收方式：handwriting 当面手写签名 / paper 纸质签收登记（存量 mail 为早期线上签字） */
   delivery_channel?: string | null
   paper_signed_at?: string | null
   paper_signed_by?: string | null
@@ -2263,12 +2339,21 @@ export interface OffboardingCase {
   created_at?: string | null
 }
 
-/** 办理详情：含清退明细与台账签字状态 */
+/** 办理详情：含清退明细与台账签收状态 */
 export interface OffboardingCaseDetail extends OffboardingCase {
   clearance_items?: OffboardingClearanceItem[]
   /** 两个审批环节是否接了飞书：未接则走站内登记办结 */
   resignation_feishu?: boolean
   clearance_feishu?: boolean
+  /** 档案手机号 / 入职台账登记的邮箱：送达缺省值，HR 不必手填 */
+  employee_phone?: string | null
+  employee_email?: string | null
+  /** 短信文案模板（占位符 {联系人}；只做通知，不带链接）与联系人 */
+  sms_template?: string
+  contact?: string
+  /** 关联的台账行来自飞书同步：离职日期 / 类型以飞书表为准，平台只读 */
+  ledger_synced?: boolean
+  /** 签收结果（写在离职台账行上；手写签名与纸质登记都会回写） */
   sign_state?: {
     cert_sign_status?: string | null
     cert_signed_at?: string | null
@@ -2276,6 +2361,21 @@ export interface OffboardingCaseDetail extends OffboardingCase {
     has_sign_image?: boolean
     cert_issued_at?: string | null
   } | null
+}
+
+/** 员工手写签名图（无敏感信息权限时 masked=true、image 为空） */
+export interface OffboardingSignatureImage {
+  masked: boolean
+  image?: string | null
+  signed_at?: string | null
+  signed_name?: string | null
+}
+
+/** 某员工最近的离职办理单（员工档案「离职材料」用）；没有办理单时 case 为 null */
+export interface OffboardingCaseByEmployee {
+  case: OffboardingCase | null
+  /** 还可以发起办理（没有办理单，或最近一张已办结 / 已取消） */
+  startable: boolean
 }
 
 /** 看板页头统计：各状态单数 + 临期单数（审批 / 清退中且距离职日 ≤ 2 天） */
@@ -2288,30 +2388,18 @@ export interface OffboardingCaseStats {
   active: number
 }
 
-/** 开具 / 补发送达的响应：办结单 + 交回 HR 人工转发的签署链接 */
-export interface OffboardingCaseDeliveryResponse extends OffboardingCase {
-  sign_url?: string | null
-}
-
-/** 离职证明签字 H5 视图（免登，token 一次性） */
-export interface DepartureCertSignView {
-  name: string
-  department: string
-  position: string
-  leave_date: string
-  has_pdf: boolean
-  /** 联系人文案（有疑问找谁） */
-  contact?: string
-  certificate_html: string
-}
-
-/** 签字确认响应：签字后 token 已作废，PDF 内容随响应带回供下载 */
-export interface DepartureCertSignResult {
+/** 员工手写签名图（无敏感信息权限时 masked=true、image 为空） */
+export interface OffboardingSignatureImage {
+  masked: boolean
+  image?: string | null
   signed_at?: string | null
-  case_status?: OffboardingCaseStatus | null
-  has_pdf: boolean
-  pdf_base64?: string | null
-  pdf_filename?: string | null
+  signed_name?: string | null
+}
+
+/** 当面手写签名的入参：员工在人事办公室的公司电脑上签，签名图随档案留存 */
+export interface OffboardingSignatureInput {
+  signature: string
+  signed_name?: string
 }
 
 // ─── 离职台账增强（筛选 / 勾选导出 / 保存视图 / 导出留痕）───
@@ -2350,6 +2438,16 @@ export interface DepartureLedgerRow extends DepartureRecord {
   cert_signed?: boolean
   /** 四部门清退进度与扣补金额（没有办结单时各项为 0） */
   clearance?: Record<ClearanceCategory, ClearanceSummary>
+  /** 该行来自飞书离职表同步：离职日期 / 类型以飞书表为准 */
+  ledger_synced?: boolean
+  /** 员工档案 ID（台账里只有工号，关联档案后带出） */
+  employee_id?: string | null
+  /** 能否从这一行直接发起离职办理；不能的话原因在 start_block_reason */
+  startable?: boolean
+  start_block_reason?: string | null
+  /** 证明模板与 HR 负责人（开具人） */
+  cert_template?: 'electronic' | 'paper' | null
+  hr_owner?: string | null
 }
 
 export interface ClearanceSummary {

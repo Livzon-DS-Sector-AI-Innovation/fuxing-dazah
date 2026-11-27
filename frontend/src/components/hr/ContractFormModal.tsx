@@ -22,7 +22,8 @@ interface Props {
   mode: ContractFormMode
   contract?: LaborContract | null
   onClose: () => void
-  onSaved: () => void
+  /** 保存成功；带上后端返回的那份合同（续签时是新合同，调用方据此切换过去） */
+  onSaved: (saved?: LaborContract) => void
 }
 
 interface FormValues {
@@ -135,30 +136,34 @@ export default function ContractFormModal({ open, mode, contract, onClose, onSav
 
   const submit = async (values: FormValues) => {
     setSaving(true)
+    let saved: LaborContract | undefined
     try {
       if (isCreate) {
-        await createLaborContract({
+        const r = await createLaborContract({
           employee_number: values.employee_option?.value || '',
           start_date: values.start_date!.format('YYYY-MM-DD'),
           sign_date: values.sign_date ? values.sign_date.format('YYYY-MM-DD') : null,
           seq_no: typeof values.seq_option === 'number' ? values.seq_option : null,
           remark: values.remark?.trim() || null,
         })
+        saved = r.data
       } else if (isRenew && contract) {
-        await renewLaborContract(contract.id, {
+        const r = await renewLaborContract(contract.id, {
           start_date: values.start_date!.format('YYYY-MM-DD'),
           sign_date: values.sign_date ? values.sign_date.format('YYYY-MM-DD') : null,
         })
+        saved = r.data
       } else if (contract) {
-        await updateLaborContract(contract.id, {
+        const r = await updateLaborContract(contract.id, {
           start_date: values.start_date?.format('YYYY-MM-DD'),
           sign_date: values.sign_date?.format('YYYY-MM-DD'),
           position: values.position?.trim() || undefined,
           remark: values.remark?.trim() || undefined,
         })
+        saved = r.data
       }
       message.success(isCreate ? '合同已录入' : isRenew ? '续签已办理' : '已保存')
-      onSaved()
+      onSaved(saved)
     } catch (e) {
       message.error(e instanceof Error ? e.message : '保存失败')
     } finally {
@@ -219,7 +224,7 @@ export default function ContractFormModal({ open, mode, contract, onClose, onSav
             className="!mb-4"
             type="info"
             showIcon
-            message={`本次为第 ${nextSeq} 份合同，期限自动带出：${termHint(nextSeq)}（自新合同起始日起算）`}
+            title={`本次为第 ${nextSeq} 份合同，期限自动带出：${termHint(nextSeq)}（自新合同起始日起算）`}
           />
         )}
 
@@ -253,7 +258,7 @@ export default function ContractFormModal({ open, mode, contract, onClose, onSav
             className="!mb-4"
             type="info"
             showIcon
-            message={`已指定：${seqOrderLabel(chosenSeq)} · ${termHint(chosenSeq)}（保存时按此计算，期限自起始日起算）`}
+            title={`已指定：${seqOrderLabel(chosenSeq)} · ${termHint(chosenSeq)}（保存时按此计算，期限自起始日起算）`}
           />
         )}
 
@@ -262,7 +267,7 @@ export default function ContractFormModal({ open, mode, contract, onClose, onSav
             className="!mb-4"
             type="info"
             showIcon
-            message={`推算结果：${preview.seq_label}，到期日 ${preview.end_date ?? '不设（无固定期限）'}`}
+            title={`推算结果：${preview.seq_label}，到期日 ${preview.end_date ?? '不设（无固定期限）'}`}
             description={
               preview.years_employed != null
                 ? `按入职日期推算（司龄 ${preview.years_employed} 年${preview.existing_contracts ? `，系统已有 ${preview.existing_contracts} 份合同记录` : ''}）；与实际情况不符时可指定签订次序。`

@@ -34,6 +34,7 @@ PERMISSIONS: list[PermissionDef] = [
     # ── 劳动合同 ──
     PermissionDef("hr:contract:read", "查看劳动合同台账", "hr", "contract", "read"),
     PermissionDef("hr:contract:manage", "管理劳动合同（录入/续签/审批/盖章领取/终止）", "hr", "contract", "manage"),
+    PermissionDef("hr:contract:approve", "部门续签审批（登记同意/不同意续签意见）", "hr", "contract", "approve"),
     # ── 培训管理 ──
     PermissionDef("hr:training:read", "查看培训", "hr", "training", "read"),
     PermissionDef("hr:training:manage", "管理培训（新增/编辑/删除）", "hr", "training", "manage"),

@@ -43,7 +43,6 @@ class LaborContract(BaseModel):
         Index("ix_labor_contracts_status", "status"),
         Index("ix_labor_contracts_department", "department"),
         Index("ix_labor_contracts_end_date", "end_date"),
-        Index("ix_labor_contracts_sign_token_hash", "sign_token_hash"),
         Index(
             "uq_labor_contracts_employee_seq",
             "employee_number",
@@ -90,6 +89,18 @@ class LaborContract(BaseModel):
     DECISION_AGREE = "agree"
     DECISION_DISAGREE = "disagree"
 
+    # ─── 来源（进度步骤按来源分支；NULL = 迁移脚本写入的历史行，视同 migration）───
+    ORIGIN_RENEWAL = "renewal"
+    ORIGIN_MANUAL = "manual"
+    ORIGIN_IMPORT = "import"
+    ORIGIN_MIGRATION = "migration"
+    ORIGIN_LABELS = {
+        ORIGIN_RENEWAL: "续签生成",
+        ORIGIN_MANUAL: "手工录入",
+        ORIGIN_IMPORT: "Excel 导入",
+        ORIGIN_MIGRATION: "存量迁移",
+    }
+
     # ─── 员工快照（录入/续签时固化，员工异动不回写历史合同行）───
     employee_number: Mapped[str] = mapped_column(
         String(32), nullable=False, comment="工号"
@@ -124,6 +135,18 @@ class LaborContract(BaseModel):
     )
     remark: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="备注")
 
+    # Python 侧默认 import：Excel 台账导入（hr/ledger_import.py）不声明来源，未显式指定的
+    # 新行按导入计；录入 / 续签 / 离职建档各自显式写。无服务端默认，存量行保持 NULL。
+    origin: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        default=ORIGIN_IMPORT,
+        comment=(
+            "来源: renewal 续签生成 / manual 手工录入 / import Excel 导入 / "
+            "migration 存量迁移；NULL = 迁移脚本写入的历史行（视同 migration）"
+        ),
+    )
+
     # ─── 部门续签审批 ───
     dept_decision: Mapped[str | None] = mapped_column(
         String(16), nullable=True, comment="审批结论: agree/disagree"
@@ -145,18 +168,14 @@ class LaborContract(BaseModel):
         comment="审批发起次数（幂等键后缀，撤销后重发递增）",
     )
 
-    # ─── 盖章 / 领取 / 员工线上签字 ───
+    # ─── 盖章 / 领取 ───
+    # 系统只在公司内网可达，员工在手机上打不开本系统的链接：没有领取后的线上签字，
+    # 员工到人事办公室领取合同原件即完成签收。
     stamped_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="公司盖章完成时间（触发领取通知）"
     )
     delivered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="员工领取时间（触发签字提醒）"
-    )
-    sign_confirmed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="员工线上签字确认时间（已领取凭证）"
-    )
-    sign_token_hash: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, comment="签字一次性 token 的 sha256（确认后清空，重发即作废旧链接）"
+        DateTime(timezone=True), nullable=True, comment="员工领取时间（领取即签收）"
     )
 
     # ─── 终止 ───
@@ -217,6 +236,12 @@ class LaborContract(BaseModel):
     def status_label(self) -> str:
         return self.STATUS_LABELS.get(self.status, self.status)
 
+    @property
+    def origin_label(self) -> str:
+        """来源文案；NULL（迁移脚本写入的历史行）视同存量迁移。"""
+        origin = self.origin or self.ORIGIN_MIGRATION
+        return self.ORIGIN_LABELS.get(origin, origin)
+
 
 class ContractArchiveVersion(BaseModel):
     """合同扫描件版本：一份合同一个合并文件，换传即升版本（旧行保留可查）。
@@ -257,6 +282,9 @@ class ContractArchiveVersion(BaseModel):
     )
     content_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="MIME 类型")
     size: Mapped[int] = mapped_column(Integer, nullable=False, comment="文件大小（字节）")
+    reason: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="换传原因（已有扫描件再上传时必填；首次上传为空）",
+    )
     remark: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="备注")
     source: Mapped[str] = mapped_column(
         String(16), nullable=False, default=SOURCE_SINGLE, server_default=SOURCE_SINGLE,
@@ -289,4 +317,60 @@ class ContractAccessLog(BaseModel):
     viewer_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="调阅人姓名")
     action: Mapped[str] = mapped_column(
         String(16), nullable=False, comment="调阅动作: view 在线查看 / download 下载"
+    )
+
+
+class ContractNoticeLog(BaseModel):
+    """合同通知留痕：员工两张卡（续签 / 领取）与部门负责人审批提醒，每次尝试写一行。
+
+    发送失败、因收件人没有飞书账号而跳过、负责人提醒被关闭的同样留痕——详情页据此展示
+    通知情况，「通知续签」进度步骤据此判断。与通知发送同事务：状态没落库就不会有留痕。
+    created_at 显式取墙钟时间（同一事务内多次发送按真实先后排序）。
+    存量数据里可能还有 kind=sign（早期「签字提醒」，随链接一起下线），展示时按历史通知兜底。
+    """
+
+    __tablename__ = "contract_notice_logs"
+    __table_args__ = (
+        Index("ix_contract_notice_contract", "contract_id"),
+        Index("ix_contract_notice_created", "created_at"),
+        {"schema": "hr"},
+    )
+
+    KIND_DEPT_APPROVAL = "dept_approval"
+    KIND_RENEW = "renew"
+    KIND_COLLECT = "collect"
+    KIND_LABELS = {
+        KIND_DEPT_APPROVAL: "部门审批提醒",
+        KIND_RENEW: "续签通知",
+        KIND_COLLECT: "领取通知",
+    }
+    LEGACY_KIND_LABEL = "历史通知"
+    # 可由 HR 重发的员工侧通知（部门审批提醒收件人是负责人，不走重发）
+    RESENDABLE_KINDS = (KIND_RENEW, KIND_COLLECT)
+
+    STATUS_SENT = "sent"
+    STATUS_FAILED = "failed"
+    STATUS_SKIPPED = "skipped"
+
+    contract_id: Mapped[UUID] = mapped_column(
+        nullable=False, comment="劳动合同 ID（逻辑关联，无外键）"
+    )
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False,
+        comment="通知类型: dept_approval 部门审批提醒 / renew 续签通知 / collect 领取通知",
+    )
+    recipient_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="收件人姓名（员工或部门负责人）",
+    )
+    recipient_open_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="收件人飞书 open_id",
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="结果: sent 已发送 / failed 发送失败 / skipped 跳过",
+    )
+    error_message: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="失败或跳过的原因",
+    )
+    created_by_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="触发发送的操作人姓名（定时任务为空）",
     )

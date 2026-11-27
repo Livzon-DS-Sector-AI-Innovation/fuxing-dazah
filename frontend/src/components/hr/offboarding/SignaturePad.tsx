@@ -1,6 +1,7 @@
 'use client'
 
 // 手写签名板：pointer 事件（触屏 / 鼠标 / 触控笔通用），自研不引依赖。
+// 员工到人事办公室时在公司的电脑上签名（系统只在公司内网可达，没有外部签字链接）。
 // 导出白底 PNG dataURL（透明底归档后看不见）；笔画用二次贝塞尔中点法做平滑。
 // 画布尺寸随容器宽度变化（横竖屏切换、分屏）：每笔写完留一张笔迹快照，尺寸变化后
 // 把快照按新宽度铺回去，不让已经写好的签名丢掉。
@@ -153,7 +154,7 @@ export default function SignaturePad({
     <div className="rounded-[var(--rounded-md)] border border-[var(--color-hairline-strong)] bg-[var(--color-canvas)]">
       <div className="flex items-center justify-between border-b border-[var(--color-hairline)] px-3 py-1.5">
         <span className="text-[12px] text-[var(--color-steel)]">
-          {writing ? '书写中…' : '请用手指或触控笔在下方签名'}
+          {writing ? '书写中…' : '请用手指、触控笔或鼠标在下方签名'}
         </span>
         <Button size="small" type="text" icon={<DeleteOutlined />} disabled={!hasInk} onClick={clear}>
           清除重签

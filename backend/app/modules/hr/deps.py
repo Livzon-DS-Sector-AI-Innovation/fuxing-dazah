@@ -289,18 +289,18 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/probation-safety-exams", {"GET": "hr:profile:read", "POST": "hr:probation:exam:manage",
                                   "DELETE": "hr:probation:exam:manage"}),
     # 劳动合同台账（部门负责人在数据范围内可审批/办理本部门合同）
+    # 登记部门续签意见：部门负责人仅凭 hr:contract:approve 即可，HR 的 manage 可代登记。
+    # 子串匹配、首条命中即止：必须排在通配的 /labor-contracts/.* 之前
+    # （映射表的类型标注没覆盖「任一权限」的元组写法，与下方同类条目一致，按既定口径忽略）
+    (r"/labor-contracts/.*/dept-decision", {"POST": ("hr:contract:manage", "hr:contract:approve")}),  # type: ignore[dict-item]
     (r"/labor-contracts", {"GET": "hr:contract:read", "POST": "hr:contract:manage"}),
     (r"/labor-contracts/.*", {"GET": "hr:contract:read", "POST": "hr:contract:manage",
                               "PUT": "hr:contract:manage", "DELETE": "hr:contract:manage"}),
-    # 劳动合同公开签字（挂全局 api_router 免登，token 即凭证；登记仅为通过路由覆盖巡检，None=不设权限）
-    (r"/contract-sign/.*", None),
     # 离职办理（权限复用离职台账读写）。路径是子串匹配、首个命中即止：
     # 带子路径的条目必须排在前面，否则会被宽泛条目遮住、其 PUT/DELETE 取不到权限码
     (r"/offboarding-cases/.+", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
                                 "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
     (r"/offboarding-cases", {"GET": "hr:departure:read", "POST": "hr:departure:manage"}),
-    # 离职证明公开签字（免登，token 即凭证）
-    (r"/departure-cert-sign/.*", None),
     # 员工证件资料库（具体子路径在通用条目之前）
     (r"/certificates/access-logs", "hr:certificate:audit"),
     (r"/certificates/requirements", {"GET": "hr:certificate:read",

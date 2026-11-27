@@ -2,15 +2,18 @@
 
 // 离职管理配置（系统配置 →「离职管理」页签）。配置存后端 system_settings KV，
 // 后端在发起审批、开具证明和定时任务运行前读取：
-// - hr_offboarding.*                        审批定义编码（按职级分轨）/ 签字页地址 / 通知 / 提前天数
+// - hr_offboarding.*                        审批定义编码（按职级分轨）/ 通知 / 提前天数 / 清退清单 / 短信文案
 // - hr_reminder.offboarding_lead.*          离职发起时限提醒（每天 09:20）
 // - hr_reminder.offboarding_clearance_due.* 离职手续催办（每天 09:30）
 // 全部可缺省：不配任何审批定义也能跑，审批环节走「站内登记办结」。
+// 系统只部署在公司内网，员工在手机 / 外网打不开本系统的链接：没有签字页地址之类的配置，
+// 员工签收到人事办公室在公司电脑上手写签名，或在纸质件上签字后登记。
 
 import { useEffect, useState } from 'react'
 import { Alert, App as AntdApp, Button, Card, Divider, Form, Input, InputNumber, Space, Spin, Switch } from 'antd'
 import { SendOutlined } from '@ant-design/icons'
 import { getSystemSettings, sendReminderTest, updateSystemSettings } from '@/actions/hr'
+import type { ClearanceCategory } from '@/types/hr'
 import ReceiverSelect from './ReceiverSelect'
 
 const KEYS = {
@@ -19,11 +22,12 @@ const KEYS = {
   clearanceStaff: 'hr_offboarding.clearance_approval_code_staff',
   clearanceDirector: 'hr_offboarding.clearance_approval_code_director',
   directorLevels: 'hr_offboarding.director_levels',
-  signBase: 'hr_offboarding.sign_page_base_url',
   hrCopy: 'hr_offboarding.hr_copy_open_ids',
   contact: 'hr_offboarding.contact_info',
   leadResigned: 'hr_offboarding.lead_warn_days_resigned',
   leadProbation: 'hr_offboarding.lead_warn_days_probation',
+  clearanceItems: 'hr_offboarding.clearance_items',
+  smsTemplate: 'hr_offboarding.sms_template',
   leadEnabled: 'hr_reminder.offboarding_lead.enabled',
   leadReceivers: 'hr_reminder.offboarding_lead.open_ids',
   leadAhead: 'hr_reminder.offboarding_lead.days_ahead',
@@ -32,7 +36,21 @@ const KEYS = {
 } as const
 
 const DEFAULTS = { resigned: 30, probation: 3, leadAhead: 7 }
-const SIGN_PAGE_PATH = '/api/departure-cert-sign'
+
+const CLEARANCE_KEYS: ClearanceCategory[] = ['admin', 'finance', 'hr', 'work']
+const CLEARANCE_LABELS: Record<ClearanceCategory, string> = {
+  admin: '行政后勤部', finance: '财务部', hr: '人力资源部', work: '工作部门',
+}
+// 需求列明的默认清单；配置留空时后端就用这份
+const CLEARANCE_DEFAULTS: Record<ClearanceCategory, string> = {
+  admin: '宿舍钥匙\n寝室个人物品\n饭卡余额\n通信补贴\n车辆通行证\n办公室钥匙\n工本费',
+  finance: '电脑等电子设备\nU盘\n个人欠款',
+  hr: '社保医保公积金\n厂牌考勤卡\n培训费\n违约金\n工资结算至',
+  work: '业务往来\n考勤统计\n劳保用品\n工作服\n岗位技术资料',
+}
+// 短信只做通知、不带链接（员工在手机上打不开本系统的链接）
+const DEFAULT_SMS_TEMPLATE =
+  '你好，我是丽珠福兴人力资源部{联系人}，您的离职证明已经开具，请您到人力资源部签收。'
 
 type TestKind = 'offboarding_lead' | 'offboarding_clearance_due'
 const TEST_LABEL: Record<TestKind, string> = {
@@ -40,17 +58,20 @@ const TEST_LABEL: Record<TestKind, string> = {
   offboarding_clearance_due: '离职手续催办',
 }
 
+type ClearanceItemsText = Record<ClearanceCategory, string>
+
 interface FormValues {
   resignation_approval_code_staff: string
   resignation_approval_code_director: string
   clearance_approval_code_staff: string
   clearance_approval_code_director: string
   director_levels: string
-  sign_page_base_url: string
   hr_copy_open_ids: string[]
   contact_info: string
   lead_warn_days_resigned: number | null
   lead_warn_days_probation: number | null
+  clearance_items: ClearanceItemsText
+  sms_template: string
   lead_enabled: boolean
   lead_receivers: string[]
   lead_days_ahead: number | null
@@ -60,6 +81,32 @@ interface FormValues {
 
 const splitReceivers = (value: unknown): string[] =>
   typeof value === 'string' ? value.split(',').map((s) => s.trim()).filter(Boolean) : []
+
+/** 清退清单文本 → 事项数组：换行、逗号、顿号、分号都当分隔符 */
+const itemLines = (text: string): string[] =>
+  text.split(/[\n，,、;；]+/).map((s) => s.trim()).filter(Boolean)
+
+/** 库里的清退清单 JSON → 四个部门的文本框内容；没配或配坏了都给空（= 用默认清单） */
+function parseClearanceItems(raw: unknown): ClearanceItemsText {
+  const empty: ClearanceItemsText = { admin: '', finance: '', hr: '', work: '' }
+  if (typeof raw !== 'string' || !raw.trim()) return empty
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown> | null
+    return Object.fromEntries(CLEARANCE_KEYS.map((key) => [
+      key, Array.isArray(obj?.[key]) ? (obj[key] as unknown[]).join('\n') : '',
+    ])) as ClearanceItemsText
+  } catch {
+    return empty
+  }
+}
+
+/** 文本框内容 → 库里的 JSON；四个部门都没填就存空串（= 恢复默认清单） */
+function serializeClearanceItems(value: ClearanceItemsText): string {
+  const obj = Object.fromEntries(
+    CLEARANCE_KEYS.map((key) => [key, itemLines(value[key] || '')]).filter(([, items]) => items.length),
+  )
+  return Object.keys(obj).length ? JSON.stringify(obj) : ''
+}
 
 function positiveInt(value: unknown, fallback: number): number {
   const parsed = parseInt(typeof value === 'string' ? value : '', 10)
@@ -98,11 +145,12 @@ export default function OffboardingSettingsCard() {
           clearance_approval_code_staff: text(KEYS.clearanceStaff),
           clearance_approval_code_director: text(KEYS.clearanceDirector),
           director_levels: text(KEYS.directorLevels),
-          sign_page_base_url: text(KEYS.signBase),
           hr_copy_open_ids: splitReceivers(kv[KEYS.hrCopy]),
           contact_info: text(KEYS.contact),
           lead_warn_days_resigned: positiveInt(kv[KEYS.leadResigned], DEFAULTS.resigned),
           lead_warn_days_probation: positiveInt(kv[KEYS.leadProbation], DEFAULTS.probation),
+          clearance_items: parseClearanceItems(kv[KEYS.clearanceItems]),
+          sms_template: text(KEYS.smsTemplate),
           lead_enabled: text(KEYS.leadEnabled) !== 'false',
           lead_receivers: splitReceivers(kv[KEYS.leadReceivers]),
           lead_days_ahead: positiveInt(kv[KEYS.leadAhead], DEFAULTS.leadAhead),
@@ -129,11 +177,12 @@ export default function OffboardingSettingsCard() {
         [KEYS.clearanceStaff]: values.clearance_approval_code_staff.trim(),
         [KEYS.clearanceDirector]: values.clearance_approval_code_director.trim(),
         [KEYS.directorLevels]: values.director_levels.trim(),
-        [KEYS.signBase]: values.sign_page_base_url.trim().replace(/\/+$/, ''),
         [KEYS.hrCopy]: values.hr_copy_open_ids.join(','),
         [KEYS.contact]: values.contact_info.trim(),
         [KEYS.leadResigned]: String(values.lead_warn_days_resigned ?? DEFAULTS.resigned),
         [KEYS.leadProbation]: String(values.lead_warn_days_probation ?? DEFAULTS.probation),
+        [KEYS.clearanceItems]: serializeClearanceItems(values.clearance_items),
+        [KEYS.smsTemplate]: values.sms_template.trim(),
         [KEYS.leadEnabled]: values.lead_enabled ? 'true' : 'false',
         [KEYS.leadReceivers]: values.lead_receivers.join(','),
         [KEYS.leadAhead]: String(values.lead_days_ahead ?? DEFAULTS.leadAhead),
@@ -193,10 +242,6 @@ export default function OffboardingSettingsCard() {
     }
   }
 
-  const fillSignBase = () => {
-    form.setFieldValue('sign_page_base_url', `${window.location.origin}${SIGN_PAGE_PATH}`)
-  }
-
   return (
     <Card className="max-w-3xl">
       {!initial ? (
@@ -239,7 +284,7 @@ export default function OffboardingSettingsCard() {
           <Form.Item
             name="clearance_approval_code_staff"
             label="清退交接 · 一般员工至 M4"
-            extra="离职审批办结后自动发起；留空 = 站内登记各部门清退情况"
+            extra="部门审批办结后，到建议发起日（离职日前 2 天）自动发起；留空 = 站内登记各部门清退情况"
           >
             <Input maxLength={64} placeholder="飞书审批定义编码" allowClear />
           </Form.Item>
@@ -271,17 +316,38 @@ export default function OffboardingSettingsCard() {
             }
           />
 
-          <Divider titlePlacement="left">证明签署</Divider>
+          <Divider titlePlacement="left">清退事项清单</Divider>
+          <div className="mb-3 text-[12px] text-[var(--color-steel)]">
+            进入清退会签时，每个部门自带这里的清单，HR 逐项确认。一项一行；留空 = 用需求列明的默认清单。
+          </div>
+          <Space size="large" wrap align="start">
+            {CLEARANCE_KEYS.map((key) => (
+              <Form.Item key={key} name={['clearance_items', key]} label={CLEARANCE_LABELS[key]}>
+                <Input.TextArea
+                  rows={7}
+                  style={{ width: 200 }}
+                  placeholder={CLEARANCE_DEFAULTS[key]}
+                  aria-label={`${CLEARANCE_LABELS[key]}清退事项`}
+                />
+              </Form.Item>
+            ))}
+          </Space>
+
+          <Divider titlePlacement="left">证明与送达</Divider>
           <Form.Item
-            name="sign_page_base_url"
-            label="签字页地址"
-            extra="员工在签字页查看证明并手写签名；没填的话开具证明时生成不了签署链接"
+            name="contact_info"
+            label="联系人"
+            extra="写在员工通知和短信里，填具体的人名，如「王琳」；留空只显示「人力资源部」"
           >
-            <Input maxLength={200} placeholder={`如 https://hr.example.com${SIGN_PAGE_PATH}`} allowClear />
+            <Input maxLength={64} placeholder="王琳" allowClear />
           </Form.Item>
-          <Button className="mb-4" onClick={fillSignBase}>
-            填入本站地址
-          </Button>
+          <Form.Item
+            name="sms_template"
+            label="离职证明短信文案"
+            extra="短信需要 HR 复制后用手机或飞书发出，只做通知。占位符 {联系人} 会换成上面的联系人；留空用下面的默认文案"
+          >
+            <Input.TextArea rows={3} maxLength={300} placeholder={DEFAULT_SMS_TEMPLATE} allowClear />
+          </Form.Item>
 
           <Divider titlePlacement="left">通知</Divider>
           <Form.Item
@@ -290,9 +356,6 @@ export default function OffboardingSettingsCard() {
             extra="阶段推进、飞书审批发起失败等通知发给这些 HR；留空则不推送"
           >
             <ReceiverSelect />
-          </Form.Item>
-          <Form.Item name="contact_info" label="通知联系人文案" extra="员工侧通知与短信落款处的联系人">
-            <Input maxLength={64} placeholder="人力资源部" allowClear />
           </Form.Item>
 
           <Divider titlePlacement="left">发起时限</Divider>

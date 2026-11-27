@@ -155,8 +155,8 @@ export const OFFBOARDING_CASE_TYPE_OPTIONS: readonly string[] = ['辞职', '辞�
 /** 离职办理状态文案；'none' 是台账筛选里「未发起办理」的取值 */
 export const OFFBOARDING_STATUS_LABELS: Record<string, string> = {
   none: '未发起',
-  draft: '待发起审批',
-  approving: '离职审批中',
+  draft: '待提交审批',
+  approving: '部门审批中',
   clearing: '清退会签中',
   cert_issuing: '待开具证明',
   delivering: '证明送达中',

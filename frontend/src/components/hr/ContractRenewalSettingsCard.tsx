@@ -1,13 +1,14 @@
 'use client'
 
 // 劳动合同配置（系统配置 →「劳动合同」页签）。部门审批默认在系统内完成，飞书原生审批为可选增强：
-// 总开关 / 公告期提前天数 / 到期预警推送部门负责人 / 飞书审批定义编码 / HR 抄送 / 签字页地址 /
-// 联系人文案 / 合同归档缺失周提醒。
+// 总开关 / 公告期提前天数 / 到期预警推送部门负责人 / 飞书审批定义编码 / HR 抄送 /
+// 联系人与需携带材料 / 合同归档缺失周提醒。
 // 配置存 hr.system_settings（hr_contract.*），后端定时任务与审批发起前读取；
 // 审批定义为空时部门审批自动降级为站内台账勾选（无需定义即可上线）。
+// 系统只部署在公司内网，员工在手机上打不开本系统的链接：没有线上签字，员工到人事办公室领取合同即签收。
 
 import { useEffect, useState } from 'react'
-import { App, Alert, Button, Card, Form, Input, InputNumber, Switch } from 'antd'
+import { Alert, App, Button, Card, Form, Input, InputNumber, Space, Switch } from 'antd'
 import { getSystemSettings, updateSystemSettings } from '@/actions/hr'
 
 interface ContractSettingsFormValues {
@@ -16,8 +17,9 @@ interface ContractSettingsFormValues {
   dept_head_notice_enabled: boolean
   renewal_approval_code: string
   hr_copy_open_ids: string
-  sign_page_base_url: string
   contact_info: string
+  contact_name: string
+  required_materials: string
   archive_reminder_enabled: boolean
   archive_reminder_open_ids: string
 }
@@ -28,8 +30,9 @@ const KEYS = {
   deptHeadNotice: 'hr_contract.dept_head_notice_enabled',
   approvalCode: 'hr_contract.renewal_approval_code',
   hrCopy: 'hr_contract.hr_copy_open_ids',
-  signBase: 'hr_contract.sign_page_base_url',
   contact: 'hr_contract.contact_info',
+  contactName: 'hr_contract.contact_name',
+  requiredMaterials: 'hr_contract.required_materials',
   archiveEnabled: 'hr_contract.archive_reminder_enabled',
   archiveReceivers: 'hr_contract.archive_reminder_open_ids',
 }
@@ -56,8 +59,9 @@ export default function ContractRenewalSettingsCard() {
           dept_head_notice_enabled: str(KEYS.deptHeadNotice) !== 'false',
           renewal_approval_code: str(KEYS.approvalCode),
           hr_copy_open_ids: str(KEYS.hrCopy),
-          sign_page_base_url: str(KEYS.signBase),
           contact_info: str(KEYS.contact),
+          contact_name: str(KEYS.contactName),
+          required_materials: str(KEYS.requiredMaterials),
           archive_reminder_enabled: str(KEYS.archiveEnabled) !== 'false',
           archive_reminder_open_ids: str(KEYS.archiveReceivers),
         })
@@ -81,8 +85,9 @@ export default function ContractRenewalSettingsCard() {
         [KEYS.deptHeadNotice]: String(values.dept_head_notice_enabled),
         [KEYS.approvalCode]: values.renewal_approval_code?.trim() ?? '',
         [KEYS.hrCopy]: values.hr_copy_open_ids?.trim() ?? '',
-        [KEYS.signBase]: values.sign_page_base_url?.trim().replace(/\/+$/, '') ?? '',
         [KEYS.contact]: values.contact_info?.trim() ?? '',
+        [KEYS.contactName]: values.contact_name?.trim() ?? '',
+        [KEYS.requiredMaterials]: values.required_materials?.trim() ?? '',
         [KEYS.archiveEnabled]: String(values.archive_reminder_enabled),
         [KEYS.archiveReceivers]: values.archive_reminder_open_ids?.trim() ?? '',
       })
@@ -102,7 +107,7 @@ export default function ContractRenewalSettingsCard() {
           <Alert
             type="success"
             showIcon
-            title="部门审批当前为系统内审批（默认方式）：合同进入公告期时系统给部门负责人发飞书卡片提醒，负责人在合同台账里勾选「同意续签 / 不同意续签」，系统记录审批时间。"
+            title="部门审批当前为系统内审批（默认方式）：合同进入公告期时系统给部门负责人发飞书卡片提醒，负责人在「劳动合同」里登记「同意续签 / 不同意续签」，系统记录登记人与时间。续签之前必须先有部门的「同意续签」意见。"
           />
         ) : (
           <Alert
@@ -111,6 +116,9 @@ export default function ContractRenewalSettingsCard() {
             title="已配置飞书审批：公告期将自动发起飞书原生审批，部门负责人在飞书中完成审批，结果自动回写台账（负责人收到的是审批待办，不再另发提醒卡片）。"
           />
         )}
+        <div className="text-[13px] text-[var(--color-slate)]">
+          部门负责人只需要「部门续签审批」这一个权限（在权限管理里配给对应角色，并限定其部门范围），就能登记意见而看不到 HR 的其它操作。
+        </div>
 
         <Form<ContractSettingsFormValues> form={form} layout="vertical" onFinish={(v) => void save(v)}>
           <Form.Item name="renewal_pipeline_enabled" label="续签流程总开关" valuePropName="checked">
@@ -150,16 +158,20 @@ export default function ContractRenewalSettingsCard() {
             <Input maxLength={500} placeholder="如：张三, ou_xxx" allowClear />
           </Form.Item>
 
+          <Space size="large" wrap align="start">
+            <Form.Item name="contact_info" label="联系部门" extra="员工通知里找哪个部门办理（默认「人力资源部」）">
+              <Input maxLength={64} placeholder="人力资源部" allowClear />
+            </Form.Item>
+            <Form.Item name="contact_name" label="联系人姓名" extra="续签、领取通知里写找谁，如「王琳」；留空只写部门">
+              <Input maxLength={64} placeholder="王琳" allowClear />
+            </Form.Item>
+          </Space>
           <Form.Item
-            name="sign_page_base_url"
-            label="签字页基地址"
-            extra="员工线上签字 H5 页地址（如 https://hr.example.com/api/contract-sign）；为空时签字提醒不带链接"
+            name="required_materials"
+            label="续签需携带材料"
+            extra="写进续签通知（如：身份证原件）；留空通知里不提材料"
           >
-            <Input maxLength={200} allowClear />
-          </Form.Item>
-
-          <Form.Item name="contact_info" label="通知联系人文案" extra="员工侧通知卡片中的联系人（默认「人力资源部」）">
-            <Input maxLength={64} allowClear />
+            <Input.TextArea rows={2} maxLength={200} placeholder="身份证原件" allowClear />
           </Form.Item>
 
           <Form.Item

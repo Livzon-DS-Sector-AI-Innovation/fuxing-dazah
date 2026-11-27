@@ -2,23 +2,31 @@
 
 // 离职办理抽屉：阶段步骤条 + 「当前该动手的环节」操作面板。
 // 已完成环节的时间收进步骤条，页面始终只有一处要操作；
-// 飞书审批未配置的环节走「站内登记办结」，与接了飞书的环节在同一位置切换提示与按钮。
+// 飞书审批未配置的环节走「站内登记办结」，与接了飞书的环节在同一位置切换提示和按钮。
 
 import { useEffect, useState } from 'react'
+import dayjs from 'dayjs'
 import {
   Alert, App as AntdApp, Button, Descriptions, Drawer, Input, Popconfirm, Space, Spin, Steps, Tag, Typography,
 } from 'antd'
-import type { OffboardingCaseDeliveryResponse, OffboardingCaseDetail } from '@/types/hr'
+import type { OffboardingCase, OffboardingCaseDetail } from '@/types/hr'
 import {
   cancelOffboardingCase,
   fetchOffboardingCase,
   manualOffboardingStageDone,
-  resendOffboardingDelivery,
   saveClearanceItems,
+  saveOffboardingHandover,
   submitOffboardingApproval,
+  submitOffboardingClearance,
 } from '@/actions/hr'
-import { useHasPermission } from '@/hooks/hr'
-import { OFFBOARDING_STATUS_TAG_COLORS } from '@/lib/hr'
+import { useHasPermission, useUnsavedConfirm } from '@/hooks/hr'
+import {
+  clearanceTimingText,
+  OFFBOARDING_STATUS_TAG_COLORS,
+  signWayLabel,
+  STEPPER_STAGES,
+  stepperIndex,
+} from '@/lib/hr'
 import CaseEditModal from './offboarding/CaseEditModal'
 import CasePanel, { daysUntil, fmtTime } from './offboarding/CasePanel'
 import CertIssuePanel from './offboarding/CertIssuePanel'
@@ -26,44 +34,35 @@ import ClearanceTable, { toPayload, toRows, type ClearanceRow } from './offboard
 import ClosePanel from './offboarding/ClosePanel'
 import DeliveryPanel from './offboarding/DeliveryPanel'
 import HealthCheckPanel, { healthCheckText } from './offboarding/HealthCheckPanel'
-import SignLinkModal from './offboarding/SignLinkModal'
+import SignatureModal from './offboarding/SignatureModal'
 
 const { Text } = Typography
 
-const STAGES: { key: OffboardingCaseDetail['status']; title: string }[] = [
-  { key: 'draft', title: '申请登记' },
-  { key: 'approving', title: '离职审批' },
-  { key: 'clearing', title: '清退会签' },
-  { key: 'cert_issuing', title: '证明开具' },
-  { key: 'delivering', title: '送达签收' },
-  { key: 'signed', title: '已签字' },
-  { key: 'closed', title: '办结' },
-]
-
-/** 签字确认时间：电子版（H5 手写签名）与纸质版（当面签收登记）取其一 */
+/** 签收时间：纸质登记与当面手写签名取其一 */
 function signedAt(d: OffboardingCaseDetail): string | null | undefined {
   return d.paper_signed_at || d.sign_state?.cert_signed_at
 }
 
-/** 步骤条下方的小字：已完成环节显示办结时间，「已签字」显示签署人。
+/** 步骤条下方的小字：已完成环节显示办结时间，「员工签收」显示签收人。
  *  七步并排每步很窄，时间只显示「月-日 时:分」，完整时间在鼠标悬停的 title 里。 */
 function stepNote(d: OffboardingCaseDetail, key: OffboardingCaseDetail['status']): string | undefined {
-  // 去掉年份：步骤条里放不下完整时间
-  const short = (value: string | null | undefined) => (value ? value.slice(5, 16).replace("T", " ") : undefined)
+  // 去掉年份：步骤条里放不下完整时间（按本地时区格式化，直接截 UTC 串会差 8 小时）
+  const short = (value: string | null | undefined) => (value ? dayjs(value).format('MM-DD HH:mm') : undefined)
   switch (key) {
-    case "draft":
-      return short(d.created_at) ? `发起 ${short(d.created_at)}` : undefined
-    case "approving":
+    case 'draft':
+      // 与其余各步一致只放时间（「发起 11-27 13:33」比别的步骤长，会被截成「发起 11-27 …」）
+      return short(d.created_at)
+    case 'approving':
       return short(d.resignation_finished_at)
-    case "clearing":
+    case 'clearing':
       return short(d.clearance_finished_at)
-    case "cert_issuing":
+    case 'cert_issuing':
       return short(d.cert_issued_at)
-    case "delivering":
-      return short(signedAt(d))
-    case "signed":
+    case 'delivering':
+      return short(d.mail_sent_at || d.sms_sent_at)
+    case 'signed':
       return d.sign_state?.cert_sign_name || d.paper_signed_by || undefined
-    case "closed":
+    case 'closed':
       return short(d.closed_at)
     default:
       return undefined
@@ -91,14 +90,22 @@ export default function OffboardingCaseDrawer({
   const [rows, setRows] = useState<ClearanceRow[]>([])
   const [rowsDirty, setRowsDirty] = useState(false)
   const [note, setNote] = useState('')
+  const [handoverTo, setHandoverTo] = useState('')
+  const [deptClerk, setDeptClerk] = useState('')
   const [editOpen, setEditOpen] = useState(false)
-  // 签署链接跟着单走：换一单后旧链接自然不再显示，不需要额外清理
-  const [link, setLink] = useState<{ caseId: string; url: string } | null>(null)
-  const [linkOpen, setLinkOpen] = useState(false)
-  const [linkBusy, setLinkBusy] = useState(false)
+  // 员工到人事办公室时在这台电脑上手写签名（签收方式之一）
+  const [signatureOpen, setSignatureOpen] = useState(false)
+  // 交付阶段没办成的事（开证时邮件失败等）：留在交付面板顶部提醒
+  const [deliveryNotes, setDeliveryNotes] = useState<string[]>([])
 
-  // 打开 / 切换单据时加载：setState 全部在 await 之后，不在 effect 里同步触发级联渲染。
-  // message 刻意不进依赖：App.useApp() 每次渲染返回新对象，进依赖会反复加载
+  // 清退明细改了没保存就关抽屉：先确认（仓库通用 hook，刷新 / 关标签页也会拦）
+  const guardClose = useUnsavedConfirm(rowsDirty, onClose, {
+    title: '清退明细还没保存',
+    content: '关掉后这次修改会丢失。要先保存吗？',
+  })
+
+  /** 打开 / 切换单据时加载。setState 全部在 await 之后，不在 effect 里同步触发级联渲染。
+   *  message 刻意不进依赖：App.useApp() 每次渲染返回新对象，进依赖会反复加载 */
   useEffect(() => {
     if (!open || !caseId) return
     let cancelled = false
@@ -110,6 +117,8 @@ export default function OffboardingCaseDrawer({
         setRows(toRows(r.data.clearance_items))
         setRowsDirty(false)
         setNote('')
+        setHandoverTo(r.data.handover_to || '')
+        setDeptClerk(r.data.dept_clerk || '')
       } catch (e) {
         if (!cancelled) {
           message.error(e instanceof Error ? e.message : '加载办理详情失败')
@@ -124,11 +133,9 @@ export default function OffboardingCaseDrawer({
   // 只展示当前请求的那一单：抽屉关掉或切到另一单时，旧详情不顶替
   const d = detail && detail.id === caseId ? detail : null
   const status = d?.status
-  const stageIndex = status ? STAGES.findIndex((s) => s.key === status) : -1
+  const stepper = status ? stepperIndex(status) : { current: 0, status: 'process' as const }
   const active = !!d && status !== 'closed' && status !== 'canceled'
   const editable = canManage && !!d && (status === 'draft' || (status === 'approving' && !d.resignation_instance_code))
-  const signUrl = link && d && link.caseId === d.id ? link.url : null
-  const electronic = d?.cert_template !== 'paper'
 
   /** 执行一个流转动作 → 刷详情 + 通知外层刷新；失败弹错不中断 */
   const act = async (fn: () => Promise<unknown>, successText: string) => {
@@ -158,7 +165,7 @@ export default function OffboardingCaseDrawer({
     onChanged()
   }
 
-  /** 提交审批：后端 message 里带「走的是飞书还是站内」和提前天数提示，原样转达 */
+  /** 提交部门审批：后端 message 里带「走的是飞书还是站内」和提前天数提示，原样转达 */
   const submit = async () => {
     if (!d) return
     setActing(true)
@@ -166,10 +173,10 @@ export default function OffboardingCaseDrawer({
       const res = await submitOffboardingApproval(d.id)
       const [head, ...rest] = (res.message || '').split('；')
       if (rest.length) message.warning(`${head}；${rest.join('；')}`, 8)
-      else message.success(head || '已发起')
+      else message.success(head || '已提交')
       await reload()
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '发起离职审批失败')
+      message.error(e instanceof Error ? e.message : '提交部门审批失败')
     } finally {
       setActing(false)
     }
@@ -183,24 +190,9 @@ export default function OffboardingCaseDrawer({
     setRowsDirty(false)
   }
 
-  /** 重新签发签署链接（旧链接作废）；弹窗里的「重新生成」和首次生成都走这里 */
-  const regenerateLink = async () => {
+  const saveHandover = async () => {
     if (!d) return
-    setLinkBusy(true)
-    try {
-      const res = await resendOffboardingDelivery(d.id, {})
-      if (res.data?.sign_url) {
-        setLink({ caseId: d.id, url: res.data.sign_url })
-        message.success('已生成新的签署链接，旧链接已作废')
-      } else {
-        message.warning(res.message || '未能生成签署链接，请检查系统配置「离职管理」里的签字页地址')
-      }
-      await reload()
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '生成签署链接失败')
-    } finally {
-      setLinkBusy(false)
-    }
+    await saveOffboardingHandover(d.id, { handover_to: handoverTo.trim(), dept_clerk: deptClerk.trim() })
   }
 
   const leadNotice = (() => {
@@ -214,7 +206,7 @@ export default function OffboardingCaseDrawer({
         type="warning"
         showIcon
         title={`${probation ? '试用期员工' : '转正员工'}按制度应提前 ${leadDays} 天发起，当前距离职日${until.text}`}
-        description="仍可继续发起，请确认已获批准（协商离职等情形）。"
+        description="仍可继续提交，请确认已获批准（协商离职等情形）。"
       />
     )
   })()
@@ -227,17 +219,17 @@ export default function OffboardingCaseDrawer({
           <CasePanel
             step={1}
             tone={d.health_check_required && !d.health_check_done ? 'warning' : 'default'}
-            title="发起离职审批"
+            title="提交部门审批"
             hint={
               d.resignation_feishu
-                ? '发起后自动创建飞书审批，由部门负责人在飞书审批；办结后系统自动推进到清退会签。'
-                : '未接飞书审批：部门负责人线下审批通过后，在这里登记办结即可推进。'
+                ? '提交后自动创建飞书审批，由部门负责人在飞书审批；通过后系统自动进入清退会签。'
+                : '未接飞书审批：请把离职申请交给部门负责人审批；负责人同意后，在这里登记办结即可进入清退会签。'
             }
-            extra={<Tag>{d.approval_track === 'director' ? '总监级流程（M5+）' : '一般员工流程'}</Tag>}
+            extra={<Tag>{d.approval_track === 'director' ? '总监级流程（M5 及以上）' : '一般员工流程'}</Tag>}
           >
             {d.health_check_required && !d.health_check_done && (
               <>
-                <Alert type="warning" showIcon title="重点岗位：须先完成离岗体检登记，才能发起审批" />
+                <Alert type="warning" showIcon title="重点岗位：须先完成离岗体检登记，才能提交审批" />
                 {canManage && <HealthCheckPanel detail={d} onChanged={reload} />}
               </>
             )}
@@ -249,7 +241,7 @@ export default function OffboardingCaseDrawer({
                 disabled={d.health_check_required && !d.health_check_done}
                 onClick={() => void submit()}
               >
-                发起离职审批
+                提交部门审批
               </Button>
             )}
           </CasePanel>
@@ -259,11 +251,11 @@ export default function OffboardingCaseDrawer({
         return (
           <CasePanel
             step={2}
-            title="离职审批"
+            title="部门审批"
             hint={
               d.resignation_instance_code
-                ? '部门负责人在飞书审批；办结后约 15 分钟内自动推进到清退会签。'
-                : '未接飞书审批：部门负责人审批通过后，在这里登记办结。'
+                ? '部门负责人在飞书审批；通过后约 15 分钟内自动进入清退会签。'
+                : '未接飞书审批：部门负责人同意后，在这里登记办结。'
             }
             extra={<Tag color="processing">审批中</Tag>}
           >
@@ -290,24 +282,24 @@ export default function OffboardingCaseDrawer({
                   />
                 )}
                 <Popconfirm
-                  title="登记离职审批办结？"
+                  title="登记部门审批已通过？"
                   description={
                     d.resignation_instance_code
                       ? '登记后不再等待这条飞书审批，请自行在飞书里撤销它。'
-                      : '推进到清退会签，并带入四部门默认清退清单。'
+                      : '进入清退会签，并带入四部门默认清退清单。'
                   }
-                  okText="登记办结"
+                  okText="审批已通过"
                   cancelText="取消"
                   disabled={acting}
                   onConfirm={() =>
                     void act(
                       () => manualOffboardingStageDone(d.id, { stage: 'approving', note: note.trim() || undefined }),
-                      '离职审批已办结，进入清退会签',
+                      '部门审批已办结，进入清退会签',
                     )
                   }
                 >
                   <Button type="primary" loading={acting}>
-                    {d.resignation_instance_code ? '审批已通过，站内登记办结' : '登记审批办结'}
+                    {d.resignation_instance_code ? '审批已通过，站内登记办结' : '部门已同意，登记办结'}
                   </Button>
                 </Popconfirm>
               </>
@@ -317,10 +309,48 @@ export default function OffboardingCaseDrawer({
 
       case 'clearing': {
         const pending = rows.filter((row) => row.status === 'pending').length
+        const timing = clearanceTimingText(d.clearance_due_date)
+        const handoverDirty =
+          handoverTo.trim() !== (d.handover_to || '') || deptClerk.trim() !== (d.dept_clerk || '')
+        const clearanceActions = canManage ? (
+          <Space wrap>
+            <Button
+              loading={acting}
+              disabled={!rowsDirty}
+              onClick={() => void act(saveRows, '清退明细已保存')}
+            >
+              保存明细
+            </Button>
+            <Popconfirm
+              title="登记会签办结？"
+              description={
+                pending
+                  ? `还有 ${pending} 项是「待确认」，确认各部门已清退完毕？`
+                  : '进入证明开具。'
+              }
+              okText="会签已办结"
+              cancelText="取消"
+              disabled={acting}
+              onConfirm={() =>
+                void act(async () => {
+                  if (rowsDirty) await saveRows()
+                  await manualOffboardingStageDone(d.id, { stage: 'clearing' })
+                }, '会签已办结，进入证明开具')
+              }
+            >
+              <Button type="primary" loading={acting}>
+                登记会签办结
+              </Button>
+            </Popconfirm>
+            {pending > 0 && (
+              <span className="text-[12px] text-[var(--color-steel)]">还有 {pending} 项待确认，可以都确认完再办结</span>
+            )}
+          </Space>
+        ) : null
         return (
           <CasePanel
             step={3}
-            title="清退会签"
+            title="清退交接会签"
             hint={
               d.clearance_instance_code
                 ? '飞书清退会签进行中，办结后自动回读各部门填写的清退明细；也可以先在下面登记。'
@@ -328,6 +358,74 @@ export default function OffboardingCaseDrawer({
             }
             extra={<Tag color="processing">会签中</Tag>}
           >
+            {d.clearance_pending && (
+              <Alert
+                type="info"
+                showIcon
+                title={`清退交接审批还没发起：${timing || '还没到建议发起日'}`}
+                description="按公司规定在离职日前 2 天发起。到期后系统自动发起飞书审批；需要提前办就点下面的按钮。"
+                action={canManage ? (
+                  <Popconfirm
+                    title="提前发起清退交接审批？"
+                    description="还没到建议发起日，确定现在就在飞书发起吗？"
+                    okText="现在发起"
+                    cancelText="再等等"
+                    disabled={acting}
+                    onConfirm={() => void act(() => submitOffboardingClearance(d.id), '清退交接审批已发起')}
+                  >
+                    <Button size="small" loading={acting}>提前发起</Button>
+                  </Popconfirm>
+                ) : undefined}
+              />
+            )}
+            {!d.clearance_instance_code && !d.clearance_pending && d.clearance_feishu && timing && (
+              <Alert
+                type="info"
+                showIcon
+                title={`${timing}。`}
+                action={canManage ? (
+                  <Button size="small" type="primary" loading={acting} onClick={() => void act(() => submitOffboardingClearance(d.id), '清退交接审批已发起')}>
+                    发起清退交接审批
+                  </Button>
+                ) : undefined}
+              />
+            )}
+
+            <div className="space-y-2">
+              <div className="text-[13px] font-medium text-[var(--color-ink)]">交接转办</div>
+              <Space wrap>
+                <Input
+                  value={handoverTo}
+                  onChange={(e) => setHandoverTo(e.target.value)}
+                  placeholder="交接人（工作交接承接人）"
+                  maxLength={64}
+                  style={{ width: 200 }}
+                  disabled={!canManage}
+                  aria-label="交接人"
+                />
+                <Input
+                  value={deptClerk}
+                  onChange={(e) => setDeptClerk(e.target.value)}
+                  placeholder="部门办事员"
+                  maxLength={64}
+                  style={{ width: 180 }}
+                  disabled={!canManage}
+                  aria-label="部门办事员"
+                />
+                {canManage && (
+                  <Button
+                    disabled={!handoverDirty}
+                    loading={acting}
+                    onClick={() => void act(saveHandover, '交接信息已保存')}
+                  >
+                    保存
+                  </Button>
+                )}
+              </Space>
+            </div>
+
+            {/* 默认清单有 20 项，表格很长：操作按钮在表格上下各放一份，不用滚到底才能办结 */}
+            {clearanceActions}
             <ClearanceTable
               rows={rows}
               disabled={!canManage}
@@ -336,38 +434,7 @@ export default function OffboardingCaseDrawer({
                 setRowsDirty(true)
               }}
             />
-            {canManage && (
-              <Space wrap>
-                <Button
-                  loading={acting}
-                  disabled={!rowsDirty}
-                  onClick={() => void act(saveRows, '清退明细已保存')}
-                >
-                  保存明细
-                </Button>
-                <Popconfirm
-                  title="登记会签办结？"
-                  description={
-                    pending
-                      ? `还有 ${pending} 项是「待确认」，确认各部门已清退完毕？`
-                      : '推进到证明开具。'
-                  }
-                  okText="会签已办结"
-                  cancelText="取消"
-                  disabled={acting}
-                  onConfirm={() =>
-                    void act(async () => {
-                      if (rowsDirty) await saveRows()
-                      await manualOffboardingStageDone(d.id, { stage: 'clearing' })
-                    }, '会签已办结，进入证明开具')
-                  }
-                >
-                  <Button type="primary" loading={acting}>
-                    登记会签办结
-                  </Button>
-                </Popconfirm>
-              </Space>
-            )}
+            {clearanceActions}
           </CasePanel>
         )
       }
@@ -377,12 +444,9 @@ export default function OffboardingCaseDrawer({
           <CertIssuePanel
             detail={d}
             onChanged={reload}
-            onIssued={(data: OffboardingCaseDeliveryResponse) => {
-              // 开具时拿到了签署链接：立刻弹给 HR，趁热转发给员工
-              if (data.sign_url) {
-                setLink({ caseId: d.id, url: data.sign_url })
-                setLinkOpen(true)
-              }
+            onIssued={(_data: OffboardingCase, notes: string[]) => {
+              // 没办成的事（如邮件发送失败）带到下一步的交付面板里逐条提醒
+              setDeliveryNotes(notes)
             }}
           />
         )
@@ -391,9 +455,9 @@ export default function OffboardingCaseDrawer({
         return (
           <DeliveryPanel
             detail={d}
-            signUrl={signUrl}
-            onSignUrlChange={(url) => setLink(url ? { caseId: d.id, url } : null)}
-            onOpenLink={() => setLinkOpen(true)}
+            notes={deliveryNotes}
+            onNotesChange={setDeliveryNotes}
+            onOpenSignature={() => setSignatureOpen(true)}
             onChanged={reload}
           />
         )
@@ -402,12 +466,12 @@ export default function OffboardingCaseDrawer({
         return canManage ? (
           <ClosePanel detail={d} onChanged={reload} />
         ) : (
-          <CasePanel step={6} title="办结收尾" hint="员工已签字确认，等待 HR 确认账号注销后办结。" />
+          <CasePanel step={7} stepLabel="最后一步" title="办结收尾" hint="员工已签字确认，等待 HR 确认账号注销后办结。" />
         )
 
       case 'closed':
         return (
-          <CasePanel step={7} tone="muted" title="已办结" hint="档案与各台账已同步，无需再操作。" extra={<Tag color="success">已办结</Tag>}>
+          <CasePanel step={7} stepLabel="回顾" tone="muted" title="已办结" hint="档案与各台账已同步，无需再操作。" extra={<Tag color="success">已办结</Tag>}>
             <Descriptions
               size="small"
               bordered
@@ -415,10 +479,13 @@ export default function OffboardingCaseDrawer({
               items={[
                 { key: 'closed', label: '办结时间', children: fmtTime(d.closed_at) },
                 { key: 'account', label: '飞书账号', children: d.account_deactivated ? '已注销' : '未确认注销' },
-                { key: 'sign', label: '签收方式', children: d.delivery_channel === 'paper' ? '纸质当面签收' : '线上手写签名' },
+                { key: 'sign', label: '签收方式', children: signWayLabel(d.delivery_channel) },
                 { key: 'signer', label: '签收人 / 时间', children: `${d.sign_state?.cert_sign_name || d.paper_signed_by || '—'} · ${fmtTime(signedAt(d))}` },
                 { key: 'cert', label: '证明开具', children: `${fmtTime(d.cert_issued_at)}${d.cert_issued_by ? ` · ${d.cert_issued_by}` : ''}` },
                 { key: 'issuer', label: '发起', children: `${d.initiator_name || '—'} · ${fmtTime(d.created_at)}` },
+                ...(d.handover_to || d.dept_clerk
+                  ? [{ key: 'handover', label: '交接转办', children: [d.handover_to, d.dept_clerk].filter(Boolean).join(' / ') }]
+                  : []),
               ]}
             />
           </CasePanel>
@@ -430,7 +497,7 @@ export default function OffboardingCaseDrawer({
             type="info"
             showIcon
             title="该离职办理已取消"
-            description={`${d.remark ? `备注：${d.remark}。` : ''}如仍需办理，请在「离职办理」里重新发起。`}
+            description={`${d.remark ? `备注：${d.remark}。` : ''}如仍需办理，请重新发起。`}
           />
         )
 
@@ -442,7 +509,7 @@ export default function OffboardingCaseDrawer({
   return (
     <Drawer
       open={open}
-      onClose={onClose}
+      onClose={guardClose}
       size={960}
       title={d ? `离职办理 · ${d.name}` : '离职办理'}
       extra={
@@ -472,14 +539,14 @@ export default function OffboardingCaseDrawer({
           <div className="space-y-5">
             <Steps
               size="small"
-              current={status === 'canceled' ? 0 : Math.max(stageIndex, 0)}
-              status={status === 'canceled' ? 'error' : 'process'}
-              items={STAGES.map((stage) => {
+              current={stepper.current}
+              status={stepper.status}
+              items={STEPPER_STAGES.map((stage) => {
                 // 说明文字超宽时省略，别把步骤标题挤得折行；完整内容放 title
                 const note = stepNote(d, stage.key)
                 return {
                   title: stage.title,
-                  description: note ? (
+                  content: note ? (
                     <span className="block max-w-[88px] truncate" title={note}>
                       {note}
                     </span>
@@ -495,7 +562,16 @@ export default function OffboardingCaseDrawer({
               items={[
                 { key: 'emp', label: '员工', children: `${d.name}（${d.employee_number}）` },
                 { key: 'dept', label: '部门 / 岗位', children: `${d.department} / ${d.position || '-'}` },
-                { key: 'date', label: '离职日期', children: `${d.offboarding_date}（${daysUntil(d.offboarding_date).text}）` },
+                {
+                  key: 'date',
+                  label: '离职日期',
+                  children: (
+                    <Space size={4}>
+                      <span>{d.offboarding_date}（{daysUntil(d.offboarding_date).text}）</span>
+                      {d.ledger_synced && <Tag>飞书离职表</Tag>}
+                    </Space>
+                  ),
+                },
                 { key: 'type', label: '离职类型', children: d.offboarding_type },
                 { key: 'reason', label: '离职原因', children: d.reason || '-' },
                 { key: 'category', label: '用工类型', children: d.employee_category || '-' },
@@ -516,14 +592,12 @@ export default function OffboardingCaseDrawer({
       {d && editable && (
         <CaseEditModal open={editOpen} detail={d} onClose={() => setEditOpen(false)} onSaved={reload} />
       )}
-      {d && status === 'delivering' && electronic && (
-        <SignLinkModal
-          open={linkOpen}
-          url={signUrl}
-          employeeName={d.name}
-          loading={linkBusy}
-          onClose={() => setLinkOpen(false)}
-          onRegenerate={regenerateLink}
+      {d && status === 'delivering' && canManage && (
+        <SignatureModal
+          open={signatureOpen}
+          detail={d}
+          onClose={() => setSignatureOpen(false)}
+          onChanged={reload}
         />
       )}
     </Drawer>

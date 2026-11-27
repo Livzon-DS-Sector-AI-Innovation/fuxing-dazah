@@ -28,6 +28,7 @@ from app.modules.hr.labor_contract.routes import (
     _contract_dict,
     _ensure_in_scope,
     _list_scope,
+    _split_csv,
 )
 from app.modules.hr.xlsx_utils import write_sheet, xlsx_response
 from app.platform.audit.service import record_audit_log
@@ -63,7 +64,7 @@ async def _version_list(db: AsyncSession, contract_id: UUID) -> list[dict]:
 # ─── 档案库台账 / 概览 / 补扫清单 ───
 
 
-@router.get("/labor-contracts-archive", summary="电子档案库台账（归档状态 / 在职离职 / 部门筛选）")
+@router.get("/labor-contracts-archive", summary="电子档案库台账（归档状态 / 在职离职 / 部门 / 学历筛选）")
 async def list_archive(
     archive_status: str | None = Query(None, pattern="^(unarchived|archived)$"),
     population: str = Query(
@@ -72,6 +73,9 @@ async def list_archive(
     ),
     keyword: str | None = Query(None, max_length=64, description="姓名/工号模糊"),
     department: str | None = Query(None, max_length=64),
+    education: str | None = Query(
+        None, max_length=128, description="学历过滤（逗号分隔多值；取自员工档案）",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -86,20 +90,43 @@ async def list_archive(
         employee_number=employee_number,
         population=population if ctx.is_unrestricted else repo.POPULATION_IN_SERVICE,
         archive_status=archive_status,
+        educations=_split_csv(education),
         order_by="department",
         offset=(page - 1) * page_size,
         limit=page_size,
     )
     departed = await archive_service.resolve_departed(db, rows)
+    education_map = await repo.map_education(db, [c.employee_number for c in rows])
     data = [
         {
             **_contract_dict(c),
+            "education": education_map.get(c.employee_number),
             "is_departed": c.employee_number in departed,
             **_archive_caps(ctx, c),
         }
         for c in rows
     ]
     return paginated_response(data=data, total=total, page=page, page_size=page_size)
+
+
+@router.get(
+    "/labor-contracts-archive/filter-options",
+    summary="档案库筛选项字典（部门、学历；非全量范围只返回授权部门内的取值）",
+)
+async def archive_filter_options(
+    department: str | None = Query(None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:contract:read")),
+) -> Response:
+    employee_number, departments = _list_scope(ctx, department)
+    return success_response(data={
+        "departments": await repo.distinct_departments(
+            db, departments=departments, employee_number=employee_number,
+        ),
+        "education": archive_service.sort_education_options(
+            await repo.distinct_education(db, departments=departments, employee_number=employee_number)
+        ),
+    })
 
 
 @router.get("/labor-contracts-archive/stats", summary="档案库概览（在职/离职 × 未归档/已归档）")
@@ -136,18 +163,24 @@ async def archive_departments(
 )
 async def export_unarchived(
     department: str | None = Query(None, max_length=64, description="不传=全部部门"),
+    education: str | None = Query(
+        None, max_length=128, description="学历过滤（逗号分隔多值；取自员工档案）",
+    ),
     db: AsyncSession = Depends(get_db),
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:read")),
 ) -> Response:
     _ensure_hr(ctx, "数据范围限制：补扫清单导出仅限 HR（全量数据范围）")
-    contracts = await repo.list_unarchived(db, department=department)
+    contracts = await repo.list_unarchived(
+        db, department=department, educations=_split_csv(education),
+    )
     departed = await archive_service.resolve_departed(db, contracts)
+    education_map = await repo.map_education(db, [c.employee_number for c in contracts])
     wb = Workbook()
     ws = wb.active
     ws.title = "合同补扫清单"
     write_sheet(
         ws, archive_service.UNARCHIVED_EXPORT_HEADERS,
-        archive_service.unarchived_export_rows(contracts, departed),
+        archive_service.unarchived_export_rows(contracts, departed, education_map),
     )
     return xlsx_response(wb, f"合同补扫清单_{date.today().isoformat()}.xlsx")
 
@@ -202,12 +235,15 @@ async def list_archive_versions(
 
 @router.post(
     "/labor-contracts/{contract_id}/archive",
-    summary="上传合同扫描件（逐页合并一份；已有扫描件则升为新版本，旧版保留）",
+    summary="上传合同扫描件（逐页合并一份；已有扫描件则升为新版本并须填换传原因，旧版保留）",
 )
 async def upload_archive(
     contract_id: UUID,
     file: UploadFile = File(..., description="合同扫描件（图片/PDF，≤20MB）"),
     remark: str | None = Form(None, max_length=512),
+    reason: str | None = Form(
+        None, max_length=255, description="换传原因；已有扫描件时必填（首次上传可空）",
+    ),
     db: AsyncSession = Depends(get_db),
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> Response:
@@ -219,12 +255,15 @@ async def upload_archive(
         raise AppException(message="扫描件不能为空", status_code=422)
     version = await archive_service.create_archive_version(
         db, contract=contract, file_bytes=data, filename=file.filename,
-        remark=remark, user=ctx.user,
+        remark=remark, user=ctx.user, reason=reason,
     )
     await record_audit_log(
         db, action="hr.contract.archive_upload", user=ctx.user,
         resource_type=RESOURCE_TYPE, resource_id=contract.id,
-        new_value={"version_no": version.version_no, "filename": version.file_name},
+        new_value={
+            "version_no": version.version_no, "filename": version.file_name,
+            "reason": version.reason,
+        },
     )
     # UPDATE 后重查再序列化（updated_at 等 server 端值不回填内存对象）
     contract = await service.get_or_404(db, contract.id)

@@ -22,7 +22,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -35,7 +35,12 @@ from app.modules.hr.offboarding import clearance, notify
 from app.modules.hr.offboarding import repository as repo
 from app.modules.hr.offboarding import settings as offboarding_settings
 from app.modules.hr.offboarding.models import OffboardingCase
-from app.modules.hr.offboarding.service.common import notify_context
+from app.modules.hr.offboarding.service.common import (
+    clearance_stage_note,
+    notify_context,
+    seed_clearance_items,
+    should_hold_clearance,
+)
 from app.modules.hr.title_review.notify import _lookup_open_id
 from app.platform.integrations.feishu.approval import (
     ApprovalAPIError,
@@ -144,6 +149,26 @@ async def initiate_clearance(
     return await _initiate(
         db, case, stage=STAGE_CLEARANCE, operator_open_id=operator_open_id,
     )
+
+
+async def initiate_deferred_clearance(db: AsyncSession, *, today: date) -> int:
+    """轮询：已到建议发起日（离职日前 2 天）仍挂起的清退交接 → 自动发起飞书审批。
+
+    返回发起成功的单数。本函数不 commit（由调用方统一提交）；发起失败的单保持挂起，
+    下一轮再试，HR 也可以在办理页手动发起。未接飞书的单不会被挂起，不会走到这里。
+    """
+    launched = 0
+    for case in await repo.list_deferred_clearance(db, today=today):
+        try:
+            result = await _initiate(db, case, stage=STAGE_CLEARANCE, operator_open_id=None)
+        except Exception as exc:  # 单条失败不拖累其余，保持挂起下一轮重试
+            logger.warning("挂起的清退交接自动发起失败: case=%s → %s", case.id, exc)
+            continue
+        if result.ok:
+            case.clearance_pending = False
+            launched += 1
+            logger.info("清退交接到期自动发起: %s(%s)", case.name, case.case_no)
+    return launched
 
 
 async def _initiate(
@@ -303,15 +328,20 @@ async def _sync_resignation(db: AsyncSession, case: OffboardingCase) -> str | No
         case.resignation_finished_at = _now()
         case.status = OffboardingCase.STATUS_CLEARING
         await db.flush()
-        await clearance.seed_default_items(db, case)
-        # 离职审批办结后自动发起清退交接（下一环节仍优先飞书）
-        result = await _initiate(db, case, stage=STAGE_CLEARANCE, operator_open_id=None)
-        if result.ok:
-            note = "离职审批已通过，清退交接飞书审批已自动发起"
-        elif result.unconfigured:
-            note = "离职审批已通过；清退交接未接飞书审批，请在平台登记各部门清退情况"
+        await seed_clearance_items(db, case)
+        if await should_hold_clearance(db, case):
+            # 还没到离职日前 2 天：清退交接实例先不发起，到期由 initiate_deferred_clearance 自动发起
+            case.clearance_pending = True
+            result = None
         else:
+            # 离职审批办结后自动发起清退交接（下一环节仍优先飞书）
+            result = await _initiate(db, case, stage=STAGE_CLEARANCE, operator_open_id=None)
+        if result is not None and result.ok:
+            note = "离职审批已通过，清退交接飞书审批已自动发起"
+        elif result is not None and not result.unconfigured:
             note = f"离职审批已通过；清退交接飞书审批发起失败（{result.reason}），请在平台登记清退情况"
+        else:
+            note = clearance_stage_note(case, result) or "离职审批已通过"
         logger.info("离职审批通过: %s(%s) → 进入清退会签", case.name, case.case_no)
         await notify.notify_stage_advanced(db, case, await notify_context(db), note=note)
         return "resignation_approved"

@@ -15,10 +15,12 @@ import {
   exportUnarchivedContracts,
   fetchContractArchive,
   fetchContractArchiveDepartments,
+  fetchContractArchiveFilterOptions,
   fetchContractArchiveStats,
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr/download'
 import { formatDateTime } from '@/lib/hr/format'
+import { useHasPermission } from '@/hooks/hr'
 import { usePermission } from '@/hooks/usePermission'
 import type {
   ContractArchiveDepartment,
@@ -29,9 +31,21 @@ import type {
 type ArchiveFilter = 'unarchived' | 'archived' | 'all'
 type Population = 'in_service' | 'departed' | 'all'
 
-export default function ContractArchiveClient() {
+/** 「本科及以上」快捷选择：按档案里常见的学历取值 */
+const BACHELOR_PLUS = ['本科', '硕士', '博士', '研究生', '硕士研究生', '博士研究生', '双学位', 'MBA', 'EMBA']
+
+interface Props {
+  /** 外层通知刷新（台账里归档了合同后切回来） */
+  refreshKey?: number
+  /** 档案库里归档了合同之后通知外层（台账的「归档」列要刷新） */
+  onChanged?: () => void
+}
+
+export default function ContractArchiveClient({ refreshKey = 0, onChanged }: Props) {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
+  // 水合安全的权限判断：页面在 Suspense 边界内
+  const canApprove = useHasPermission('hr:contract:approve')
   const canManage = hasPermission('hr:contract:manage')
 
   const [rows, setRows] = useState<ContractArchiveRow[]>([])
@@ -42,6 +56,8 @@ export default function ContractArchiveClient() {
   const [population, setPopulation] = useState<Population>('in_service')
   const [keyword, setKeyword] = useState('')
   const [department, setDepartment] = useState<string | undefined>()
+  const [education, setEducation] = useState<string[]>([])
+  const [educationOptions, setEducationOptions] = useState<string[]>([])
   const [stats, setStats] = useState<ContractArchiveStats | null>(null)
   const [departments, setDepartments] = useState<ContractArchiveDepartment[]>([])
   const [exporting, setExporting] = useState(false)
@@ -51,6 +67,16 @@ export default function ContractArchiveClient() {
   const seqRef = useRef(0)
   const pageSize = 20
 
+  const paramsOf = (targetPage: number) => ({
+    archive_status: archiveFilter === 'all' ? undefined : archiveFilter,
+    population,
+    keyword: keyword || undefined,
+    department,
+    education: education.length ? education.join(',') : undefined,
+    page: targetPage,
+    page_size: pageSize,
+  })
+
   // 事件驱动的刷新（翻页 / 刷新按钮 / 归档后）：可以直接进 loading
   const load = useCallback(
     async (targetPage = page) => {
@@ -58,14 +84,7 @@ export default function ContractArchiveClient() {
       const seq = ++seqRef.current
       setLoading(true)
       try {
-        const r = await fetchContractArchive({
-          archive_status: archiveFilter === 'all' ? undefined : archiveFilter,
-          population,
-          keyword: keyword || undefined,
-          department,
-          page: targetPage,
-          page_size: pageSize,
-        })
+        const r = await fetchContractArchive(paramsOf(targetPage))
         if (seq !== seqRef.current) return // 过期响应丢弃
         setRows(r.data)
         setTotal(r.meta.total)
@@ -75,7 +94,9 @@ export default function ContractArchiveClient() {
         if (seq === seqRef.current) setLoading(false)
       }
     },
-    [archiveFilter, population, department, keyword, page, message],
+    // paramsOf 是每次渲染新建的函数，它用到的筛选值已经逐个列在依赖里
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [archiveFilter, population, department, keyword, education, page, message],
   )
 
   // 筛选变化重新拉取第一页：请求参数直接取本次渲染的筛选值（没有旧闭包问题）；
@@ -85,14 +106,7 @@ export default function ContractArchiveClient() {
     let cancelled = false
     ;(async () => {
       try {
-        const r = await fetchContractArchive({
-          archive_status: archiveFilter === 'all' ? undefined : archiveFilter,
-          population,
-          keyword: keyword || undefined,
-          department,
-          page: 1,
-          page_size: pageSize,
-        })
+        const r = await fetchContractArchive(paramsOf(1))
         if (cancelled || seq !== seqRef.current) return
         setRows(r.data)
         setTotal(r.meta.total)
@@ -103,20 +117,22 @@ export default function ContractArchiveClient() {
     return () => { cancelled = true }
     // message 刻意不进依赖：App.useApp() 的实例进 effect 依赖会引发重复触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [archiveFilter, population, department, keyword])
+  }, [archiveFilter, population, department, keyword, education])
 
-  // 概览与部门下拉：首次挂载加载，之后的刷新走事件驱动的 loadStats
+  // 概览与部门 / 学历下拉：首次挂载加载，之后的刷新走事件驱动的 loadStats
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const [statsRes, deptRes] = await Promise.allSettled([
+      const [statsRes, deptRes, optionsRes] = await Promise.allSettled([
         fetchContractArchiveStats(),
         fetchContractArchiveDepartments(),
+        fetchContractArchiveFilterOptions(),
       ])
       if (cancelled) return
       // 非全量数据范围读不到概览（403）：列表照常，HR 专属入口不显示
       setStats(statsRes.status === 'fulfilled' ? statsRes.value.data : null)
       setDepartments(deptRes.status === 'fulfilled' ? (deptRes.value.data || []) : [])
+      setEducationOptions(optionsRes.status === 'fulfilled' ? (optionsRes.value.data.education || []) : [])
     })()
     return () => { cancelled = true }
   }, [])
@@ -129,19 +145,30 @@ export default function ContractArchiveClient() {
     }
   }, [])
 
+  // 外层通知刷新（台账里归档了合同）：首次挂载的那一下（0）跳过
+  const firstRefreshKey = useRef(refreshKey)
+  useEffect(() => {
+    if (refreshKey === firstRefreshKey.current) return
+    firstRefreshKey.current = refreshKey
+    void load()
+    void loadStats()
+  }, [refreshKey, load, loadStats])
+
   // 概览仅 HR 可读，顺带作为「可归档」的判定来源
   const isHr = stats?.can_archive === true
 
   const refreshAll = () => {
     void load()
     void loadStats()
+    onChanged?.()
   }
 
   const handleExport = async () => {
     setExporting(true)
     try {
-      const r = await exportUnarchivedContracts(department)
+      const r = await exportUnarchivedContracts(department, education.length ? education.join(',') : undefined)
       downloadBase64File(r.base64, r.filename || '合同补扫清单.xlsx')
+      message.success('补扫清单已导出')
     } catch (e) {
       message.error(e instanceof Error ? e.message : '导出失败')
     } finally {
@@ -168,8 +195,9 @@ export default function ContractArchiveClient() {
       ),
     },
     { title: '部门', dataIndex: 'department', width: 124, ellipsis: { showTitle: true } },
-    { title: '岗位', dataIndex: 'position', width: 104, render: (v) => v || '-', ellipsis: { showTitle: true } },
-    { title: '签订次序', dataIndex: 'seq_label', width: 112, ellipsis: { showTitle: true } },
+    { title: '岗位', dataIndex: 'position', width: 96, render: (v) => v || '-', ellipsis: { showTitle: true } },
+    { title: '学历', dataIndex: 'education', width: 64, render: (v) => v || '-' },
+    { title: '签订次序', dataIndex: 'seq_label', width: 104, ellipsis: { showTitle: true } },
     { title: '合同期限', dataIndex: 'term_label', width: 88 },
     {
       title: '起始 ~ 到期',
@@ -207,7 +235,7 @@ export default function ContractArchiveClient() {
     <div className="space-y-4">
       <PageHeader
         title="电子档案库"
-        description="劳动合同扫描件归档视角：未归档筛选、补扫清单导出、存量电子档批量挂接（一人一事一档）"
+        description="劳动合同扫描件归档视角：未归档筛选、补扫清单导出、存量电子档批量挂接（一人一事一档）。落地顺序：先补本科及以上人员，再逐步补齐一般员工。"
       />
 
       <div className="flex flex-wrap gap-3 items-center">
@@ -235,7 +263,7 @@ export default function ContractArchiveClient() {
           showSearch
           optionFilterProp="label"
           placeholder="部门"
-          style={{ width: 220 }}
+          style={{ width: 210 }}
           value={department}
           onChange={(v) => { setDepartment(v); setPage(1) }}
           options={departments.map((d) => ({
@@ -243,17 +271,42 @@ export default function ContractArchiveClient() {
             label: `${d.department}（未归档 ${d.unarchived}）`,
           }))}
         />
+        <Select
+          mode="multiple"
+          allowClear
+          maxTagCount="responsive"
+          placeholder="学历"
+          style={{ minWidth: 150, maxWidth: 280 }}
+          value={education}
+          onChange={(v) => { setEducation(v); setPage(1) }}
+          options={educationOptions.map((e) => ({ value: e, label: e }))}
+          aria-label="学历"
+        />
+        <Button
+          size="small"
+          type="link"
+          className="!px-0"
+          onClick={() => {
+            // 「先本科及以上」：只选档案里实际出现过的取值
+            setEducation(BACHELOR_PLUS.filter((e) => educationOptions.includes(e)))
+            setPage(1)
+          }}
+        >
+          选本科及以上
+        </Button>
         <Input.Search
           allowClear
           placeholder="姓名 / 工号"
-          style={{ width: 200 }}
+          style={{ width: 180 }}
           onSearch={(v) => {
             // 只更新筛选状态：拉取由上面的 effect 负责
             setKeyword(v.trim())
             setPage(1)
           }}
         />
-        <Button icon={<ReloadOutlined />} onClick={() => void load()} />
+        <Tooltip title="刷新">
+          <Button aria-label="刷新" icon={<ReloadOutlined />} onClick={() => { void load(); void loadStats() }} />
+        </Tooltip>
         <Space className="ml-auto">
           {isHr && (
             <Button icon={<DownloadOutlined />} loading={exporting} onClick={() => void handleExport()}>
@@ -306,6 +359,7 @@ export default function ContractArchiveClient() {
       <ContractDetailDrawer
         contractId={detailId}
         canManage={canManage}
+        canApprove={canApprove}
         onClose={() => setDetailId(null)}
         onChanged={refreshAll}
       />

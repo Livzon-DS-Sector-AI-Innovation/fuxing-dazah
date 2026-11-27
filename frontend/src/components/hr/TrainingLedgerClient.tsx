@@ -690,7 +690,7 @@ export default function TrainingLedgerClient({
       </div>
 
       <div id="print-area" className="print-area">
-        <Card className="training-ledger-preview" bordered={false}>
+        <Card className="training-ledger-preview" variant="borderless">
           <table className="w-full border-collapse text-sm" style={{ tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '10%' }} /><col style={{ width: '30%' }} /><col style={{ width: '10%' }} />

@@ -1,24 +1,23 @@
-"""劳动合同业务服务：期限规则、状态机流转、审批结论应用、终止衔接。
+"""劳动合同业务服务：期限规则、状态机流转、审批结论应用、通知与留痕、进度步骤、终止衔接。
 
 职责边界：api.py 只收参；repository 只读写；本层负责业务规则与跨表校验。
 SQLAlchemy async 铁律：INSERT flush 返回即可；UPDATE 后 flush 不 re-fetch
 （上层按需重查），避免 MissingGreenlet。
 """
 
-import hashlib
 import logging
-import secrets
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.hr.labor_contract import notify
 from app.modules.hr.labor_contract import repository as repo
-from app.modules.hr.labor_contract import settings as contract_settings
-from app.modules.hr.labor_contract.models import LaborContract
+from app.modules.hr.labor_contract.models import ContractNoticeLog, LaborContract
 
 logger = logging.getLogger(__name__)
 
@@ -107,22 +106,32 @@ async def contract_history(db: AsyncSession, contract: LaborContract) -> list[La
     return await repo.list_by_employee(db, contract.employee_number)
 
 
-async def sign_page_url(db: AsyncSession, token: str) -> str:
-    """签字 H5 页地址（基地址配置在 hr_contract.sign_page_base_url）。
+# ─── 通知发送（员工两张卡；留痕见 notify.log_notice）───
 
-    页面为静态段 + ?token= 形式：前端 /api/* rewrite（afterFiles）先于动态
-    路由段生效，token 走路径会被代理到后端 404，必须走查询参数。
+
+async def _notify_employee(
+    db: AsyncSession, contract: LaborContract, kind: str, *,
+    user_id: UUID | None = None, user_name: str | None = None,
+) -> notify.NoticeResult:
+    """给合同对应员工发一张卡并留痕；没有员工档案时留痕为跳过（不中断主流程）。
+
+    系统只在公司内网可达，员工在手机上点不开本系统的链接，所以卡片只带文字不带跳转按钮。
     """
-    kv = await contract_settings.load_contract_settings(db)
-    base = kv.get(contract_settings.KEY_SIGN_BASE_URL, "").strip().rstrip("/")
-    if not base:
-        return ""
-    return f"{base}?token={token}"
-
-
-async def contact_of(db: AsyncSession) -> str:
-    kv = await contract_settings.load_contract_settings(db)
-    return contract_settings.contact_info(kv)
+    employee = await repo.get_employee(db, contract.employee_number)
+    if employee is None:
+        return await notify.log_notice(
+            db, contract=contract, kind=kind, status=ContractNoticeLog.STATUS_SKIPPED,
+            error_message="员工档案不存在", created_by=user_id, created_by_name=user_name,
+        )
+    if kind == ContractNoticeLog.KIND_RENEW:
+        return await notify.send_renewal_notice(
+            db, contract, employee, created_by=user_id, created_by_name=user_name,
+        )
+    if kind == ContractNoticeLog.KIND_COLLECT:
+        return await notify.send_stamp_notice(
+            db, contract, employee, created_by=user_id, created_by_name=user_name,
+        )
+    raise ValueError(f"不支持的员工通知类型: {kind}")
 
 
 # ─── 录入 / 编辑 ───
@@ -167,6 +176,7 @@ async def create_contract(
         end_date=compute_end_date(start_date, term_type, years),
         sign_date=sign_date or start_date,
         status=LaborContract.STATUS_ACTIVE,
+        origin=LaborContract.ORIGIN_MANUAL,
         remark=remark,
         created_by=user_id,
     )
@@ -215,11 +225,13 @@ async def renew_contract(
     db: AsyncSession, contract: LaborContract,
     *, start_date: date, sign_date: date | None, user_id: UUID | None = None,
 ) -> LaborContract:
-    """办理续签：按签订次数自动带出新合同期限，生成新行并取代旧行。"""
+    """办理续签：须已登记部门「同意续签」；按签订次数自动带出新合同期限，生成新行并取代旧行。"""
     if contract.status not in RENEWABLE_STATUSES:
         raise AppException(message="该合同当前状态不可办理续签")
     if contract.term_type == LaborContract.TERM_OPEN:
         raise AppException(message="无固定期限合同不再续签")
+    if contract.dept_decision != LaborContract.DECISION_AGREE:
+        raise AppException(message="尚未登记部门续签意见，请先由部门负责人登记『同意续签』后再办理续签")
     if contract.end_date and start_date <= contract.end_date:
         raise AppException(message="新合同起始日应晚于原合同到期日（期限自新合同起始日起算）")
 
@@ -227,12 +239,15 @@ async def renew_contract(
     if await repo.get_active_with_seq(db, contract.employee_number, next_seq):
         raise DuplicateException("有效合同", f"工号 {contract.employee_number} 第 {next_seq} 份")
 
+    # 新合同的姓名 / 部门 / 岗位取员工档案现值（员工异动后下一轮到期提醒才会发给现部门负责人）；
+    # 取不到档案时回退沿用旧行快照
+    employee = await repo.get_employee(db, contract.employee_number)
     term_type, years = term_for_seq(next_seq)
     new_contract = LaborContract(
         employee_number=contract.employee_number,
-        name=contract.name,
-        department=contract.department,
-        position=contract.position,
+        name=employee.name if employee else contract.name,
+        department=employee.department if employee else contract.department,
+        position=employee.position if employee else contract.position,
         seq_no=next_seq,
         term_type=term_type,
         term_years=years,
@@ -240,6 +255,7 @@ async def renew_contract(
         end_date=compute_end_date(start_date, term_type, years),
         sign_date=sign_date or date.today(),
         status=LaborContract.STATUS_ACTIVE,
+        origin=LaborContract.ORIGIN_RENEWAL,
         remark=f"自第 {contract.seq_no} 份合同续签",
         created_by=user_id,
     )
@@ -254,14 +270,26 @@ async def renew_contract(
 
 # ─── 部门审批结论（站内勾选降级路径；飞书路径见 renewal_approval.apply_result）───
 
+# 可登记续签意见的状态：不必等到公告期——生效中、到期未续签的也可由部门直接表态
+DECIDABLE_STATUSES = (
+    LaborContract.STATUS_ACTIVE,
+    LaborContract.STATUS_PENDING_RENEWAL,
+    LaborContract.STATUS_RENEWING,
+    LaborContract.STATUS_EXPIRED_UNRENEWED,
+)
+
+
 async def apply_dept_decision(
     db: AsyncSession, contract: LaborContract,
     *, decision: str, decided_by: str, user_id: UUID | None = None,
     send_notice: bool = True,
 ) -> LaborContract:
-    """应用部门审批结论：同意 → 续签办理中并通知员工；不同意 → 终止转离职。"""
-    if contract.status != LaborContract.STATUS_PENDING_RENEWAL:
-        raise AppException(message="仅「公告期」的合同可审批")
+    """应用部门审批结论：同意 → 续签办理中并通知员工；不同意 → 终止转离职。
+
+    登记人姓名记入 dept_decision_by；同意时给员工发续签通知并留痕（跳过 / 失败同样留痕）。
+    """
+    if contract.status not in DECIDABLE_STATUSES:
+        raise AppException(message="仅「生效中 / 公告期 / 续签办理中 / 到期未续签」的合同可登记续签意见")
     if decision not in (LaborContract.DECISION_AGREE, LaborContract.DECISION_DISAGREE):
         raise AppException(message="审批结论只能是 agree / disagree")
 
@@ -270,14 +298,14 @@ async def apply_dept_decision(
     contract.dept_decision_at = _now()
     contract.updated_by = user_id
 
-    contact = await contact_of(db)
     if decision == LaborContract.DECISION_AGREE:
         contract.status = LaborContract.STATUS_RENEWING
         await db.flush()
         if send_notice:
-            employee = await repo.get_employee(db, contract.employee_number)
-            if employee:
-                await notify.send_renewal_notice(db, contract, employee, contact)
+            await _notify_employee(
+                db, contract, ContractNoticeLog.KIND_RENEW,
+                user_id=user_id, user_name=decided_by if user_id else None,
+            )
     else:
         contract.status = LaborContract.STATUS_TERMINATED
         contract.terminated_reason = "部门不同意续签"
@@ -289,12 +317,14 @@ async def apply_dept_decision(
     return await _refetch(db, contract.id)
 
 
-# ─── 盖章 / 领取 / 线上签字 ───
+# ─── 盖章 / 领取 ───
+
 
 async def mark_stamped(
-    db: AsyncSession, contract: LaborContract, user_id: UUID | None = None,
-) -> LaborContract:
-    """公司盖章完成：触发领取通知。"""
+    db: AsyncSession, contract: LaborContract, *,
+    user_id: UUID | None = None, user_name: str | None = None,
+) -> tuple[LaborContract, notify.NoticeResult]:
+    """公司盖章完成：触发领取通知。返回 (合同, 本次通知结果)；通知未送达不影响盖章本身。"""
     if contract.status not in (LaborContract.STATUS_ACTIVE, LaborContract.STATUS_RENEWING):
         raise AppException(message="仅生效中的合同可标记盖章")
     if contract.stamped_at:
@@ -302,67 +332,50 @@ async def mark_stamped(
     contract.stamped_at = _now()
     contract.updated_by = user_id
     await db.flush()
-    employee = await repo.get_employee(db, contract.employee_number)
-    if employee:
-        await notify.send_stamp_notice(db, contract, employee, await contact_of(db))
-    return await _refetch(db, contract.id)
+    notice = await _notify_employee(
+        db, contract, ContractNoticeLog.KIND_COLLECT, user_id=user_id, user_name=user_name,
+    )
+    return await _refetch(db, contract.id), notice
 
 
 async def mark_delivered(
-    db: AsyncSession, contract: LaborContract, user_id: UUID | None = None,
-) -> tuple[LaborContract, str]:
-    """员工领取：签发一次性签字 token 并推送签字提醒。返回 (合同, 签字链接)。"""
+    db: AsyncSession, contract: LaborContract, *,
+    user_id: UUID | None = None, user_name: str | None = None,
+) -> LaborContract:
+    """员工领取：到人事办公室领取合同原件，领取即签收（需求「领取时办理签收」）。
+
+    系统只在公司内网可达，员工在手机上打不开本系统的链接，所以没有领取后的线上签字。
+    """
     if not contract.stamped_at:
         raise AppException(message="请先标记「盖章完成」再办理领取")
     if contract.delivered_at:
         raise DuplicateException("领取记录", f"合同 {contract.id} 已标记领取")
     contract.delivered_at = _now()
     contract.updated_by = user_id
-    token = await issue_sign_token(db, contract)
     await db.flush()
-    sign_url = await sign_page_url(db, token)
-    employee = await repo.get_employee(db, contract.employee_number)
-    if employee:
-        await notify.send_sign_reminder(db, contract, employee, await contact_of(db), sign_url)
-    return await _refetch(db, contract.id), sign_url
+    return await _refetch(db, contract.id)
 
 
-def _hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-async def issue_sign_token(db: AsyncSession, contract: LaborContract) -> str:
-    """签发一次性签字 token：库里只存 sha256，确认后即作废；重签发旧链接自动失效。"""
-    token = secrets.token_urlsafe(32)
-    contract.sign_token_hash = _hash_token(token)
-    return token
-
-
-async def find_by_sign_token(db: AsyncSession, token: str) -> LaborContract | None:
-    hashed = _hash_token(token)
-    return (await db.execute(
-        select(LaborContract).where(
-            LaborContract.sign_token_hash == hashed,
-            LaborContract.is_deleted.is_(False),
-        )
-    )).scalars().first()
-
-
-async def confirm_sign_by_token(db: AsyncSession, token: str) -> LaborContract:
-    """员工线上签字确认（免登，token 即凭证）：回写签字时间，作为已领取凭证。"""
-    contract = await find_by_sign_token(db, token)
-    if not contract:
-        raise AppException(message="签字链接无效或已失效", status_code=404)
-    if contract.sign_confirmed_at:
-        return contract  # 幂等：重复点击直接返回已确认状态
-    contract.sign_confirmed_at = _now()
-    contract.sign_token_hash = None
-    await db.flush()
-    logger.info("劳动合同线上签字确认: %s 第%d份", contract.employee_number, contract.seq_no)
-    return contract
+async def resend_notice(
+    db: AsyncSession, contract: LaborContract, *, kind: str,
+    user_id: UUID | None = None, user_name: str | None = None,
+) -> notify.NoticeResult:
+    """HR 重发一张员工通知（续签通知 / 领取通知）。"""
+    if kind not in ContractNoticeLog.RESENDABLE_KINDS:
+        raise AppException(message="kind 只能是 renew / collect")
+    if contract.status in (LaborContract.STATUS_SUPERSEDED, LaborContract.STATUS_TERMINATED):
+        raise AppException(message="该合同已终止或已被取代，不能再发送通知")
+    if kind == ContractNoticeLog.KIND_RENEW and contract.dept_decision != LaborContract.DECISION_AGREE:
+        raise AppException(message="尚未登记部门「同意续签」，不能发送续签通知")
+    if kind == ContractNoticeLog.KIND_COLLECT and not contract.stamped_at:
+        raise AppException(message="请先标记「盖章完成」，再发送领取通知")
+    return await _notify_employee(
+        db, contract, kind, user_id=user_id, user_name=user_name,
+    )
 
 
 # ─── 终止 ───
+
 
 async def terminate_contract(
     db: AsyncSession, contract: LaborContract, *,
@@ -384,7 +397,7 @@ async def terminate_contract(
 # ─── 公告期扫描（scheduled 任务调用）───
 
 async def find_expiring_active(db: AsyncSession, *, days_ahead: int) -> list[LaborContract]:
-    """窗口内即将到期且仍未进入公告期的生效合同（无固定期限不参与）。"""
+    """窗口内即将到期且仍未进入公告期的生效合同（无固定期限不参与、离职办理中的人不参与）。"""
     today = date.today()
     deadline = today + timedelta(days=days_ahead)
     rows = (await db.execute(
@@ -395,6 +408,8 @@ async def find_expiring_active(db: AsyncSession, *, days_ahead: int) -> list[Lab
             LaborContract.end_date.is_not(None),
             LaborContract.end_date >= today,
             LaborContract.end_date <= deadline,
+            # 台账里登记了将要离职的人：已在走离职流程，不再进公告期、不打扰部门负责人
+            not_(repo.pending_offboarding_expr()),
         ).order_by(LaborContract.end_date.asc())
     )).scalars().all()
     return list(rows)
@@ -441,3 +456,241 @@ async def mark_pending_renewal(
         contract.approval_instance_code = instance_code
     contract.approval_attempt = (contract.approval_attempt or 0) + 1
     await db.flush()
+
+
+# ─── 「待我处理」统计（口径与列表 todo 筛选共用 repository.todo_expr）───
+
+
+async def contract_stats(
+    db: AsyncSession, *, departments: frozenset[str] | None = None,
+    employee_number: str | None = None,
+) -> dict[str, int]:
+    """各待办口径的计数 + attention_total（前五项之和）；人群同在职台账列表（在职人员合同）。"""
+    counts = await repo.count_todos(
+        db, departments=departments, employee_number=employee_number,
+    )
+    return {**counts, "attention_total": sum(counts[key] for key in repo.ATTENTION_KEYS)}
+
+
+# ─── 进度步骤（状态驱动，前端只渲染）───
+
+STEP_EXPIRY_ALERT = "expiry_alert"
+STEP_DEPT_APPROVAL = "dept_approval"
+STEP_RENEW_NOTICE = "renew_notice"
+STEP_STAMP = "stamp"
+STEP_DELIVER = "deliver"
+STEP_ARCHIVE = "archive"
+STEP_TITLES: tuple[tuple[str, str], ...] = (
+    (STEP_EXPIRY_ALERT, "到期预警"),
+    (STEP_DEPT_APPROVAL, "部门审批"),
+    (STEP_RENEW_NOTICE, "通知续签"),
+    (STEP_STAMP, "签订盖章"),
+    (STEP_DELIVER, "领取合同"),
+    (STEP_ARCHIVE, "电子归档"),
+)
+
+STATE_DONE = "done"
+STATE_CURRENT = "current"
+STATE_PENDING = "pending"
+STATE_SKIPPED = "skipped"
+
+NOTE_RENEWAL_DONE = "续签时已完成"
+NOTE_OPEN_TERM = "无固定期限，不设到期日"
+NOTE_SIGNED = "已签订生效"
+NOTE_SUPERSEDED = "已续签为新合同"
+# 步骤条里每步很窄，说明要短：具体怎么办写在抽屉顶部的「下一步」面板里
+NOTE_EXPIRED_UNRENEWED = "到期未续签，待处理"
+NOTE_RENEW_NOTICE_FAILED = "通知发送失败，可重发"
+
+
+def _step(key: str, state: str, *, at: datetime | None = None, note: str | None = None) -> dict[str, Any]:
+    return {
+        "key": key, "title": dict(STEP_TITLES)[key], "state": state, "at": at, "note": note,
+    }
+
+
+def _first_notice_at(notices: Sequence[ContractNoticeLog], kind: str) -> datetime | None:
+    """某类通知留痕最早一次的时间（如首次到期预警）。"""
+    return min((n.created_at for n in notices if n.kind == kind), default=None)
+
+
+def _last_notice_at(notices: Sequence[ContractNoticeLog], kind: str, status: str) -> datetime | None:
+    """某类通知留痕里指定结果最近一次的时间。"""
+    return max(
+        (n.created_at for n in notices if n.kind == kind and n.status == status), default=None,
+    )
+
+
+def _signing_steps(contract: LaborContract, *, note: str | None = None) -> list[dict[str, Any]]:
+    """签订盖章 / 领取合同：按时间戳依次判断——已完成 done，第一个未完成 current，其余 pending。"""
+    steps: list[dict[str, Any]] = []
+    waiting = False
+    for key, at in (
+        (STEP_STAMP, contract.stamped_at),
+        (STEP_DELIVER, contract.delivered_at),
+    ):
+        if at is not None:
+            steps.append(_step(key, STATE_DONE, at=at, note=note))
+        elif waiting:
+            steps.append(_step(key, STATE_PENDING))
+        else:
+            waiting = True
+            steps.append(_step(key, STATE_CURRENT))
+    return steps
+
+
+def _signing_done_steps(contract: LaborContract, *, note: str) -> list[dict[str, Any]]:
+    """签订盖章 / 领取合同两步整体视为已完成（at 取实际时间，没有则留空）。"""
+    return [
+        _step(STEP_STAMP, STATE_DONE, at=contract.stamped_at, note=note),
+        _step(STEP_DELIVER, STATE_DONE, at=contract.delivered_at, note=note),
+    ]
+
+
+def _archive_step(contract: LaborContract, *, current: bool) -> dict[str, Any]:
+    """电子归档：已归档 done；未归档按 current 给 current / pending。"""
+    if contract.archive_status == LaborContract.ARCHIVE_ARCHIVED:
+        return _step(STEP_ARCHIVE, STATE_DONE, at=contract.archive_uploaded_at)
+    return _step(STEP_ARCHIVE, STATE_CURRENT if current else STATE_PENDING)
+
+
+def _renew_notice_step(contract: LaborContract, notices: Sequence[ContractNoticeLog]) -> dict[str, Any]:
+    """通知续签：仅续签办理中才看续签通知留痕——送达即 done；否则停在当前步并说明原因。"""
+    if contract.status != LaborContract.STATUS_RENEWING:
+        return _step(STEP_RENEW_NOTICE, STATE_PENDING)
+    sent_at = _last_notice_at(notices, ContractNoticeLog.KIND_RENEW, ContractNoticeLog.STATUS_SENT)
+    if sent_at is not None:
+        return _step(STEP_RENEW_NOTICE, STATE_DONE, at=sent_at)
+    unsent = [n for n in notices if n.kind == ContractNoticeLog.KIND_RENEW]
+    note = None
+    if unsent:
+        latest = max(unsent, key=lambda n: n.created_at)
+        note = (
+            NOTE_RENEW_NOTICE_FAILED
+            if latest.status == ContractNoticeLog.STATUS_FAILED else latest.error_message
+        )
+    return _step(STEP_RENEW_NOTICE, STATE_CURRENT, note=note)
+
+
+def _superseded_progress(
+    contract: LaborContract, notices: Sequence[ContractNoticeLog],
+) -> list[dict[str, Any]]:
+    note = NOTE_SUPERSEDED
+    if contract.archive_status == LaborContract.ARCHIVE_ARCHIVED:
+        archive = _step(STEP_ARCHIVE, STATE_DONE, at=contract.archive_uploaded_at)
+    else:
+        archive = _step(STEP_ARCHIVE, STATE_SKIPPED)
+    return [
+        _step(STEP_EXPIRY_ALERT, STATE_DONE, at=_first_notice_at(
+            notices, ContractNoticeLog.KIND_DEPT_APPROVAL,
+        ), note=note),
+        _step(STEP_DEPT_APPROVAL, STATE_DONE, at=contract.dept_decision_at, note=note),
+        _step(STEP_RENEW_NOTICE, STATE_DONE, at=_last_notice_at(
+            notices, ContractNoticeLog.KIND_RENEW, ContractNoticeLog.STATUS_SENT,
+        ), note=note),
+        *_signing_done_steps(contract, note=note),
+        archive,
+    ]
+
+
+def _terminated_progress(
+    contract: LaborContract, notices: Sequence[ContractNoticeLog],
+) -> list[dict[str, Any]]:
+    note = contract.terminated_reason
+    return [
+        _step(STEP_EXPIRY_ALERT, STATE_DONE, at=_first_notice_at(
+            notices, ContractNoticeLog.KIND_DEPT_APPROVAL,
+        ), note=note),
+        _step(STEP_DEPT_APPROVAL, STATE_DONE, at=contract.dept_decision_at, note=note),
+        *(_step(key, STATE_SKIPPED) for key in (
+            STEP_RENEW_NOTICE, STEP_STAMP, STEP_DELIVER, STEP_ARCHIVE,
+        )),
+    ]
+
+
+def _open_term_progress(contract: LaborContract) -> list[dict[str, Any]]:
+    note = NOTE_OPEN_TERM
+    return [
+        _step(STEP_EXPIRY_ALERT, STATE_DONE, note=note),
+        _step(STEP_DEPT_APPROVAL, STATE_DONE, at=contract.dept_decision_at, note=note),
+        _step(STEP_RENEW_NOTICE, STATE_DONE, note=note),
+        *_signing_done_steps(contract, note=note),
+        _archive_step(contract, current=True),
+    ]
+
+
+def _renewal_progress(contract: LaborContract) -> list[dict[str, Any]]:
+    signing = _signing_steps(contract)
+    done_before = [
+        _step(key, STATE_DONE, note=NOTE_RENEWAL_DONE)
+        for key in (STEP_EXPIRY_ALERT, STEP_DEPT_APPROVAL, STEP_RENEW_NOTICE)
+    ]
+    return [
+        *done_before, *signing,
+        _archive_step(contract, current=all(step["state"] == STATE_DONE for step in signing)),
+    ]
+
+
+def _fixed_term_progress(
+    contract: LaborContract, notices: Sequence[ContractNoticeLog],
+) -> list[dict[str, Any]]:
+    """存量或在履约的固定期限合同：续签流程走到哪一步，加上签订两步（盖章 / 领取）与归档。"""
+    status = contract.status
+    in_renewal_flow = status in (
+        LaborContract.STATUS_PENDING_RENEWAL, LaborContract.STATUS_RENEWING,
+        LaborContract.STATUS_EXPIRED_UNRENEWED,
+    )
+    steps = [_step(
+        STEP_EXPIRY_ALERT, STATE_DONE if in_renewal_flow else STATE_PENDING,
+        at=_first_notice_at(notices, ContractNoticeLog.KIND_DEPT_APPROVAL),
+    )]
+    if status == LaborContract.STATUS_PENDING_RENEWAL and not contract.dept_decision:
+        steps.append(_step(STEP_DEPT_APPROVAL, STATE_CURRENT))
+    elif contract.dept_decision:
+        agreed = contract.dept_decision == LaborContract.DECISION_AGREE
+        by = contract.dept_decision_by or ""
+        steps.append(_step(
+            STEP_DEPT_APPROVAL, STATE_DONE, at=contract.dept_decision_at,
+            note=f"{by} 登记{'同意' if agreed else '不同意'}".strip(),
+        ))
+    elif status == LaborContract.STATUS_EXPIRED_UNRENEWED:
+        steps.append(_step(STEP_DEPT_APPROVAL, STATE_CURRENT, note=NOTE_EXPIRED_UNRENEWED))
+    else:
+        steps.append(_step(STEP_DEPT_APPROVAL, STATE_PENDING))
+    steps.append(_renew_notice_step(contract, notices))
+
+    # 签订两步：有签订日却没有任何盖章 / 领取时间的，是线下签好的存量或在履约合同，
+    # 整段按「已签订生效」；否则按时间戳逐个判断
+    milestones = (contract.stamped_at, contract.delivered_at)
+    if contract.sign_date is not None and not any(milestones):
+        signing = [_step(key, STATE_DONE, note=NOTE_SIGNED) for key in (
+            STEP_STAMP, STEP_DELIVER,
+        )]
+    else:
+        signing = _signing_steps(contract)
+    steps.extend(signing)
+    steps.append(_archive_step(contract, current=all(step["state"] == STATE_DONE for step in signing)))
+    return steps
+
+
+def build_progress(
+    contract: LaborContract, notices: Sequence[ContractNoticeLog] = (),
+) -> list[dict[str, Any]]:
+    """按合同状态推导 6 个进度步骤，每步 {key, title, state, at, note}（纯函数，不查库）。
+
+    - 已续签取代 / 已终止：终态，到流程结束处为止 done（note 写原因），其余 skipped
+    - 无固定期限（非续签生成）：不设到期日，前五步 done，归档按状态
+    - 续签生成的新合同（origin=renewal）：前三步续签时已完成，之后按盖章 / 领取 / 归档推进
+    - 其它固定期限合同（含 origin 为空的存量）：到期预警 → 部门审批 → 通知续签 → 签订两步 → 归档
+
+    notices 是该合同的通知留痕（时间倒序或正序均可），用于判断「通知续签」与首次预警时间。
+    """
+    if contract.status == LaborContract.STATUS_SUPERSEDED:
+        return _superseded_progress(contract, notices)
+    if contract.status == LaborContract.STATUS_TERMINATED:
+        return _terminated_progress(contract, notices)
+    if contract.term_type == LaborContract.TERM_OPEN and contract.origin != LaborContract.ORIGIN_RENEWAL:
+        return _open_term_progress(contract)
+    if contract.origin == LaborContract.ORIGIN_RENEWAL:
+        return _renewal_progress(contract)
+    return _fixed_term_progress(contract, notices)

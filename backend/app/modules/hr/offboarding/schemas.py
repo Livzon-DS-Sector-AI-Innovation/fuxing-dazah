@@ -20,6 +20,9 @@ class OffboardingCaseCreate(BaseModel):
         None, description="是否需离岗体检（缺省取员工 is_key_position）",
     )
     remark: str | None = Field(None, max_length=512, description="备注")
+    departure_record_id: UUID | None = Field(
+        None, description="从离职台账行发起时传：离职日期与类型取该台账行（以飞书离职表为准）",
+    )
 
 
 class OffboardingCaseUpdate(BaseModel):
@@ -57,17 +60,24 @@ class IssueCertificateRequest(BaseModel):
 
 class SendDeliveryRequest(BaseModel):
     mail_recipient: str | None = Field(None, max_length=128, description="送达邮箱（重发）")
-    sms_phone: str | None = Field(None, max_length=32, description="短信号码（通道未接入时仅登记）")
+    sms_phone: str | None = Field(None, max_length=32, description="短信接收号码（登记已人工发送）")
+
+
+class HandoverIn(BaseModel):
+    handover_to: str | None = Field(None, max_length=64, description="交接人（传空字符串清空）")
+    dept_clerk: str | None = Field(None, max_length=64, description="部门办事员（传空字符串清空）")
 
 
 class PaperSignRequest(BaseModel):
     signed_by: str = Field(..., min_length=1, max_length=64, description="签收人（员工本人姓名）")
 
 
+class SignatureSignRequest(BaseModel):
+    """员工到人事办公室当面手写签名：在 HR 登录的公司电脑上签，签名图随档案留存。"""
+
+    signature: str = Field(..., max_length=500_000, description="手写签名 PNG/JPEG dataURL（base64）")
+    signed_name: str | None = Field(None, max_length=64, description="签署人确认姓名（留空取员工姓名）")
+
+
 class CloseCaseRequest(BaseModel):
     account_deactivated: bool = Field(True, description="飞书账号已注销勾选")
-
-
-class DepartureCertSignConfirm(BaseModel):
-    signature: str = Field(..., max_length=500_000, description="手写签名 PNG/JPEG dataURL（base64）")
-    confirm_name: str | None = Field(None, max_length=64, description="签署人确认姓名")

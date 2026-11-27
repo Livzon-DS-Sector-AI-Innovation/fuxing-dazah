@@ -10,6 +10,8 @@
 审批结果轮询：renewal_approval.sync_pending_results 幂等回写；飞书审批被撤销而退回
 站内待审批的合同，补发负责人提醒卡片。
 归档缺失周提醒：见 archive_scheduled.py。
+通知留痕：负责人提醒的每次尝试（送达 / 推送失败 / 匹配不到负责人 / 提醒关闭）都写一行
+hr.contract_notice_logs；员工侧两张卡（续签通知 / 领取通知）的留痕见 notify.py。
 """
 
 import logging
@@ -29,7 +31,7 @@ from app.modules.hr.labor_contract import (
 from app.modules.hr.labor_contract import repository as repo
 from app.modules.hr.labor_contract import service as contract_service
 from app.modules.hr.labor_contract import settings as contract_settings
-from app.modules.hr.labor_contract.models import LaborContract
+from app.modules.hr.labor_contract.models import ContractNoticeLog, LaborContract
 from app.modules.hr.reminder.config import resolve_receivers
 from app.platform.scheduler import (
     ScheduleConfig,
@@ -128,10 +130,11 @@ async def _run_announcement(
     notified_rows: list[tuple[LaborContract, str]] = []
     unreached_rows: list[tuple[LaborContract, str]] = []
     if manual_rows:
-        if dept_notice:
-            notified_rows, unreached_rows = await _push_dept_notices(db, manual_rows)
-        else:
-            unreached_rows = [(c, _NOTICE_OFF_REASON) for c in manual_rows]
+        notified_rows, unreached_rows = await _push_dept_notices(
+            db, manual_rows, enabled=dept_notice,
+        )
+        # 通知留痕随卡片一起落库
+        await db.commit()
 
     receivers = await resolve_receivers(db, copy_entries)
     sent = await notify.send_announcement_summary(
@@ -155,35 +158,68 @@ async def _run_announcement(
 
 async def _push_dept_notices(
     db: AsyncSession, contracts: list[LaborContract], *, note: str | None = None,
+    enabled: bool = True,
 ) -> tuple[list[tuple[LaborContract, str]], list[tuple[LaborContract, str]]]:
-    """站内待审批的合同逐个解析部门负责人并推送提醒卡片。
+    """站内待审批的合同逐个解析部门负责人并推送提醒卡片，每次尝试都写一行通知留痕。
 
+    enabled=False（负责人提醒关闭）时不发卡片，全部按「已跳过」留痕。
     返回 (已通知, 未通知到)，元素都是 (合同, 负责人姓名 / 没通知到的原因)：
     负责人匹配不到飞书账号、推送失败的都归到「未通知到」，由 HR 摘要兜底。
     """
+    kind = ContractNoticeLog.KIND_DEPT_APPROVAL
+    if not enabled:
+        skipped_rows = [(contract, _NOTICE_OFF_REASON) for contract in contracts]
+        for contract, reason in skipped_rows:
+            await notify.log_notice(
+                db, contract=contract, kind=kind,
+                status=ContractNoticeLog.STATUS_SKIPPED, error_message=reason,
+            )
+        return [], skipped_rows
+
+    # 负责人姓名 → open_id：notify_dept_heads 的返回值只带姓名，留痕要用 open_id
+    open_ids: dict[str, str] = {}
     targets: list[tuple[LaborContract, str, str]] = []
-    unreached: list[tuple[LaborContract, str]] = []
+    skipped: list[tuple[LaborContract, str, str | None]] = []  # (合同, 原因, 负责人姓名)
     for contract in contracts:
         manager_name, open_id = await renewal_approval.resolve_approver(db, contract)
         if open_id:
             targets.append((contract, manager_name or "", open_id))
+            if manager_name:
+                open_ids.setdefault(manager_name, open_id)
         elif manager_name:
-            unreached.append((contract, f"负责人「{manager_name}」匹配不到飞书账号"))
+            skipped.append((contract, f"负责人「{manager_name}」匹配不到飞书账号", manager_name))
         else:
-            unreached.append((contract, "部门表与员工档案均无负责人"))
+            skipped.append((contract, "部门表与员工档案均无负责人", None))
+    for contract, reason, manager_name in skipped:
+        await notify.log_notice(
+            db, contract=contract, kind=kind, status=ContractNoticeLog.STATUS_SKIPPED,
+            recipient_name=manager_name, error_message=reason,
+        )
+
     result = (
         await dept_notice.notify_dept_heads(targets, note=note)
         if targets else {"notified": [], "failed": []}
     )
-    unreached.extend(
-        (contract, f"负责人「{manager}」推送失败")
-        for contract, manager in result["failed"]
-    )
+    notified: list[tuple[LaborContract, str]] = []
+    unreached: list[tuple[LaborContract, str]] = [(contract, reason) for contract, reason, _ in skipped]
+    for contract, manager in result["notified"]:
+        await notify.log_notice(
+            db, contract=contract, kind=kind, status=ContractNoticeLog.STATUS_SENT,
+            recipient_name=manager, recipient_open_id=open_ids.get(manager, ""),
+        )
+        notified.append((contract, manager))
+    for contract, manager in result["failed"]:
+        reason = f"负责人「{manager}」推送失败"
+        await notify.log_notice(
+            db, contract=contract, kind=kind, status=ContractNoticeLog.STATUS_FAILED,
+            recipient_name=manager, recipient_open_id=open_ids.get(manager, ""), error_message=reason,
+        )
+        unreached.append((contract, reason))
     logger.info(
         "部门负责人续签审批提醒: 已通知 %d 人，未通知到 %d 人",
-        len(result["notified"]), len(unreached),
+        len(notified), len(unreached),
     )
-    return result["notified"], unreached
+    return notified, unreached
 
 
 async def _notify_back_to_manual(
@@ -195,13 +231,10 @@ async def _notify_back_to_manual(
     通知不到的（匹配不到负责人 / 推送失败 / 提醒已关闭）发 HR 摘要兜底；
     退回后合同不再被轮询，同一次审批不会重复提醒。
     """
-    if dept_notice:
-        notified_rows, unreached_rows = await _push_dept_notices(
-            db, contracts, note=_CANCELED_NOTE,
-        )
-    else:
-        notified_rows = []
-        unreached_rows = [(c, _NOTICE_OFF_REASON) for c in contracts]
+    notified_rows, unreached_rows = await _push_dept_notices(
+        db, contracts, note=_CANCELED_NOTE, enabled=dept_notice,
+    )
+    await db.commit()  # 通知留痕落库
     if unreached_rows:
         receivers = await resolve_receivers(db, copy_entries)
         await notify.send_announcement_summary(

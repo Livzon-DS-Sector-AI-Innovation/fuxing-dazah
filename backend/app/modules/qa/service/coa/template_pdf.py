@@ -29,6 +29,7 @@ import time
 import uuid
 import weakref
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -170,26 +171,33 @@ _BORDER_PARTS = re.compile(r"word/(?:document|header\d*|footer\d*|styles)\.xml")
 def print_copy(docx: bytes) -> bytes:
     """交给 LibreOffice 的打印副本：只改它和 Word 画法不一样的地方。
 
-    两处——表格、单元格边框里 0.5 磅及更细的多线边框改成单线；关掉行网格，把靠网格
-    撑行高的段落的行高写死（见 :func:`_release_grid`）。下载和留档的原件不动；
-    除此之外逐字节保持原样。
+    三处——表格、单元格边框里 0.5 磅及更细的多线边框改成单线；把会被削字顶的固定行高
+    段落放宽到放得下（见 :func:`_fit_fixed_lines`）；关掉行网格，把靠网格撑行高的段落的
+    行高写死（见 :func:`_release_grid`）。下载和留档的原件不动；除此之外逐字节保持原样。
     """
     out = io.BytesIO()
     with (
         zipfile.ZipFile(io.BytesIO(docx)) as archive,
         zipfile.ZipFile(out, "w") as target,
     ):
+        names = set(archive.namelist())
         styles = _Styles(
-            archive.read("word/styles.xml")
-            if "word/styles.xml" in archive.namelist()
+            archive.read("word/styles.xml") if "word/styles.xml" in names else None
+        )
+        # 页眉页脚里的段落没有自己的小节，版心宽度也按正文的算
+        width = (
+            _text_width(archive.read("word/document.xml"))
+            if "word/document.xml" in names
             else None
         )
         for info in archive.infolist():
             payload = archive.read(info.filename)
             if _BORDER_PARTS.fullmatch(info.filename):
                 payload = _flatten_borders(payload)
-            if info.filename == "word/document.xml":
-                payload = _release_grid(payload, styles)
+            if _TEXT_PARTS.fullmatch(info.filename):
+                payload = _fit_fixed_lines(payload, styles, width)
+                if info.filename == "word/document.xml":
+                    payload = _release_grid(payload, styles)
             target.writestr(info, payload)
     return out.getvalue()
 
@@ -300,15 +308,8 @@ class _Styles:
                 return element
         return None
 
-    def font_half_points(self, para: Any, ppr: Any) -> int:
-        """段落里最大的字号（半磅）：文字里的 → 段落标记的 → 样式链上的 → 文档默认。"""
-        sizes = [
-            int(size.get(qn("w:val")))
-            for size in para.iter(qn("w:sz"))
-            if (size.get(qn("w:val")) or "").isdigit()
-        ]
-        if sizes:
-            return max(sizes)
+    def _paragraph_half_points(self, ppr: Any) -> int:
+        """段落这一级的字号（半磅）：段落样式及 basedOn 链 → 默认样式 → 文档默认。"""
         holders: list[Any] = []
         node = ppr.find(qn("w:pStyle")) if ppr is not None else None
         style_id = node.get(qn("w:val")) if node is not None else None
@@ -326,6 +327,25 @@ class _Styles:
             if size is not None and (size.get(qn("w:val")) or "").isdigit():
                 return int(size.get(qn("w:val")))
         return _DEFAULT_FONT_HALF_POINTS
+
+    def font_half_points(self, para: Any, ppr: Any) -> int:
+        """段落里最大的字号（半磅）：文字里的 → 段落标记的 → 样式链上的 → 文档默认。"""
+        sizes = [
+            int(size.get(qn("w:val")))
+            for size in para.iter(qn("w:sz"))
+            if (size.get(qn("w:val")) or "").isdigit()
+        ]
+        if sizes:
+            return max(sizes)
+        return self._paragraph_half_points(ppr)
+
+    def run_half_points(self, run: Any, ppr: Any) -> int:
+        """这一个 run 的字号（半磅）：自己写的 → 所在段落的样式链 → 文档默认。"""
+        rpr = run.find(qn("w:rPr"))
+        size = rpr.find(qn("w:sz")) if rpr is not None else None
+        if size is not None and (size.get(qn("w:val")) or "").isdigit():
+            return int(size.get(qn("w:val")))
+        return self._paragraph_half_points(ppr)
 
 
 def _grid_pitch(sect: Any) -> int | None:
@@ -401,24 +421,266 @@ def _release_grid(xml: bytes, styles: _Styles) -> bytes:
             else:
                 height *= int(declared) / 240  # 倍数行距：先折算出这一行的自然高度
         rows = max(1, math.ceil(height / pitch))
-        if ppr is None:
-            ppr = para.makeelement(qn("w:pPr"), {})
-            para.insert(0, ppr)
-        spacing = ppr.find(qn("w:spacing"))
-        if spacing is None:
-            spacing = ppr.makeelement(qn("w:spacing"), {})
-            later = next(
-                (
-                    i
-                    for i, child in enumerate(ppr)
-                    if child.tag.split("}")[-1] in _AFTER_SPACING
-                ),
-                len(ppr),
-            )
-            ppr.insert(later, spacing)
+        spacing = _own_spacing(para)
         spacing.set(qn("w:lineRule"), "exact")
         spacing.set(qn("w:line"), str(rows * pitch))
     return serialize_part_xml(root)
+
+
+def _own_spacing(para: Any) -> Any:
+    """段落自己的 ``<w:spacing>``，没有就按元素顺序新建；只往这里写，不动样式。"""
+    ppr = para.find(qn("w:pPr"))
+    if ppr is None:
+        ppr = para.makeelement(qn("w:pPr"), {})
+        para.insert(0, ppr)
+    spacing = ppr.find(qn("w:spacing"))
+    if spacing is None:
+        spacing = ppr.makeelement(qn("w:spacing"), {})
+        later = next(
+            (
+                i
+                for i, child in enumerate(ppr)
+                if child.tag.split("}")[-1] in _AFTER_SPACING
+            ),
+            len(ppr),
+        )
+        ppr.insert(later, spacing)
+    return spacing
+
+
+# ─────────────────────── 打印副本：固定行高的字顶 ───────────────────────
+
+# 标题都是「字号 = 固定行高」（16 磅黑体配 16 磅行高），少数更挤（14 磅字配 12 磅行高）。Word/WPS 里真黑体
+# 的下伸只占 14%，字顶放得下；替代的思源黑体下伸占 28.8%，LibreOffice 排固定行高的行时把行框按字体的
+# 上伸/下伸切成 80.1% : 19.9%，字顶超出上伸的笔画就被裁掉（两种标题分别被削 0.9 磅、2.4 磅）。
+# LibreOffice 25.2 不裁（照画），26.8 起裁。打印副本里把这类行的行框加高到放得下，等量从段前、段后距里扣，
+# 段落总高不变——文字基本原地不动，两个版本排出来一样；借不到间距的（表格里的段落）退而求其次，把文字在
+# 行框内下移（w:position）。只处理会被削 0.85 磅以上的（标题这类一眼可见的），表格正文里被削零点几磅的不动。
+_TEXT_PARTS = re.compile(r"word/(?:document|header\d*|footer\d*)\.xml")
+_ASCENT_SHARE = (
+    1.16 / 1.448
+)  # 思源黑体的上伸占其行高的比例，也就是固定行高里基线以上的占比
+_FALLBACK_LINES = 1.448  # 思源黑体的行高（em）
+_CJK = re.compile(r"[\u2e80-\u9fff\uf900-\ufaff]")
+_DEEP = re.compile(r"[，；gjpqyQ(){}\[\];@_]")  # 字底很低的全角标点、拉丁字母和括号
+_IDEOGRAPH_TOP = 0.87  # 语料用到的汉字里最高的字顶（em，思源黑体粗体实测 0.866）
+_CJK_BOTTOM = 0.105  # 汉字、全角括号最低的字底（实测 0.103）
+_DEEP_BOTTOM = 0.23  # 上面那类字符最低的字底（思源宋体粗体的全角逗号实测 0.222）
+_VISIBLE_CLIP = 17  # 缇（0.85 磅）：削不到这么多的看不出，不动
+_BOTTOM_SLACK = 3  # 缇：下移后字底允许出框这一点点
+_KEEP_BEFORE = 20  # 缇：借段前距时至少留 1 磅，别让文字贴到上方（比如页眉横线）
+# 自动段距（beforeAutospacing / afterAutospacing 开着）时 LibreOffice 不看 before / after，扣不动。
+# 按行数写的 beforeLines / afterLines 不用管：只要写了 before / after，LibreOffice 就只认后者（两版实测）
+_AUTOSPACING = ("beforeAutospacing", "afterAutospacing")
+# 修订标记、超链接这类包装要穿过去；图片、文本框、公式里的 run 不属于这一行
+_NESTED = (
+    qn("w:drawing"),
+    qn("w:pict"),
+    qn("w:object"),
+    qn("w:txbxContent"),
+    qn("w:pPr"),
+    qn("w:rPr"),
+)
+# rPr 子元素的先后顺序里排在 w:position 之后的；新建 w:position 时要插在它们前面
+_AFTER_POSITION = (
+    "w:sz",
+    "w:szCs",
+    "w:highlight",
+    "w:u",
+    "w:effect",
+    "w:bdr",
+    "w:shd",
+    "w:fitText",
+    "w:vertAlign",
+    "w:rtl",
+    "w:cs",
+    "w:em",
+    "w:lang",
+    "w:eastAsianLayout",
+    "w:specVanish",
+    "w:oMath",
+)
+
+
+def _text_width(xml: bytes) -> int | None:
+    """正文版心宽度（缇）：最后一节的页宽减左右页边距。"""
+    sect = parse_xml(xml).find(f"{qn('w:body')}/{qn('w:sectPr')}")
+    size = sect.find(qn("w:pgSz")) if sect is not None else None
+    margin = sect.find(qn("w:pgMar")) if sect is not None else None
+    if size is None or margin is None:
+        return None
+    try:
+        return (
+            int(size.get(qn("w:w")))
+            - int(margin.get(qn("w:left")) or 0)
+            - int(margin.get(qn("w:right")) or 0)
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _own_runs(parent: Any) -> Iterator[Any]:
+    """这一行自己的 run：穿过修订标记、超链接这类包装，不进图片、文本框和公式。"""
+    for child in parent:
+        if child.tag == qn("w:r"):
+            yield child
+        elif child.tag not in _NESTED:
+            yield from _own_runs(child)
+
+
+def _text_runs(para: Any) -> list[Any]:
+    """这一行里画得出字的 run：只有空白的、图片、域代码都不算。"""
+    return [
+        run
+        for run in _own_runs(para)
+        if any((node.text or "").strip() for node in run.iter(qn("w:t")))
+    ]
+
+
+def _line_text(para: Any) -> str:
+    """这一行的文字；制表符记作 \\t、换行记作 \\n，用来估宽和判断是不是单行。"""
+    out: list[str] = []
+    for run in _own_runs(para):
+        for node in run.iter(qn("w:t"), qn("w:tab"), qn("w:br")):
+            if node.tag == qn("w:t"):
+                out.append(node.text or "")
+            else:
+                out.append("\t" if node.tag == qn("w:tab") else "\n")
+    return "".join(out)
+
+
+def _fits_one_line(text: str, size: int, width: int) -> bool:
+    """按偏宽的估算判断这段文字排得下在一行里（缇）。加行高只对单行段落是「总高不变」的。"""
+    em = sum(
+        1.0 if ord(ch) > 0x2E7F or ch == "\t" else 0.3 if ch == " " else 0.6
+        for ch in text
+    )
+    return em * size <= 0.9 * width
+
+
+def _twips(element: Any, attr: str) -> int:
+    value = element.get(qn(f"w:{attr}")) if element is not None else None
+    return int(value) if value is not None and value.isdigit() else 0
+
+
+def _is_on(element: Any, attr: str) -> bool:
+    """开关型属性是否开着；没写，或写成 false / 0 / off 的都算关。"""
+    value = element.get(qn(f"w:{attr}")) if element is not None else None
+    return value is not None and value not in _OFF
+
+
+def _grow_line(
+    spacing: Any, styles: _Styles, ppr: Any, height: int, target: float
+) -> int:
+    """行高往 target（缇）加，等量从段前、段后距里扣（先扣段前）；返回实际加了多少。"""
+    if any(_is_on(styles.first(ppr, "spacing", name), name) for name in _AUTOSPACING):
+        return 0
+    before = _twips(styles.first(ppr, "spacing", "before"), "before")
+    after = _twips(styles.first(ppr, "spacing", "after"), "after")
+    # 先扣段前距但给它留一磅（别让文字贴到页眉横线上），不够再扣段后距
+    spare = max(0, before - _KEEP_BEFORE)
+    grown = min(math.ceil(target) - height, spare + after)
+    if grown <= 0:
+        return 0
+    taken = min(grown, spare)
+    if taken:
+        spacing.set(qn("w:before"), str(before - taken))
+    if grown > taken:
+        spacing.set(qn("w:after"), str(after - (grown - taken)))
+    spacing.set(qn("w:line"), str(height + grown))
+    return grown
+
+
+def _lowering(step: int, size: int) -> int:
+    """``w:position`` 取 step 个半磅时文字实际下移多少（缇；size 是字号，缇）。
+
+    LibreOffice 先把它折成「字号的百分之几」（四舍五入到整百分比），再按替代字体的行高
+    （1.448 倍字号）位移，所以实际位移比标称值大四成多，字号越小档距越粗。本机 26.8 与
+    镜像 25.2.3 实测一致。
+    """
+    percent = math.floor(1000 * step / size + 0.5)
+    return math.floor(percent * _FALLBACK_LINES * size / 100)
+
+
+def _lower_runs(para: Any, step: int) -> bool:
+    """这一行里有字的 run 都下移 step 个半磅（上下标不跟着动）；返回有没有改到。"""
+    changed = False
+    for run in _text_runs(para):
+        rpr = run.find(qn("w:rPr"))
+        if rpr is not None and rpr.find(qn("w:vertAlign")) is not None:
+            continue
+        if rpr is None:
+            rpr = run.makeelement(qn("w:rPr"), {})
+            run.insert(0, rpr)
+        position = rpr.find(qn("w:position"))
+        if position is None:
+            position = rpr.makeelement(qn("w:position"), {})
+            rpr.insert_element_before(position, *_AFTER_POSITION)
+        current = position.get(qn("w:val")) or "0"
+        raised = int(current) if current.lstrip("-").isdigit() else 0
+        position.set(qn("w:val"), str(raised - step))
+        changed = True
+    return changed
+
+
+def _fit_fixed_lines(xml: bytes, styles: _Styles, width: int | None) -> bytes:
+    """让会被削字顶的固定行高段落放得下字；没有要改的就原样返回这一段的字节。"""
+    root = parse_xml(xml)
+    changed = False
+    for para in root.iter(qn("w:p")):
+        text = _line_text(para)
+        if not _CJK.search(text):
+            continue  # 只有拉丁字母的行字顶够低，不会被削
+        ppr = para.find(qn("w:pPr"))
+        rule = styles.first(ppr, "spacing", "lineRule")
+        line = styles.first(ppr, "spacing", "line")
+        declared = line.get(qn("w:line")) if line is not None else None
+        if (
+            rule is None
+            or rule.get(qn("w:lineRule")) != "exact"
+            or declared is None
+            or not declared.isdigit()
+            or declared == "0"
+        ):
+            continue
+        height = int(declared)
+        # 按「画得出字的 run」各自求有效字号再取最大：段落里混着的空 run、段落标记的字号不算数
+        runs = _text_runs(para)
+        if not runs:
+            continue
+        size = max(styles.run_half_points(run, ppr) for run in runs) * 10  # 缇
+        top = _IDEOGRAPH_TOP * size
+        if top - _ASCENT_SHARE * height < _VISIBLE_CLIP:
+            continue
+        bottom = (_DEEP_BOTTOM if _DEEP.search(text) else _CJK_BOTTOM) * size
+        spacing = _own_spacing(para)
+        if (
+            width is not None
+            and "\n" not in text
+            and not any(a.tag == qn("w:tc") for a in para.iterancestors())
+            and _fits_one_line(text, size, width)
+        ):
+            # 行框加高到字顶字底都放得下；多出来的高度从段前段后距里来，段落总高不变
+            grown = _grow_line(
+                spacing,
+                styles,
+                ppr,
+                height,
+                max(size, top / _ASCENT_SHARE, bottom / (1 - _ASCENT_SHARE)),
+            )
+            changed = changed or grown > 0
+            height += grown
+        clip = top - _ASCENT_SHARE * height
+        if clip <= 1:
+            continue
+        # 借不到（够）段距：把文字在行框内往下挪，取刚好够的最小一档，且字底不出框
+        room = (1 - _ASCENT_SHARE) * height - bottom + _BOTTOM_SLACK
+        steps = [step for step in range(1, 9) if _lowering(step, size) <= room]
+        if not steps:
+            continue
+        enough = [step for step in steps if _lowering(step, size) >= clip]
+        changed = _lower_runs(para, enough[0] if enough else steps[-1]) or changed
+    return serialize_part_xml(root) if changed else xml
 
 
 def docx_to_pdf(docx: bytes, *, soffice: str | None = None) -> bytes:
@@ -494,7 +756,7 @@ def pdf_name_of(docx_name: str) -> str:
 # ─────────────────────── 缓存 ───────────────────────
 
 # 转换规则版本：打印副本的处理或字体映射变了就加一，旧缓存自动作废
-_PRINT_POLICY = 5
+_PRINT_POLICY = 6
 
 
 def cache_key(docx: bytes) -> str:

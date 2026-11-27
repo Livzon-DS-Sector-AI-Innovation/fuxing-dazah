@@ -41,6 +41,7 @@ export async function fetchContractArchive(
   if (params.population) qs.set('population', params.population)
   if (params.keyword) qs.set('keyword', params.keyword)
   if (params.department) qs.set('department', params.department)
+  if (params.education) qs.set('education', params.education)
   qs.set('page', String(params.page ?? 1))
   qs.set('page_size', String(params.page_size ?? 20))
   return fetchHrApi(`/hr/labor-contracts-archive?${qs.toString()}`, { errorMessage: '获取电子档案库失败' })
@@ -56,12 +57,21 @@ export async function fetchContractArchiveDepartments(): Promise<{ data: Contrac
   return fetchHrApi('/hr/labor-contracts-archive/departments', { errorMessage: '获取部门列表失败' })
 }
 
-/** 导出补扫清单（未归档合同，按部门分组） */
+/** 档案库筛选项：有合同的部门 + 员工学历取值（按数据范围） */
+export async function fetchContractArchiveFilterOptions(): Promise<{ data: { departments: string[]; education: string[] } }> {
+  return fetchHrApi('/hr/labor-contracts-archive/filter-options', { errorMessage: '获取筛选项失败' })
+}
+
+/** 导出补扫清单（未归档合同，按部门分组；可按学历，如先补本科及以上） */
 export async function exportUnarchivedContracts(
-  department?: string
+  department?: string,
+  education?: string
 ): Promise<{ base64: string; filename: string | null }> {
-  const qs = department ? `?department=${encodeURIComponent(department)}` : ''
-  return fetchHrDownload(`/hr/labor-contracts-archive/export-unarchived${qs}`, {
+  const qs = new URLSearchParams()
+  if (department) qs.set('department', department)
+  if (education) qs.set('education', education)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return fetchHrDownload(`/hr/labor-contracts-archive/export-unarchived${suffix}`, {
     errorMessage: '导出补扫清单失败',
   })
 }
@@ -81,15 +91,17 @@ export async function fetchContractArchiveVersions(contractId: string): Promise<
   })
 }
 
-/** 上传合同扫描件（已有扫描件则升为新版本，旧版保留） */
+/** 上传合同扫描件（已有扫描件则升为新版本，旧版保留）。换传时 reason 必填（后端 422 拦截） */
 export async function uploadContractArchive(
   contractId: string,
   file: File,
-  remark?: string
+  remark?: string,
+  reason?: string
 ): Promise<ArchiveMutation> {
   const fd = new FormData()
   fd.append('file', file)
   if (remark?.trim()) fd.append('remark', remark.trim())
+  if (reason?.trim()) fd.append('reason', reason.trim())
   return fetchHrApi(`/hr/labor-contracts/${contractId}/archive`, {
     method: 'POST',
     body: fd,

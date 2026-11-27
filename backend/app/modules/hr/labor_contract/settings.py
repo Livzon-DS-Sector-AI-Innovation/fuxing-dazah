@@ -8,8 +8,10 @@
 - hr_contract.renewal_approval_code       飞书原生审批定义编码。
   为空时部门审批自动降级为站内台账勾选（无需审批定义即可上线）。
 - hr_contract.hr_copy_open_ids            HR 抄送接收人（姓名或 open_id，逗号分隔）。
-- hr_contract.sign_page_base_url          员工线上签字 H5 页基地址（如 https://host/api/contract-sign）。
-- hr_contract.contact_info                通知卡片中的联系人文案，缺省「人力资源部」。
+- hr_contract.contact_info                通知卡片中的联系部门文案，缺省「人力资源部」。
+- hr_contract.contact_name                通知卡片中的联系人姓名（如「王琳」），缺省空：
+  为空时文案沿用原写法（只写联系部门）。
+- hr_contract.required_materials          续签需携带的材料文案，缺省空：为空时续签通知里不出现这一句。
 - hr_contract.archive_reminder_enabled    归档缺失周提醒开关，缺省 true（每周一汇总未归档合同给 HR）。
 - hr_contract.archive_reminder_open_ids   归档提醒接收人（姓名或 open_id，逗号分隔）；
   未配置时沿用 hr_copy_open_ids，两者都为空则不发。
@@ -31,8 +33,9 @@ KEY_PIPELINE_ENABLED = "hr_contract.renewal_pipeline_enabled"
 KEY_DAYS_AHEAD = "hr_contract.announcement_days_ahead"
 KEY_APPROVAL_CODE = "hr_contract.renewal_approval_code"
 KEY_HR_COPY_OPEN_IDS = "hr_contract.hr_copy_open_ids"
-KEY_SIGN_BASE_URL = "hr_contract.sign_page_base_url"
 KEY_CONTACT_INFO = "hr_contract.contact_info"
+KEY_CONTACT_NAME = "hr_contract.contact_name"
+KEY_REQUIRED_MATERIALS = "hr_contract.required_materials"
 KEY_ARCHIVE_REMINDER_ENABLED = "hr_contract.archive_reminder_enabled"
 KEY_ARCHIVE_REMINDER_OPEN_IDS = "hr_contract.archive_reminder_open_ids"
 KEY_DEPT_HEAD_NOTICE_ENABLED = "hr_contract.dept_head_notice_enabled"
@@ -45,8 +48,9 @@ _SETTING_KEYS = (
     KEY_DAYS_AHEAD,
     KEY_APPROVAL_CODE,
     KEY_HR_COPY_OPEN_IDS,
-    KEY_SIGN_BASE_URL,
     KEY_CONTACT_INFO,
+    KEY_CONTACT_NAME,
+    KEY_REQUIRED_MATERIALS,
     KEY_ARCHIVE_REMINDER_ENABLED,
     KEY_ARCHIVE_REMINDER_OPEN_IDS,
     KEY_DEPT_HEAD_NOTICE_ENABLED,
@@ -80,6 +84,16 @@ def approval_code(settings: dict[str, str]) -> str:
 
 def contact_info(settings: dict[str, str]) -> str:
     return settings.get(KEY_CONTACT_INFO, "").strip() or DEFAULT_CONTACT_INFO
+
+
+def contact_name(settings: dict[str, str]) -> str:
+    """通知文案里的联系人姓名（如「王琳」）；未配置返回空串，文案回退只写联系部门。"""
+    return settings.get(KEY_CONTACT_NAME, "").strip()
+
+
+def required_materials(settings: dict[str, str]) -> str:
+    """续签需携带的材料文案；未配置返回空串，续签通知里不出现这一句。"""
+    return settings.get(KEY_REQUIRED_MATERIALS, "").strip()
 
 
 def archive_reminder_enabled(settings: dict[str, str]) -> bool:

@@ -161,13 +161,20 @@ async def test_upload_versions_file_and_access_log(db_session, client):
         stored = await repo.list_versions(db_session, contract.id)
         assert re.fullmatch(r"contracts/[0-9a-f-]{36}/[0-9a-f]{32}\.png", stored[0].storage_key)
 
+        # 已有当前版本再上传 = 换传：必须写明原因，原因存到新版本行上
         res = await client.post(
             f"{base}/archive", files={"file": ("第二版.pdf", PDF, "application/pdf")},
+        )
+        assert res.status_code == 422 and "原因" in res.json()["message"]
+        res = await client.post(
+            f"{base}/archive", files={"file": ("第二版.pdf", PDF, "application/pdf")},
+            data={"reason": "重扫：补签字页"},
         )
         assert res.status_code == 200, res.text
         versions = res.json()["data"]["versions"]
         assert [v["version_no"] for v in versions] == [2, 1]  # 旧版保留可查
         assert [v["is_current"] for v in versions] == [True, False]
+        assert (versions[0]["reason"], versions[1]["reason"]) == ("重扫：补签字页", None)
 
         # 原件预览 / 下载：内容原样返回，文件名按需求规则
         old_file = f"{base}/archive/{versions[1]['id']}/file"
@@ -392,14 +399,16 @@ async def test_archive_library_list_stats_and_export(db_session, client):
         assert stats["in_service_archived"] >= 1
         assert stats["can_archive"] is True  # 全量范围：前端据此显示批量挂接等 HR 入口
 
-        # 补扫清单：未归档合同按部门分组导出，表头与归档规则一致
+        # 补扫清单：未归档合同按部门分组导出，表头与归档规则一致（学历列取员工档案）
         res = await client.get(f"{API}/labor-contracts-archive/export-unarchived")
         assert res.status_code == 200
         assert "spreadsheetml" in res.headers["content-type"]
         ws = load_workbook(io.BytesIO(res.content)).active
         assert [c.value for c in ws[1]] == archive_service.UNARCHIVED_EXPORT_HEADERS
         rows = [[c.value for c in row] for row in ws.iter_rows(min_row=2)]
-        hit = next(r for r in rows if r[1] == employee.employee_number and r[4] == "第二次续签")
+        hit = next(r for r in rows if r[1] == employee.employee_number and r[5] == "第二次续签")
+        assert not hit[4]  # 该员工档案未填学历
+        # 补扫清单去掉了「签字确认时间」列：领取时间之后直接是人员状态、合同状态
         assert hit[11] == "在职" and hit[12] == "生效中"
 
         res = await client.get(f"{API}/labor-contracts/by-employee/{employee.employee_number}")
@@ -533,13 +542,14 @@ async def test_batch_import_precheck_and_commit(db_session, client):
         versions = await repo.list_versions(db_session, second.id)
         assert len(versions) == 1 and versions[0].source == ContractArchiveVersion.SOURCE_BATCH
 
-        # 同一份合同一批只能挂一个文件：第一个成功升版，第二个被拒
+        # 同一份合同一批只能挂一个文件：第一个成功升版（换传须写原因），第二个被拒
         restaged = f"{archive_batch_import.STAGING_PREFIX}test/{uuid4().hex}.pdf"
         store_object(archive_service.MODULE, restaged, PDF, "application/pdf")
         res = await client.post(
             f"{API}/labor-contracts-archive/batch-import/commit",
             json={"rows": [
-                {"storage_key": restaged, "filename": "a.pdf", "contract_id": str(second.id)},
+                {"storage_key": restaged, "filename": "a.pdf", "contract_id": str(second.id),
+                 "reason": "重扫"},
                 {"storage_key": restaged, "filename": "b.pdf", "contract_id": str(second.id)},
             ]},
         )
@@ -585,8 +595,8 @@ async def test_batch_import_rejects_bad_zip_and_bad_manifest(db_session, client)
 
 @pytest.mark.asyncio
 async def test_reconcile_departed_contracts_excludes_them_from_renewal_scan(db_session):
-    """预警排除验证：离职日期已到的人员，其生效合同归入离职台账，不再出现在到期扫描里；
-    离职日期未到（办理中）的不动。"""
+    """预警排除验证：离职日期已到的人员，其生效合同归入离职台账（terminated）；
+    离职日期未到（办理中）的合同状态不动。两种人的合同都不再出现在到期扫描里。"""
     soon = date.today() + timedelta(days=10)
     leaving = await _employee(db_session)
     leaving_contract = await _contract(db_session, leaving, end_date=soon)
@@ -613,9 +623,10 @@ async def test_reconcile_departed_contracts_excludes_them_from_renewal_scan(db_s
             c.id for c in await service.find_expiring_active(db_session, days_ahead=50)
         }
 
-    assert await scanned(leaving_contract.id)
+    # 台账里登记了将要离职（离职日期 ≥ 今天）的人，扫描前就不再进入公告期
+    assert not await scanned(leaving_contract.id)
     assert await scanned(staying_contract.id)
-    assert await scanned(clearance_contract.id)
+    assert not await scanned(clearance_contract.id)
 
     reconciled = await departure_service.reconcile_departed_contracts(db_session)
 
@@ -628,7 +639,7 @@ async def test_reconcile_departed_contracts_excludes_them_from_renewal_scan(db_s
 
     assert not await scanned(leaving_contract.id)
     assert await scanned(staying_contract.id)
-    assert await scanned(clearance_contract.id)
+    assert not await scanned(clearance_contract.id)
     # 幂等：再跑一次没有可归入的合同
     assert await departure_service.reconcile_departed_contracts(db_session) == []
 

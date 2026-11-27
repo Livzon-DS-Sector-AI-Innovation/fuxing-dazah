@@ -1,16 +1,19 @@
 'use client'
 
-// 核对并开具解除劳动关系证明（第 4 步）。两种模板对应两种签收方式：
-//   电子单张版 → PDF 邮件送达 + 一次性签署链接，员工在 H5 手写签名；
-//   纸质两联版 → 打印后交员工当面签字，下一步登记签收。
+// 核对并开具解除劳动关系证明（第 4 步）。两种模板只差版式，签收方式相同：
+//   电子单张版 → 单张 PDF，可邮件发给员工；
+//   纸质两联版 → 含员工签收栏，打印后交员工当面签字。
+// 系统只部署在公司内网，员工在手机上打不开任何指向本系统的链接，所以没有「线上签收」：
+// 员工到人事办公室时在公司电脑上手写签名，或在纸质件上签字后登记。
 // 证明里的姓名 / 身份证号 / 入职日期自档案带出，开具前必须能预览核对。
 
 import { useState } from 'react'
-import { Alert, App as AntdApp, Button, Descriptions, Input, Popconfirm, Segmented, Space } from 'antd'
+import { Alert, App as AntdApp, Button, Descriptions, Input, Modal, Popconfirm, Segmented, Space } from 'antd'
 import { EyeOutlined, PrinterOutlined } from '@ant-design/icons'
-import type { OffboardingCaseDetail, OffboardingCaseDeliveryResponse } from '@/types/hr'
+import type { OffboardingCase, OffboardingCaseDetail } from '@/types/hr'
 import { issueOffboardingCertificate, previewOffboardingCertificate } from '@/actions/hr'
 import CasePanel from './CasePanel'
+import CertificateFrame, { A4_HEIGHT } from './CertificateFrame'
 
 type Template = 'electronic' | 'paper'
 
@@ -22,28 +25,32 @@ export default function CertIssuePanel({
   detail: OffboardingCaseDetail
   /** 开具成功后刷新详情 */
   onChanged: () => Promise<void>
-  /** 开具成功：把响应交回抽屉（带签署链接时直接弹链接窗，趁热交给 HR） */
-  onIssued: (data: OffboardingCaseDeliveryResponse) => void
+  /** 开具成功：把响应交回抽屉；没办成的事（邮件失败等）由抽屉留在下一步的交付面板里提醒 */
+  onIssued: (data: OffboardingCase, notes: string[]) => void
 }) {
   const { message } = AntdApp.useApp()
   const [template, setTemplate] = useState<Template>('electronic')
   const [mailRecipient, setMailRecipient] = useState('')
   const [busy, setBusy] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [previewing, setPreviewing] = useState(false)
 
   const preview = async () => {
-    // 先同步开窗再取数：await 之后的 window.open 不算用户手势，会被浏览器拦截
-    const win = window.open('', '_blank')
-    if (!win) {
-      message.warning('浏览器拦截了预览窗口，请允许本站弹出窗口后重试')
-      return
-    }
+    setPreviewing(true)
     try {
-      win.document.write(await previewOffboardingCertificate(detail.id, template))
-      win.document.close()
+      // 页内弹窗预览，不开新窗口：浏览器普遍拦弹窗，不熟的同事不知道怎么放行
+      setPreviewHtml(await previewOffboardingCertificate(detail.id, template))
     } catch (err) {
-      win.close()
       message.error(err instanceof Error ? err.message : '预览失败')
+    } finally {
+      setPreviewing(false)
     }
+  }
+
+  /** 预览窗里直接开具：看过全文再点的「确认无误」，不再叠一层确认 */
+  const issueFromPreview = () => {
+    setPreviewHtml(null)
+    void issue()
   }
 
   const issue = async () => {
@@ -58,11 +65,11 @@ export default function CertIssuePanel({
         cert_template: template,
         mail_recipient: recipient || undefined,
       })
-      // 后端把提示（没填邮箱 / 邮件失败 / 没配签字页地址）拼在 message 的分号后面
-      const [head, ...rest] = (res.message || '').split('；')
-      if (rest.length) message.warning(`${head}；${rest.join('；')}`, 8)
-      else message.success(head || '证明已开具')
-      onIssued(res.data)
+      // 后端把没办成的事（邮件失败 / 没配签字页地址等）拼在 message 的分号后面：
+      // 这里只报「已开具」，缘由逐条留在下一步的送达面板里，免得轻提示一闪而过没人看清
+      const [head, ...notes] = (res.message || '').split('；')
+      message.success(head || '证明已开具')
+      onIssued(res.data, notes)
       await onChanged()
     } catch (err) {
       message.error(err instanceof Error ? err.message : '开具证明失败')
@@ -97,14 +104,14 @@ export default function CertIssuePanel({
           value={template}
           onChange={(v) => setTemplate(v as Template)}
           options={[
-            { value: 'electronic', label: '电子单张版（线上签收）', icon: <EyeOutlined /> },
-            { value: 'paper', label: '纸质两联版（当面签收）', icon: <PrinterOutlined /> },
+            { value: 'electronic', label: '电子单张版（可发邮件）', icon: <EyeOutlined /> },
+            { value: 'paper', label: '纸质两联版（含签收栏）', icon: <PrinterOutlined /> },
           ]}
         />
         <p className="m-0 text-[12px] leading-[1.5] text-[var(--color-slate)]">
           {template === 'electronic'
-            ? '开具后进入送达环节：证明 PDF 与签署链接发到员工邮箱（也可不开邮件，稍后复制签署链接转发），员工打开链接手写签名确认。'
-            : '开具后进入送达环节：打印两联交员工当面签字，公司留存联归档、员工留存联交员工，然后登记当面签收。'}
+            ? '单张 PDF。可邮件发给员工；员工到人事办公室时在这台电脑上手写签名，或打印后签字登记。'
+            : '打印两联交员工在签收栏当面签字：公司留存联归档、员工留存联交员工，然后登记签收。'}
         </p>
       </div>
 
@@ -127,12 +134,12 @@ export default function CertIssuePanel({
       <Alert type="info" showIcon title="开具后证明文件即归档，内容不可再修改；如需更正请先取消本次办理后重新发起。" />
 
       <Space wrap>
-        <Button icon={<EyeOutlined />} onClick={() => void preview()}>
+        <Button icon={<EyeOutlined />} loading={previewing} onClick={() => void preview()}>
           预览证明
         </Button>
         <Popconfirm
           title="确认开具证明？"
-          description="开具后进入送达环节，证明 PDF 归档。"
+          description="还没预览的话建议先预览核对一遍。开具后进入送达环节，证明 PDF 归档。"
           okText="开具"
           cancelText="再核对一下"
           onConfirm={() => void issue()}
@@ -143,6 +150,30 @@ export default function CertIssuePanel({
           </Button>
         </Popconfirm>
       </Space>
+
+      <Modal
+        open={previewHtml !== null}
+        onCancel={() => setPreviewHtml(null)}
+        title="证明预览 · 开具前核对"
+        width={856}
+        // antd v6：内容盒的语义键是 container（v5 叫 content）；留出 794px 纸面 + 竖滚动条的宽度
+        styles={{ container: { padding: '16px 16px 12px' }, body: { padding: 0 } }}
+        footer={[
+          <Button key="close" onClick={() => setPreviewHtml(null)}>关闭</Button>,
+          <Button key="issue" type="primary" loading={busy} onClick={issueFromPreview}>
+            确认无误，开具证明
+          </Button>,
+        ]}
+      >
+        <p className="m-0 mb-2 text-[12px] leading-[1.6] text-[var(--color-slate)]">
+          下方就是将要开具的证明{template === 'paper' ? '（两联）' : ''}。内容有误请先关闭本窗口，取消本次办理、更正档案后重新发起。
+        </p>
+        <CertificateFrame
+          html={previewHtml || ''}
+          height={template === 'paper' ? 2 * A4_HEIGHT : A4_HEIGHT}
+          viewportHeight="68vh"
+        />
+      </Modal>
     </CasePanel>
   )
 }

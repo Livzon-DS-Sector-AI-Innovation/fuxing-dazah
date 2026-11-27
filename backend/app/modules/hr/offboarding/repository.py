@@ -8,10 +8,15 @@ from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.hr.models import DepartureRecord, Employee, HrDepartment
+from app.modules.hr.models import (
+    DepartureRecord,
+    Employee,
+    HrDepartment,
+    OnboardingRecord,
+)
 from app.modules.hr.offboarding.models import (
     DepartureSavedView,
     HrExportLog,
@@ -153,6 +158,19 @@ async def list_pending_approval_sync(db: AsyncSession) -> list[OffboardingCase]:
     )).scalars().all())
 
 
+async def list_deferred_clearance(db: AsyncSession, *, today: date) -> list[OffboardingCase]:
+    """挂起待发起的清退交接：清退阶段、还没实例码、已到建议发起日（离职日前 OVERDUE_DUE_DAYS 天）。"""
+    return list((await db.execute(
+        select(OffboardingCase).where(
+            OffboardingCase.is_deleted.is_(False),
+            OffboardingCase.status == OffboardingCase.STATUS_CLEARING,
+            OffboardingCase.clearance_pending.is_(True),
+            OffboardingCase.clearance_instance_code.is_(None),
+            OffboardingCase.offboarding_date <= today + timedelta(days=OVERDUE_DUE_DAYS),
+        )
+    )).scalars().all())
+
+
 async def next_case_no(db: AsyncSession, today: date) -> str:
     """当日序号取最大值 +1：LB-YYYYMMDD-0001。
 
@@ -176,6 +194,14 @@ async def next_case_no(db: AsyncSession, today: date) -> str:
 async def get_employee(db: AsyncSession, employee_id: UUID) -> Employee | None:
     return (await db.execute(
         select(Employee).where(Employee.id == employee_id, Employee.is_deleted.is_(False))
+    )).scalars().first()
+
+
+async def get_employee_including_deleted(db: AsyncSession, employee_id: UUID) -> Employee | None:
+    """含软删行：人一进飞书离职表就会从员工表移走、档案被同步软删，
+    从离职台账行发起办理时要能找回这条档案（建单需要它的 id）。"""
+    return (await db.execute(
+        select(Employee).where(Employee.id == employee_id)
     )).scalars().first()
 
 
@@ -249,31 +275,6 @@ async def get_departure_record(db: AsyncSession, record_id: UUID) -> DepartureRe
     )).scalars().first()
 
 
-async def find_record_by_sign_token(db: AsyncSession, token_hash: str) -> DepartureRecord | None:
-    """按签字 token 的 sha256 找台账行（免登签字入口，token 即凭证）。"""
-    return (await db.execute(
-        select(DepartureRecord).where(
-            DepartureRecord.cert_sign_token == token_hash,
-            DepartureRecord.is_deleted.is_(False),
-        )
-    )).scalars().first()
-
-
-async def latest_case_by_record(
-    db: AsyncSession, record_id: UUID, *, statuses: tuple[str, ...] | None = None,
-) -> OffboardingCase | None:
-    """台账行对应的最近一张办结单；statuses 限定状态（签字确认只认送达中的单）。"""
-    stmt = select(OffboardingCase).where(
-        OffboardingCase.departure_record_id == record_id,
-        OffboardingCase.is_deleted.is_(False),
-    )
-    if statuses:
-        stmt = stmt.where(OffboardingCase.status.in_(statuses))
-    return (await db.execute(
-        stmt.order_by(OffboardingCase.created_at.desc()).limit(1)
-    )).scalars().first()
-
-
 async def find_departure_record(
     db: AsyncSession, employee_number: str | None,
 ) -> DepartureRecord | None:
@@ -285,6 +286,49 @@ async def find_departure_record(
             DepartureRecord.is_deleted.is_(False),
         ).order_by(DepartureRecord.created_at.desc()).limit(1)
     )).scalars().first()
+
+
+async def list_editable_cases_by_record(db: AsyncSession, record_id: UUID) -> list[OffboardingCase]:
+    """挂在某台账行上、还能跟着台账改离职日期/类型的办结单（待发起审批 / 审批中）。"""
+    return list((await db.execute(
+        select(OffboardingCase).where(
+            OffboardingCase.departure_record_id == record_id,
+            OffboardingCase.is_deleted.is_(False),
+            OffboardingCase.status.in_((OffboardingCase.STATUS_DRAFT, OffboardingCase.STATUS_APPROVING)),
+        )
+    )).scalars().all())
+
+
+async def latest_case_by_employee_number(
+    db: AsyncSession, employee_number: str | None,
+) -> OffboardingCase | None:
+    """该工号最近的办结单：进行中的优先于已办结/已取消的（员工档案「离职材料」用）。"""
+    if not employee_number:
+        return None
+    in_progress = case(
+        (OffboardingCase.status.in_(ACTIVE_CASE_STATUSES), 0), else_=1,
+    )
+    return (await db.execute(
+        select(OffboardingCase).where(
+            OffboardingCase.employee_number == employee_number,
+            OffboardingCase.is_deleted.is_(False),
+        ).order_by(in_progress, OffboardingCase.created_at.desc()).limit(1)
+    )).scalars().first()
+
+
+async def find_employee_email(db: AsyncSession, employee_number: str | None) -> str | None:
+    """入职台账登记的本人邮箱（离职证明送达的缺省收件人）；没有返回 None。"""
+    if not employee_number:
+        return None
+    value = (await db.execute(
+        select(OnboardingRecord.email).where(
+            OnboardingRecord.employee_number == employee_number,
+            OnboardingRecord.is_deleted.is_(False),
+            OnboardingRecord.email.is_not(None),
+            OnboardingRecord.email != "",
+        ).order_by(OnboardingRecord.created_at.desc()).limit(1)
+    )).scalars().first()
+    return value.strip() if value and value.strip() else None
 
 
 # ─── 清退明细 ───

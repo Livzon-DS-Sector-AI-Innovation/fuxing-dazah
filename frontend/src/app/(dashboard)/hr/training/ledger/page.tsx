@@ -10,28 +10,6 @@ interface PageProps {
   }>
 }
 
-export async function generateMetadata({ searchParams }: PageProps) {
-  const params = await searchParams
-  const employeeNumber = params.employee_number
-
-  if (employeeNumber) {
-    try {
-      const res = await fetchEmployeeByNumberAction(employeeNumber)
-      if (res.data?.name) {
-        return {
-          title: `${res.data.name}培训台账`,
-        }
-      }
-    } catch {
-      // fallback to default title
-    }
-  }
-
-  return {
-    title: '培训台账',
-  }
-}
-
 export default async function TrainingLedgerPage({ searchParams }: PageProps) {
   const params = await searchParams
   const employeeNumber = params.employee_number

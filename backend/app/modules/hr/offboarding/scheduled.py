@@ -35,17 +35,19 @@ CLEARANCE_DUE_REMIND_TIME_OF_DAY = "09:30"
 # ─── 审批编排：结果轮询 ───
 
 async def run_approval_sync() -> None:
-    """每 15 分钟：轮询回写离职审批/清退会签结果（幂等），办结自动推进。"""
+    """每 15 分钟：轮询回写离职审批/清退会签结果（幂等），办结自动推进；
+    顺带把已到建议发起日（离职日前 2 天）仍挂起的清退交接发起出去。"""
     async with async_session_factory() as db:
         try:
             counts = await approval.sync_pending_results(db)
+            launched = await approval.initiate_deferred_clearance(db, today=date.today())
         except Exception as exc:  # 整轮失败只跳过本轮，下一轮重试
             logger.warning("离职审批轮询失败（本轮跳过）: %s", exc)
             await db.rollback()
             return
-        if any(counts.values()):
+        if any(counts.values()) or launched:
             await db.commit()
-            logger.info("离职审批结果回写: %s", counts)
+            logger.info("离职审批结果回写: %s，到期自动发起清退交接 %d 单", counts, launched)
         else:
             await db.rollback()
 

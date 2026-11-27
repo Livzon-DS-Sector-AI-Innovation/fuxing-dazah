@@ -70,11 +70,8 @@ async def _seed_ledger(db: AsyncSession) -> dict[str, str]:
         {"category": "finance", "item_name": "电脑", "status": "confirmed"},
     ])
     case = await service.manual_stage_done(db, case, stage="clearing")
-    await _set_settings(db, **{"hr_offboarding.sign_page_base_url": case_tests.SIGN_BASE})
-    _case, _note, sign_url = await service.issue_certificate(db, case, issued_by="HR乙")
-    await service.confirm_sign_by_token(
-        db, sign_url.split("token=")[1], signature=case_tests.PNG_SIGNATURE,
-    )
+    case, _note = await service.issue_certificate(db, case, issued_by="HR乙")
+    await service.register_signature(db, case, signature=case_tests.PNG_SIGNATURE)
 
     name_b, name_c = f"线下乙{_rand()}", f"线下丙{_rand()}"
     db.add_all([

@@ -464,6 +464,317 @@ def test_print_copy_leaves_documents_without_line_grid_alone() -> None:
     assert '<w:docGrid w:linePitch="360"/>' in zip_contents(copied, "word/document.xml")
 
 
+# ─────────────────────── 打印副本：固定行高的字顶 ───────────────────────
+
+_TITLE = "检验报告单"
+
+
+def _cjk_run(
+    text: str, half_points: str, before_size: str = "", after_size: str = ""
+) -> str:
+    """一个黑体粗体 run；before_size / after_size 是要排在字号前 / 后面的属性。"""
+    return (
+        f'<w:r><w:rPr><w:rFonts w:eastAsia="黑体"/><w:b/>{before_size}'
+        f'<w:sz w:val="{half_points}"/>{after_size}</w:rPr><w:t>{text}</w:t></w:r>'
+    )
+
+
+def _docx_with_lines(blocks: list[str], header_block: str | None = None) -> bytes:
+    """往模板正文末尾放一批段落（blocks 是 <w:p> 片段）；header_block 放进页眉。"""
+    source = zipfile.ZipFile(io.BytesIO(build_template()))
+    root = parse_xml(source.read("word/document.xml"))
+    sect = root.find(qn("w:body")).find(qn("w:sectPr"))
+    for block in blocks:
+        sect.addprevious(_fragment(block))
+    header = None
+    if header_block is not None:
+        header = ("word/header1.xml", parse_xml(source.read("word/header1.xml")))
+        header[1].append(_fragment(header_block))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename == "word/document.xml":
+                payload = serialize_part_xml(root)
+            elif header is not None and info.filename == header[0]:
+                payload = serialize_part_xml(header[1])
+            target.writestr(info, payload)
+    return out.getvalue()
+
+
+def _fixed_lines(
+    docx: bytes, part: str = "word/document.xml"
+) -> dict[str, dict[str, Any]]:
+    """文字 → 段落自己的行距、段距，以及每个有字的 run 的 (上下移量, 上下标)。"""
+    out: dict[str, dict[str, Any]] = {}
+    root = parse_xml(zipfile.ZipFile(io.BytesIO(docx)).read(part))
+    for para in root.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in para.iter(qn("w:t")))
+        if not text:
+            continue
+        ppr = para.find(qn("w:pPr"))
+        spacing = ppr.find(qn("w:spacing")) if ppr is not None else None
+        runs = []
+        for run in para.iter(qn("w:r")):
+            if not any((t.text or "").strip() for t in run.iter(qn("w:t"))):
+                continue
+            rpr = run.find(qn("w:rPr"))
+            found = (
+                rpr.findall(qn("w:position")) + rpr.findall(qn("w:vertAlign"))
+                if rpr is not None
+                else []
+            )
+            runs.append(
+                (found[0].get(qn("w:val")), str(found[0].tag).split("}")[-1])
+                if found
+                else (None, None)
+            )
+        out[text] = {
+            "spacing": {
+                key.split("}")[-1]: value for key, value in spacing.attrib.items()
+            }
+            if spacing is not None
+            else {},
+            "runs": runs,
+        }
+    return out
+
+
+def test_print_copy_grows_title_line_with_its_own_spacing() -> None:
+    """16 磅黑体配 16 磅固定行高：行框加高 1.4 磅、等量扣段前距，文字不动。"""
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="320" w:before="78" w:after="0"/>',
+                _cjk_run(_TITLE, "32"),
+            )
+        ]
+    )
+    line = _fixed_lines(template_pdf.print_copy(docx))[_TITLE]
+    assert line["spacing"] == {
+        "lineRule": "exact",
+        "line": "348",
+        "before": "50",
+        "after": "0",
+    }
+    assert line["runs"] == [(None, None)]
+
+
+def test_print_copy_lowers_text_when_spacing_falls_short() -> None:
+    """14 磅字挤在 12 磅行高里：段前距只能借到剩 1 磅，还差的一点靠下移补上。"""
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="240" w:before="78" w:after="0"/>',
+                _cjk_run(_TITLE, "28"),
+            )
+        ]
+    )
+    line = _fixed_lines(template_pdf.print_copy(docx))[_TITLE]
+    assert line["spacing"] == {
+        "lineRule": "exact",
+        "line": "298",
+        "before": "20",
+        "after": "0",
+    }
+    assert line["runs"] == [("-1", "position")]
+
+
+def test_print_copy_leaves_lines_that_are_not_visibly_clipped_alone() -> None:
+    """9 磅字配 9 磅行高只被削 0.6 磅、拉丁字母行不会被削、不是固定行距的：都不动。"""
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="180" w:before="78"/>',
+                _cjk_run("品名批号", "18"),
+            ),
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="320"/>',
+                '<w:r><w:rPr><w:sz w:val="32"/></w:rPr><w:t>CERTIFICATE OF ANALYSIS</w:t></w:r>',
+            ),
+            _para_xml("", _cjk_run(_TITLE, "32")),
+        ]
+    )
+    copied = template_pdf.print_copy(docx)
+    assert _fixed_lines(copied) == _fixed_lines(docx)
+
+
+def test_print_copy_does_not_borrow_spacing_it_cannot_spare() -> None:
+    """表格里的段落、会折行的长段落、开着自动段距的段落都借不了段距：行高不动，只把文字下移。"""
+    docx = _docx_with_lines(
+        [
+            "<w:tbl><w:tr><w:tc><w:tcPr/>"
+            + _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="200" w:before="156"/>',
+                _cjk_run("日期", "21"),
+            )
+            + "</w:tc></w:tr></w:tbl>",
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="320" w:before="78"/>',
+                _cjk_run("字" * 200, "32"),
+            ),
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="320" w:beforeAutospacing="1" w:before="78"/>',
+                _cjk_run(_TITLE, "32"),
+            ),
+        ]
+    )
+    lines = _fixed_lines(template_pdf.print_copy(docx))
+    # 表格里：行高段距原样，下移一档（只够补一部分，但不会让字底出框）
+    assert lines["日期"]["spacing"] == {
+        "lineRule": "exact",
+        "line": "200",
+        "before": "156",
+    }
+    assert lines["日期"]["runs"] == [("-1", "position")]
+    # 长段落：行高段距原样，下移到刚好够
+    assert lines["字" * 200]["spacing"] == {
+        "lineRule": "exact",
+        "line": "320",
+        "before": "78",
+    }
+    assert lines["字" * 200]["runs"] == [("-2", "position")]
+    # 自动段距：LibreOffice 不看 before，行高原样，只下移
+    assert lines[_TITLE]["spacing"] == {
+        "lineRule": "exact",
+        "line": "320",
+        "beforeAutospacing": "1",
+        "before": "78",
+    }
+    assert lines[_TITLE]["runs"] == [("-2", "position")]
+
+
+def test_print_copy_borrows_before_spacing_next_to_line_unit_attributes() -> None:
+    """WPS 存的模板会同时写 beforeLines / beforeAutospacing="0"：LibreOffice 只认 before，照常借段前距。"""
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:before="78" w:beforeLines="25" w:beforeAutospacing="0" '
+                'w:after="0" w:line="240" w:lineRule="exact"/>',
+                _cjk_run(_TITLE, "28"),
+            )
+        ]
+    )
+    line = _fixed_lines(template_pdf.print_copy(docx))[_TITLE]
+    assert line["spacing"] == {
+        "before": "20",
+        "beforeLines": "25",
+        "beforeAutospacing": "0",
+        "after": "0",
+        "line": "298",
+        "lineRule": "exact",
+    }
+    assert line["runs"] == [("-1", "position")]
+
+
+def test_print_copy_does_not_push_deep_glyphs_out_of_the_line() -> None:
+    """带全角逗号、括号和下伸字母的行往下挪会让字底出框：借不到段距时宁可不挪。"""
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="320" w:before="0" w:after="0"/>',
+                _cjk_run("检验，报告单", "32"),
+            ),
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="320" w:before="0" w:after="0"/>',
+                _cjk_run("报告单(g)", "32"),
+            ),
+        ]
+    )
+    copied = template_pdf.print_copy(docx)
+    assert _fixed_lines(copied) == _fixed_lines(docx)
+
+
+def test_print_copy_grows_line_for_deep_glyphs_when_spacing_allows() -> None:
+    """签字行（10.5 磅字挤在 10 磅行高里、带括号）：行框加高到字顶字底都放得下，从段前距里扣。"""
+    text = "起草(QC):  审核（RA）："
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="200" w:before="156" w:after="0"/>',
+                _cjk_run(text, "21"),
+            )
+        ]
+    )
+    line = _fixed_lines(template_pdf.print_copy(docx))[text]
+    assert line["spacing"] == {
+        "lineRule": "exact",
+        "line": "243",
+        "before": "113",
+        "after": "0",
+    }
+    assert line["runs"] == [(None, None)]
+
+
+def test_print_copy_sizes_a_line_by_the_runs_that_paint_text() -> None:
+    """段落里混着一个 1 磅的空白 run：字号按真正有字的 run 沿样式链求，不被它带偏。"""
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="200" w:before="78" w:after="0"/>',
+                '<w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>'
+                + "<w:r><w:t>品</w:t></w:r><w:r><w:t>名</w:t></w:r>",
+            )
+        ]
+    )
+    line = _fixed_lines(template_pdf.print_copy(docx))[" 品名"]
+    # 现搭模板默认 11 磅：字顶放得下要 239 缇的行高，从段前距里扣
+    assert line["spacing"] == {
+        "lineRule": "exact",
+        "line": "239",
+        "before": "39",
+        "after": "0",
+    }
+    assert line["runs"] == [(None, None), (None, None)]
+
+
+def test_print_copy_lowers_runs_on_top_of_existing_offset_and_skips_scripts() -> None:
+    """已有的上下移量上叠加；上下标不跟着动。"""
+    docx = _docx_with_lines(
+        [
+            _para_xml(
+                '<w:spacing w:lineRule="exact" w:line="320" w:before="0" w:after="0"/>',
+                _cjk_run("检", "32")
+                + _cjk_run("验", "32", before_size='<w:position w:val="4"/>')
+                + _cjk_run("报", "32", after_size='<w:vertAlign w:val="superscript"/>'),
+            )
+        ]
+    )
+    lines = _fixed_lines(template_pdf.print_copy(docx))
+    assert lines["检验报"]["runs"] == [
+        ("-2", "position"),
+        ("2", "position"),
+        ("superscript", "vertAlign"),
+    ]
+
+
+def test_print_copy_fits_fixed_lines_in_headers_too() -> None:
+    """标题在页眉里的模板：页眉部件同样处理，正文不动。"""
+    docx = _docx_with_lines(
+        [],
+        header_block=_para_xml(
+            '<w:spacing w:lineRule="exact" w:line="320" w:before="78"/>',
+            _cjk_run(_TITLE, "32"),
+        ),
+    )
+    copied = template_pdf.print_copy(docx)
+    line = _fixed_lines(copied, "word/header1.xml")[_TITLE]
+    # 段后距没动：不把样式里的值抄成显式属性
+    assert line["spacing"] == {"lineRule": "exact", "line": "348", "before": "50"}
+    assert zip_contents(copied, "word/document.xml") == zip_contents(
+        docx, "word/document.xml"
+    )
+
+
+@pytest.mark.parametrize(
+    ("step", "size", "twips"),
+    [(1, 320, 13), (2, 320, 27), (4, 320, 60), (3, 280, 44), (1, 180, 15)],
+)
+def test_lowering_follows_libreoffice(step: int, size: int, twips: int) -> None:
+    """w:position 的实际位移按 LibreOffice 的折算规则（本机 26.8 与镜像 25.2.3 实测一致）。"""
+    assert template_pdf._lowering(step, size) == twips
+
+
 def zip_contents(docx: bytes, name: str) -> str:
     return zipfile.ZipFile(io.BytesIO(docx)).read(name).decode("utf-8")
 

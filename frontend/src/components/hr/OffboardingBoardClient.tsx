@@ -1,12 +1,12 @@
 'use client'
 
-// 离职办理看板：办结单列表 + 发起入口 + 办理抽屉。
-// 与「离职台账」页签并列——台账是结果数据，这里是过程流水线。
-// 页头统计可以直接点：点到哪个阶段，列表就筛到哪个阶段（临期同理）。
+// 离职办理：办结单列表 + 发起入口 + 办理抽屉。日常办事在这里——台账是结果数据，这里是过程。
+// 页头环节卡可以直接点：点到哪个环节，列表就筛到哪个环节（临期同理）；
+// 每行的「下一步」说明现在轮到谁做什么，不熟悉流程的人不用自己记顺序。
 
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Alert, Button, DatePicker, Input, Select, Space, Statistic, Table, Tag, Tooltip,
+  Alert, Button, DatePicker, Input, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined, SearchOutlined, WarningOutlined } from '@ant-design/icons'
@@ -15,10 +15,12 @@ import {
   fetchDepartmentsAction,
   fetchOffboardingCaseStats,
   fetchOffboardingCases,
+  queryDepartureLedger,
 } from '@/actions/hr'
 import { useDebouncedCallback, useHasPermission } from '@/hooks/hr'
 import {
   DEPARTURE_TYPE_TAG_COLORS,
+  NEXT_STEP_HINT,
   OFFBOARDING_STATUS_LABELS,
   OFFBOARDING_STATUS_TAG_COLORS,
 } from '@/lib/hr'
@@ -34,7 +36,32 @@ const STATUS_OPTIONS = (
 
 type Range = [Dayjs | null, Dayjs | null] | null
 
-export default function OffboardingBoardClient() {
+interface StageCard {
+  title: string
+  value: number
+  key: string
+  active: boolean
+  danger?: boolean
+  /** 这张卡对应的环节里，轮到谁做什么 */
+  hint: string
+  onClick: () => void
+}
+
+export default function OffboardingBoardClient({
+  initialCaseId = null,
+  initialStage = null,
+  onChanged,
+  onGoLedger,
+}: {
+  /** 进页面就直接打开的办理单（从别的页面跳转过来时带） */
+  initialCaseId?: string | null
+  /** 进页面就筛在某个环节：办理状态，或 'overdue' = 临期 / 超期（人事看板待办栏用） */
+  initialStage?: string | null
+  /** 办理推进之后通知外层（台账要跟着刷新） */
+  onChanged?: () => void
+  /** 切到「离职台账」页签去挑人 */
+  onGoLedger?: () => void
+}) {
   // 水合安全的权限判断：本页在 Suspense 边界内，直接读权限 store 首帧会与 SSR 输出对不上
   const canManage = useHasPermission('hr:departure:manage')
 
@@ -46,15 +73,19 @@ export default function OffboardingBoardClient() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keywordInput, setKeywordInput] = useState('')
   const [keyword, setKeyword] = useState('')
-  const [status, setStatus] = useState<OffboardingCaseStatus | ''>('')
-  const [overdueOnly, setOverdueOnly] = useState(false)
+  const [status, setStatus] = useState<OffboardingCaseStatus | ''>(
+    initialStage && initialStage !== 'overdue' ? (initialStage as OffboardingCaseStatus) : '',
+  )
+  const [overdueOnly, setOverdueOnly] = useState(initialStage === 'overdue')
   const [department, setDepartment] = useState('')
   const [range, setRange] = useState<Range>(null)
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [stats, setStats] = useState<OffboardingCaseStats | null>(null)
+  const [unstarted, setUnstarted] = useState<number | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
-  const [detailId, setDetailId] = useState<string | null>(null)
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  // 初值直接取跳转带来的单号：本页是默认页签、随外壳一起挂载，不需要再写 effect 去打开
+  const [detailId, setDetailId] = useState<string | null>(initialCaseId)
+  const [drawerOpen, setDrawerOpen] = useState(Boolean(initialCaseId))
   const load = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
@@ -99,6 +130,10 @@ export default function OffboardingBoardClient() {
       .catch(() => {})
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 同上：统计拉取后的写入在 await 之后
     void loadStats()
+    // 台账里还没发起办理的人数：给「从台账挑人发起」指路（拿不到就不显示）
+    queryDepartureLedger({ approval_status: 'none', page: 1, page_size: 1 })
+      .then((r) => setUnstarted(r.meta?.total ?? null))
+      .catch(() => setUnstarted(null))
   }, [loadStats])
 
   // 输入框即时回显；防抖 300ms 后才写入查询条件（此前每敲一个字发一次请求）
@@ -118,19 +153,18 @@ export default function OffboardingBoardClient() {
     setDrawerOpen(true)
   }
 
+  // 列宽只给窄列定死，其余自适应：办理页是日常入口，不该在常见屏宽下出横向滚动条
   const columns: ColumnsType<OffboardingCase> = [
-    { title: '申请编号', dataIndex: 'case_no', key: 'case_no', width: 150 },
+    { title: '申请编号', dataIndex: 'case_no', key: 'case_no' },
     {
       title: '员工',
       dataIndex: 'name',
       key: 'name',
-      width: 110,
-      fixed: 'left',
       render: (value: string, row) => (
         <Space size={4}>
           <span>{value}</span>
           {row.health_check_required && !row.health_check_done && (
-            <Tooltip title="重点岗位：离岗体检未登记，尚不能发起审批">
+            <Tooltip title="重点岗位：离岗体检未登记，尚不能提交审批">
               <WarningOutlined className="text-[var(--color-warning)]" aria-label="待完成离岗体检" />
             </Tooltip>
           )}
@@ -138,15 +172,15 @@ export default function OffboardingBoardClient() {
       ),
     },
     { title: '工号', dataIndex: 'employee_number', key: 'employee_number', width: 110 },
-    { title: '部门', dataIndex: 'department', key: 'department', width: 150 },
+    { title: '部门', dataIndex: 'department', key: 'department' },
     {
       title: '离职日期',
       dataIndex: 'offboarding_date',
       key: 'offboarding_date',
-      width: 140,
+      width: 120,
       render: (value: string, row) => {
         const until = daysUntil(value)
-        // 临期提示只对还在审批 / 清退里的单有意义：清退交接应于离职日前 2 天发起
+        // 临期提示只对还没走出审批 / 清退的单有意义：清退交接应于离职日前 2 天发起
         const inFlow = row.status === 'approving' || row.status === 'clearing' || row.status === 'draft'
         return (
           <div className="leading-[1.3]">
@@ -177,6 +211,19 @@ export default function OffboardingBoardClient() {
       ),
     },
     {
+      title: '下一步',
+      key: 'next',
+      render: (_value: unknown, row) => (
+        <span className={
+          row.status === 'closed' || row.status === 'canceled'
+            ? 'text-[var(--color-steel)]'
+            : 'text-[var(--color-ink)]'
+        }>
+          {NEXT_STEP_HINT[row.status]}
+        </span>
+      ),
+    },
+    {
       title: '证明',
       key: 'cert',
       width: 96,
@@ -187,41 +234,38 @@ export default function OffboardingBoardClient() {
       title: '操作',
       key: 'action',
       width: 80,
-      fixed: 'right',
       render: (_value: unknown, row) => (
         <Button type="link" size="small" onClick={(e) => { e.stopPropagation(); openDetail(row.id) }}>
-          办理
+          {row.status === 'closed' ? '查看' : '办理'}
         </Button>
       ),
     },
   ]
 
   const counts = stats?.counts || {}
-  const statItems: { title: string; value: number; key: string; active: boolean; danger?: boolean; onClick: () => void }[] = [
+  const stageCards: StageCard[] = [
     {
       title: '进行中',
       value: stats?.active || 0,
       key: 'active',
       active: !status && !overdueOnly,
+      hint: '全部还没办结的',
       onClick: () => pickStat({ status: '', overdue: false }),
     },
-    { title: '待发起审批', value: counts.draft || 0, key: 'draft', active: status === 'draft' && !overdueOnly, onClick: () => pickStat({ status: 'draft' }) },
-    { title: '离职审批中', value: counts.approving || 0, key: 'approving', active: status === 'approving' && !overdueOnly, onClick: () => pickStat({ status: 'approving' }) },
-    { title: '清退会签中', value: counts.clearing || 0, key: 'clearing', active: status === 'clearing' && !overdueOnly, onClick: () => pickStat({ status: 'clearing' }) },
-    { title: '待开具证明', value: counts.cert_issuing || 0, key: 'cert_issuing', active: status === 'cert_issuing' && !overdueOnly, onClick: () => pickStat({ status: 'cert_issuing' }) },
-    { title: '证明送达中', value: counts.delivering || 0, key: 'delivering', active: status === 'delivering' && !overdueOnly, onClick: () => pickStat({ status: 'delivering' }) },
-    { title: '待办结', value: counts.signed || 0, key: 'signed', active: status === 'signed' && !overdueOnly, onClick: () => pickStat({ status: 'signed' }) },
+    { title: '待提交审批', value: counts.draft || 0, key: 'draft', active: status === 'draft' && !overdueOnly, hint: 'HR：提交部门审批', onClick: () => pickStat({ status: 'draft' }) },
+    { title: '部门审批中', value: counts.approving || 0, key: 'approving', active: status === 'approving' && !overdueOnly, hint: '负责人审批；通过后 HR 登记', onClick: () => pickStat({ status: 'approving' }) },
+    { title: '清退会签中', value: counts.clearing || 0, key: 'clearing', active: status === 'clearing' && !overdueOnly, hint: '四部门清退；完成后 HR 登记', onClick: () => pickStat({ status: 'clearing' }) },
+    { title: '待开具证明', value: counts.cert_issuing || 0, key: 'cert_issuing', active: status === 'cert_issuing' && !overdueOnly, hint: 'HR：核对并开具证明', onClick: () => pickStat({ status: 'cert_issuing' }) },
+    { title: '证明送达中', value: counts.delivering || 0, key: 'delivering', active: status === 'delivering' && !overdueOnly, hint: 'HR：发给员工，等员工签字', onClick: () => pickStat({ status: 'delivering' }) },
+    { title: '待办结', value: counts.signed || 0, key: 'signed', active: status === 'signed' && !overdueOnly, hint: '员工已签字；HR 办结', onClick: () => pickStat({ status: 'signed' }) },
     {
       title: '临期 / 超期',
       value: stats?.overdue || 0,
       key: 'overdue',
       active: overdueOnly,
       danger: (stats?.overdue || 0) > 0,
-      onClick: () => {
-        setStatus('')
-        setOverdueOnly(true)
-        setPage(1)
-      },
+      hint: '距离职日不足 2 天还在审批 / 清退',
+      onClick: () => pickStat({ status: '', overdue: true }),
     },
   ]
 
@@ -229,32 +273,30 @@ export default function OffboardingBoardClient() {
     <div className="space-y-4">
       <PageHeader
         title="离职办理"
-        description="从发起到办结的全流程：离职审批 → 清退会签 → 开具证明 → 送达签收 → 办结，每个环节办结后自动推进到下一步。"
+        description="一个人一张办理单，从发起到办结：提交部门审批 → 部门审批 → 清退会签 → 开具证明 → 送达签收 → 员工签字 → 办结。"
       />
 
       <div className="flex flex-wrap gap-2">
-        {statItems.map((item) => (
+        {stageCards.map((item) => (
           <button
             key={item.key}
             type="button"
             onClick={item.onClick}
             aria-pressed={item.active}
+            title={item.hint}
             className={`rounded-[var(--rounded-lg)] border px-4 py-2 text-left transition-colors ${
               item.active
                 ? 'border-[var(--color-ink)] bg-[var(--color-surface)]'
-                : 'border-[var(--color-hairline)] bg-[var(--color-canvas)]'
+                : 'border-[var(--color-hairline)] bg-[var(--color-canvas)] hover:border-[var(--color-steel)]'
             }`}
           >
-            <Statistic
-              title={<span className="text-[12px] text-[var(--color-slate)]">{item.title}</span>}
-              value={item.value}
-              valueStyle={{
-                fontSize: 20,
-                lineHeight: 1.3,
-                fontWeight: 600,
-                color: item.danger ? 'var(--color-error)' : 'var(--color-ink)',
-              }}
-            />
+            <div className="text-[12px] text-[var(--color-slate)]">{item.title}</div>
+            <div
+              className="text-[20px] font-semibold leading-[1.3]"
+              style={{ color: item.danger ? 'var(--color-error)' : 'var(--color-ink)' }}
+            >
+              {item.value}
+            </div>
           </button>
         ))}
       </div>
@@ -263,6 +305,11 @@ export default function OffboardingBoardClient() {
         {canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
             发起离职办理
+          </Button>
+        )}
+        {canManage && onGoLedger && unstarted !== null && (
+          <Button onClick={onGoLedger}>
+            从离职台账挑人{unstarted > 0 ? `（${unstarted} 人还没发起）` : ''}
           </Button>
         )}
         <Input
@@ -309,7 +356,7 @@ export default function OffboardingBoardClient() {
           showIcon
           closable
           onClose={() => pickStat({ status: '', overdue: false })}
-          title="只看临期 / 超期：仍在离职审批或清退会签中，且距离离职日已不足 2 天（含已过）"
+          title="只看临期 / 超期：仍在部门审批或清退会签中，且距离职日已不足 2 天（含已过）"
         />
       )}
 
@@ -327,7 +374,29 @@ export default function OffboardingBoardClient() {
           showTotal: (t) => `共 ${t} 条`,
           onChange: (p, ps) => { setPage(p); setPageSize(ps) },
         }}
-        scroll={{ x: 1150 }}
+        locale={{
+          emptyText: (
+            <div className="space-y-3 py-6 text-center">
+              <Typography.Text className="text-[var(--color-slate)]">
+                {status || overdueOnly
+                  ? '这个环节下暂时没有办理单。'
+                  : '还没有离职办理单。要给某位员工办离职，从离职台账里找到这个人的那一行，点「发起办理」就能带出离职日期和类型。'}
+              </Typography.Text>
+              <div className="flex flex-wrap justify-center gap-2">
+                {!status && !overdueOnly && canManage && (
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                    按姓名 / 工号发起
+                  </Button>
+                )}
+                {onGoLedger && (
+                  <Button onClick={onGoLedger}>
+                    去离职台账挑人{unstarted && unstarted > 0 ? `（${unstarted} 人还没发起）` : ''}
+                  </Button>
+                )}
+              </div>
+            </div>
+          ),
+        }}
       />
 
       <OffboardingNewCaseModal
@@ -346,6 +415,7 @@ export default function OffboardingBoardClient() {
         onChanged={() => {
           void load()
           void loadStats()
+          onChanged?.()
         }}
       />
     </div>

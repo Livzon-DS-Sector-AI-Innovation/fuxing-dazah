@@ -83,6 +83,9 @@ export default function ContractArchivePanel({
   const [previewInfo, setPreviewInfo] = useState<{ url: string; type: string; name: string } | null>(null)
 
   const archived = archiveStatus === 'archived'
+  // 换传必须写原因（作废 / 重签的保留原版并注明）；首次上传的备注选填
+  const replacing = archived && versions.length > 0
+  const reasonMissing = replacing && !remark.trim()
 
   // 版本列表加载（挂载 / 切换合同）：setState 全部在 await 之后，不在 effect 里同步触发级联渲染
   useEffect(() => {
@@ -109,9 +112,10 @@ export default function ContractArchivePanel({
   const handleUpload = async () => {
     const file = fileList[0]?.originFileObj as File | undefined
     if (!file) { message.warning('请选择合同扫描件（图片/PDF）'); return }
+    if (reasonMissing) { message.warning('换传新版本请填写原因'); return }
     setUploading(true)
     try {
-      const r = await uploadContractArchive(contractId, file, remark)
+      const r = await uploadContractArchive(contractId, file, remark, replacing ? remark : undefined)
       message.success(r.message || '已归档')
       setVersions(r.data.versions)
       setUploadOpen(false)
@@ -187,7 +191,7 @@ export default function ContractArchivePanel({
 
       {!archived && (
         <div className="text-xs text-gray-500">
-          尚未归档：员工领取签字后，把逐页合并的扫描件（图片/PDF，≤20MB）上传到这里。
+          尚未归档：员工领取合同后，把逐页合并的扫描件（图片/PDF，≤20MB）上传到这里。
         </div>
       )}
 
@@ -210,11 +214,18 @@ export default function ContractArchivePanel({
           },
           {
             title: '文件名', dataIndex: 'file_name', ellipsis: true,
-            render: (name: string, v) => (
-              <Tooltip title={`${name}（${fmtSize(v.size)}）${v.remark ? ` · ${v.remark}` : ''}`}>
-                <span>{name}</span>
-              </Tooltip>
-            ),
+            render: (name: string, v) => {
+              const detail = [v.reason, v.remark].filter(Boolean).join(' · ')
+              return (
+                <Tooltip title={`${name}（${fmtSize(v.size)}）${detail ? ` · ${detail}` : ''}`}>
+                  <span>{name}</span>
+                </Tooltip>
+              )
+            },
+          },
+          {
+            title: '原因 / 备注', width: 180, ellipsis: true,
+            render: (_, v) => v.reason || v.remark || '-',
           },
           {
             title: '来源', dataIndex: 'source', width: 92,
@@ -251,19 +262,19 @@ export default function ContractArchivePanel({
       {logsOpen && <AccessLogsTable contractId={contractId} />}
 
       <Modal
-        title={archived ? '换传新版本' : '上传合同扫描件'}
+        title={replacing ? '换传新版本' : '上传合同扫描件'}
         open={uploadOpen}
         okText="上传归档"
         confirmLoading={uploading}
-        okButtonProps={{ disabled: fileList.length === 0 }}
-        onCancel={() => setUploadOpen(false)}
+        okButtonProps={{ disabled: fileList.length === 0 || reasonMissing }}
+        onCancel={() => { setUploadOpen(false); setFileList([]); setRemark('') }}
         onOk={() => void handleUpload()}
       >
         <div className="space-y-3 pt-2">
           <div className="text-[13px] text-gray-500">
             一份合同一个合并文件（逐页扫描后合并）：图片或 PDF，单个 ≤20MB。
-            {archived
-              ? '上传后成为新版本，旧版本保留在历史版本中可查。'
+            {replacing
+              ? '上传后成为新版本，旧版本保留在历史版本中可查，不覆盖。'
               : '归档后文件名按「工号 + 姓名 + 签订次数 + 起止日期」自动生成。'}
           </div>
           <Upload
@@ -276,10 +287,12 @@ export default function ContractArchivePanel({
             <Button icon={<UploadOutlined />}>选择文件</Button>
           </Upload>
           <Input
-            placeholder="备注（选填，如：补扫、清晰版替换）"
-            maxLength={512}
+            placeholder={replacing ? '换传原因（必填，如：原扫描件缺页、重签后替换）' : '备注（选填，如：补扫）'}
+            maxLength={255}
             value={remark}
+            status={replacing && !remark.trim() ? 'warning' : undefined}
             onChange={(e) => setRemark(e.target.value)}
+            aria-label={replacing ? '换传原因' : '备注'}
           />
         </div>
       </Modal>

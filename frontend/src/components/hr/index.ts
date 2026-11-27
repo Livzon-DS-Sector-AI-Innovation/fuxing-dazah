@@ -43,5 +43,7 @@ export { default as ContractRenewalSettingsCard } from './ContractRenewalSetting
 export { default as OffboardingBoardClient } from './OffboardingBoardClient'
 export { default as OffboardingCaseDrawer } from './OffboardingCaseDrawer'
 export { default as DepartureTabs } from './DepartureTabs'
+export { default as DepartureWorkspace } from './DepartureWorkspace'
+export { default as HrTodoStrip } from './HrTodoStrip'
 export { default as OffboardingSettingsCard } from './OffboardingSettingsCard'
 export { default as ReceiverSelect } from './ReceiverSelect'
