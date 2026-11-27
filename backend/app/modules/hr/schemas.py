@@ -3,7 +3,7 @@
 from datetime import date, datetime, time
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ─── Department Schemas ───
 
@@ -885,6 +885,50 @@ class JobRequirementResponse(BaseModel):
     owner: str | None = None
     deadline: date | None = None
     created_at: datetime | None = None
+
+
+# ─── Recruitment: 招聘岗位信息（存放在岗位库，每个岗位一份） ───
+
+# 岗位描述是给人和 AI 筛简历读的短文本，不是文档；留足余量即可
+RECRUITMENT_INFO_MAX_LENGTH = 20000
+
+
+class RecruitmentPositionInfoUpdate(BaseModel):
+    """保存招聘岗位信息。两项都可不填；传空串或 null 表示清空该项。"""
+    duties: str | None = Field(None, max_length=RECRUITMENT_INFO_MAX_LENGTH, description="岗位职责")
+    requirements: str | None = Field(None, max_length=RECRUITMENT_INFO_MAX_LENGTH, description="任职要求")
+
+    @field_validator("duties", "requirements")
+    @classmethod
+    def _blank_to_none(cls, value: str | None) -> str | None:
+        return (value.strip() or None) if value else None
+
+
+class RecruitmentPositionInfoResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    position_id: UUID
+    department: str
+    position_name: str
+    duties: str | None = None
+    requirements: str | None = None
+    configured: bool = False
+    updated_at: datetime | None = None
+    updated_by_name: str | None = None
+
+
+class RecruitmentPositionInfoSummary(BaseModel):
+    """列表用的概要：不带描述正文，只有是否已配置、字数和最后修改信息。"""
+    position_id: UUID
+    department: str
+    position_name: str
+    configured: bool
+    duties_length: int
+    requirements_length: int
+    # 描述开头的一小段（职责优先，换行压成空格），列表里一眼认出是哪份描述
+    excerpt: str | None = None
+    updated_at: datetime | None = None
+    updated_by_name: str | None = None
 
 
 # ─── Recruitment: Candidate Schemas ───

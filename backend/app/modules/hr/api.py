@@ -36,6 +36,7 @@ from app.modules.hr.evaluation_document_generator import (
 from app.modules.hr.interview_routes import router as interview_router
 from app.modules.hr.resume_screening_routes import router as resume_screening_router
 from app.modules.hr.job_requirement_routes import router as job_requirement_router
+from app.modules.hr.recruitment_position_info_routes import router as recruitment_position_info_router
 from app.modules.hr.employee_info_collection_routes import router as employee_info_collection_router
 from app.modules.hr.employee_certificate_routes import router as employee_certificate_router
 from app.modules.hr.labor_contract.archive_routes import router as labor_contract_archive_router
@@ -127,6 +128,7 @@ router.include_router(headcount_router)
 router.include_router(interview_router)
 router.include_router(resume_screening_router)
 router.include_router(job_requirement_router)
+router.include_router(recruitment_position_info_router)
 router.include_router(employee_info_collection_router)
 router.include_router(employee_certificate_router)
 router.include_router(labor_contract_router)

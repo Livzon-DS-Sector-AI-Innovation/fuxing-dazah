@@ -1,12 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import dayjs from 'dayjs'
 import { Alert, App, Badge, Button, Card, DatePicker, Dropdown, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Table, Tabs, Tag, Tooltip, Upload } from 'antd'
 import {
   DownOutlined, RightOutlined, FileSearchOutlined, ClockCircleOutlined,
   EditOutlined, DeleteOutlined, SwapOutlined, WarningOutlined, CommentOutlined,
+  CheckCircleOutlined, InfoCircleOutlined,
 } from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
@@ -16,14 +17,15 @@ import {
   fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
   decideCandidateReview,
   fetchEmployeesAction, screenCandidateAction, fetchInterviewsOverview,
-  updateInterview, deleteInterview,
+  updateInterview, deleteInterview, fetchRecruitmentPositionInfo,
 } from '@/actions/hr'
-import type { Candidate, InterviewOverviewItem, JobRequirement, JobRequirementCreateInput, JobRequirementUpdateInput, RecruitmentStats } from '@/types/hr'
+import type { Candidate, InterviewOverviewItem, JobRequirement, JobRequirementCreateInput, JobRequirementUpdateInput, RecruitmentPositionInfo, RecruitmentStats } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
 import { useDebouncedCallback } from '@/hooks/hr'
 import { CANDIDATE_STATUS_COLORS, RECOMMENDATION_LEVEL_TAG_COLORS } from '@/lib/hr'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
 import InterviewScheduleModal from './InterviewScheduleModal'
+import { RecruitmentPositionInfoModal, type RecruitmentPositionTarget } from './recruitment-positions'
 import PageHeader from './PageHeader'
 
 // 后端对「发 Offer」有状态限制（其它状态直接 400），按钮只在这些状态显示
@@ -43,6 +45,11 @@ interface ReqFormValues {
   owner?: string
   deadline?: dayjs.Dayjs | null
   status?: string
+}
+
+/** 岗位需求弹窗里当前选中的岗位，以及它在「招聘岗位信息」里的配置情况 */
+type SelectedPosition = RecruitmentPositionTarget & {
+  info: 'loading' | 'configured' | 'missing' | 'failed'
 }
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
@@ -124,6 +131,22 @@ export default function RecruitmentClient() {
   const [batchScreening, setBatchScreening] = useState(false)
   const [resumeJobId, setResumeJobId] = useState<string | null>(null)
   const [posOptions, setPosOptions] = useState<{ value: string; label: string }[]>([])
+  // 下拉选项值（「部门|||岗位名」）→ 岗位库里的岗位 id，选中岗位后按 id 读它的招聘信息
+  const [posIdByKey, setPosIdByKey] = useState<Record<string, string>>({})
+  const [selectedPosition, setSelectedPosition] = useState<SelectedPosition | null>(null)
+  // 表单里的两个描述字段是不是刚从岗位信息原样带出来的（用户一改就清掉）：换岗位时据此决定要不要跟着换。
+  // 读取在 await 之后才用它判断，所以真值放 ref，state 只管让提示条重渲染
+  const filledFromRef = useRef<string | null>(null)
+  const [filledFromId, setFilledFromIdState] = useState<string | null>(null)
+  const setFilledFromId = (id: string | null) => {
+    filledFromRef.current = id
+    setFilledFromIdState(id)
+  }
+  // 读取招聘信息的序号守卫：连着换岗位时，慢的旧响应不得覆盖新选的岗位
+  const positionInfoSeq = useRef(0)
+  // 选中岗位还没配置招聘信息时，就地配置
+  const [infoEditorOpen, setInfoEditorOpen] = useState(false)
+  const [infoEditorTarget, setInfoEditorTarget] = useState<RecruitmentPositionTarget | null>(null)
   const [offerOpen, setOfferOpen] = useState(false)
   const [offerCandidate, setOfferCandidate] = useState<Candidate | null>(null)
   const [offerForm] = Form.useForm()
@@ -260,7 +283,10 @@ export default function RecruitmentClient() {
   const { run: debouncedSearchOwnerOptions } = useDebouncedCallback(searchOwnerOptions, 300)
 
   useEffect(() => {
-    fetchPositions().then(d => setPosOptions(d.map((p: any) => ({ value: `${p.department}|||${p.name}`, label: `${p.name} (${p.department})` })))).catch(() => { })
+    fetchPositions().then(d => {
+      setPosOptions(d.map((p) => ({ value: `${p.department}|||${p.name}`, label: `${p.name} (${p.department})` })))
+      setPosIdByKey(Object.fromEntries(d.map((p) => [`${p.department}|||${p.name}`, p.id])))
+    }).catch(() => { })
   }, [])
 
   // 挂载即拉待审数：Tab 上的 Badge 需要初始值
@@ -375,6 +401,82 @@ export default function RecruitmentClient() {
     finally { setCompareLoading(false) }
   }
 
+  // ── 岗位描述：从「招聘岗位信息」带出（岗位库里每个岗位保存一份，配置一次长期复用） ──
+
+  /** 关掉岗位需求弹窗后清掉选中岗位相关状态，并作废还在路上的读取 */
+  const resetSelectedPosition = () => {
+    positionInfoSeq.current += 1
+    setSelectedPosition(null)
+    setFilledFromId(null)
+  }
+
+  /** 读取岗位库里该岗位的招聘信息。
+   *  select：新建 / 换岗位。配置过的直接填进两个描述字段；没配置的，表单里若还是从别的岗位带出来的内容
+   *          就清掉（用户手填的不动）
+   *  edit：打开编辑弹窗。只了解这个岗位配没配置，不动需求上已有的描述
+   *  apply：用户点了「套用」，以岗位库里的为准覆盖 */
+  const loadPositionInfo = async (target: RecruitmentPositionTarget, mode: 'select' | 'edit' | 'apply') => {
+    const seq = ++positionInfoSeq.current
+    setSelectedPosition({ ...target, info: 'loading' })
+    let duties = ''
+    let requirements = ''
+    try {
+      const res = await fetchRecruitmentPositionInfo(target.id)
+      if (seq !== positionInfoSeq.current) return
+      duties = res.data.duties || ''
+      requirements = res.data.requirements || ''
+    } catch (err: unknown) {
+      if (seq !== positionInfoSeq.current) return
+      setSelectedPosition({ ...target, info: 'failed' })
+      msg.error(err instanceof Error && err.message ? err.message : '读取岗位招聘信息失败')
+      return
+    }
+    const hasInfo = !!(duties || requirements)
+    if (mode === 'apply' || (mode === 'select' && hasInfo)) {
+      reqForm.setFieldsValue({ duties, requirements })
+      setFilledFromId(hasInfo ? target.id : null)
+    } else if (mode === 'select' && filledFromRef.current) {
+      reqForm.setFieldsValue({ duties: '', requirements: '' })
+      setFilledFromId(null)
+    }
+    setSelectedPosition({ ...target, info: hasInfo ? 'configured' : 'missing' })
+  }
+
+  const handlePositionChange = (value: string) => {
+    const [department = '', name = ''] = value.split('|||')
+    reqForm.setFieldsValue({ department })
+    const id = posIdByKey[value]
+    if (id) {
+      void loadPositionInfo({ id, department, name }, 'select')
+      return
+    }
+    // 岗位库里对不上的（比如已删除的历史岗位）：没有可带出的内容
+    positionInfoSeq.current += 1
+    setSelectedPosition(null)
+    if (filledFromRef.current) {
+      reqForm.setFieldsValue({ duties: '', requirements: '' })
+      setFilledFromId(null)
+    }
+  }
+
+  /** 选中岗位还没配置招聘信息：就地配置，保存后直接带进表单 */
+  const openInfoEditor = () => {
+    if (!selectedPosition) return
+    setInfoEditorTarget({
+      id: selectedPosition.id, department: selectedPosition.department, name: selectedPosition.name,
+    })
+    setInfoEditorOpen(true)
+  }
+
+  const handleInfoSaved = (info: RecruitmentPositionInfo) => {
+    reqForm.setFieldsValue({ duties: info.duties || '', requirements: info.requirements || '' })
+    setFilledFromId(info.position_id)
+    positionInfoSeq.current += 1
+    setSelectedPosition((prev) => (prev && prev.id === info.position_id
+      ? { ...prev, info: info.configured ? 'configured' : 'missing' }
+      : prev))
+  }
+
   // 新建/编辑岗位需求：提交期间 Modal 转圈，防止连点建出两条一样的岗位需求
   const [reqSaving, setReqSaving] = useState(false)
   const handleSaveReq = async () => {
@@ -386,16 +488,17 @@ export default function RecruitmentClient() {
       return
     }
     const parts = (v.position_name || '').split('|||')
-    // 岗位职责 duties 后端接收，但两个入参类型里都没声明（此前用 any 绕过），这里补上
-    const payload: JobRequirementCreateInput & JobRequirementUpdateInput & { duties?: string } = {
+    const duties = (v.duties ?? '').trim()
+    const requirements = (v.requirements ?? '').trim()
+    const payload: JobRequirementCreateInput & JobRequirementUpdateInput = {
       position_name: parts[1] || parts[0],
       department: v.department || parts[0],
       headcount: v.headcount ?? 1,
-      requirements: v.requirements || undefined,
-      duties: v.duties || undefined,
       urgency: v.urgency || undefined,
       owner: v.owner || undefined,
       deadline: v.deadline ? dayjs(v.deadline).format('YYYY-MM-DD') : undefined,
+      // 两个描述字段显式传，编辑时清空才能生效。新建时两项都空就不传，由后端按岗位库里配置的招聘信息带出
+      ...(editingReq || duties || requirements ? { duties, requirements } : {}),
     }
     if (editingReq) {
       payload.status = v.status || undefined
@@ -408,7 +511,7 @@ export default function RecruitmentClient() {
         await createJobRequirement(payload)
       }
       msg.success(editingReq ? '已更新' : '岗位需求已创建')
-      setReqOpen(false); reqForm.resetFields(); setEditingReq(null); loadJobs()
+      setReqOpen(false); reqForm.resetFields(); setEditingReq(null); resetSelectedPosition(); loadJobs()
     } catch (err: any) { msg.error(err.message || '保存失败') }
     finally { setReqSaving(false) }
   }
@@ -421,12 +524,26 @@ export default function RecruitmentClient() {
     } catch (err: any) { msg.error(err.message || '删除失败') }
   }
 
+  /** 打开新建岗位需求弹窗：表单和选中岗位状态都从零开始 */
+  const openCreateReq = () => {
+    setEditingReq(null)
+    reqForm.resetFields()
+    resetSelectedPosition()
+    setReqOpen(true)
+  }
+
   /** 打开岗位需求的编辑弹窗（岗位卡「更多 → 编辑岗位需求」） */
   const openEditReq = (j: JobRequirement) => {
     setEditingReq(j)
     if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }])
     reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined })
+    resetSelectedPosition()
     setReqOpen(true)
+    // 看看这个岗位在岗位库里有没有可套用的招聘信息（不动需求上已有的描述）
+    const id = posIdByKey[`${j.department}|||${j.position_name}`]
+    if (id) {
+      void loadPositionInfo({ id, department: j.department, name: j.position_name }, 'edit')
+    }
   }
 
   /** 删除岗位：确认框里写明会连带清理多少名候选人、已入职的保留 */
@@ -654,6 +771,63 @@ export default function RecruitmentClient() {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }
 
+  // 选中岗位的招聘信息提示条：已经带出 / 可套用最新内容 / 还没配置（可就地配置）
+  let positionInfoHint: ReactNode = null
+  if (selectedPosition) {
+    const { name, info } = selectedPosition
+    const hintClass = 'mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[var(--rounded-md)] border border-[var(--color-hairline)] px-3 py-2 text-[13px]'
+    if (info === 'loading') {
+      positionInfoHint = (
+        <div className="mb-4 flex items-center gap-2 text-[13px] text-[var(--color-steel)]">
+          <Spin size="small" /> 正在读取「{name}」的招聘信息…
+        </div>
+      )
+    } else if (info === 'failed') {
+      positionInfoHint = (
+        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-[var(--color-steel)]">
+          <span>没读到「{name}」的招聘信息。</span>
+          <Button type="link" size="small" className="px-0" onClick={() => { void loadPositionInfo(selectedPosition, editingReq ? 'edit' : 'select') }}>重试</Button>
+        </div>
+      )
+    } else if (info === 'configured') {
+      const applyButton = (
+        <Popconfirm
+          title={`套用「${name}」的招聘信息？`}
+          description="会用岗位库里保存的内容覆盖下方的岗位要求和岗位职责。"
+          okText="套用"
+          cancelText="取消"
+          onConfirm={() => { void loadPositionInfo(selectedPosition, 'apply') }}
+        >
+          <Button type="link" size="small" className="px-0">套用</Button>
+        </Popconfirm>
+      )
+      positionInfoHint = filledFromId === selectedPosition.id ? (
+        <div className={`${hintClass} bg-[var(--color-tint-mint)] text-[var(--color-charcoal)]`}>
+          <span><CheckCircleOutlined className="mr-1.5 text-[var(--color-success)]" />已带出「{name}」的招聘信息，本次有不同要求可直接在下方修改</span>
+        </div>
+      ) : (
+        <div className={`${hintClass} bg-[var(--color-surface-soft)]`}>
+          <span className="text-[var(--color-charcoal)]"><CheckCircleOutlined className="mr-1.5 text-[var(--color-success)]" />「{name}」在「招聘岗位信息」里保存有岗位描述</span>
+          {applyButton}
+        </div>
+      )
+    } else {
+      positionInfoHint = (
+        <div className={`${hintClass} bg-[var(--color-surface-soft)]`}>
+          <span className="min-w-0 flex-1 text-[var(--color-steel)]">
+            <InfoCircleOutlined className="mr-1.5 text-[var(--color-stone)]" />
+            「{name}」还没有配置招聘信息，这次需要手动填写
+          </span>
+          {canManage && (
+            <span className="shrink-0">
+              <Button type="link" size="small" className="px-0" onClick={openInfoEditor}>现在配置</Button>
+            </span>
+          )}
+        </div>
+      )
+    }
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -662,7 +836,7 @@ export default function RecruitmentClient() {
           ? `${jobs.length} 个岗位 · ${allCandidates.length} 个候选人`
           : `${pendingReviews.length} 位候选人待您审核`}
         actions={canManage && (
-          <Button type="primary" onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
+          <Button type="primary" onClick={openCreateReq}>新建岗位需求</Button>
         )}
       />
 
@@ -939,16 +1113,21 @@ export default function RecruitmentClient() {
 
                               <Modal title={editingReq ? '编辑岗位需求' : '新建岗位需求'} open={reqOpen} onCancel={() => setReqOpen(false)} onOk={handleSaveReq}
                                 okText="保存" confirmLoading={reqSaving} mask={{ closable: false }}>
-                <Form form={reqForm} layout="vertical">
+                <Form form={reqForm} layout="vertical"
+                  onValuesChange={(changed) => {
+                    // 用户动了描述字段：之后换岗位就不再自动清掉或覆盖它
+                    if (filledFromRef.current && ('duties' in changed || 'requirements' in changed)) setFilledFromId(null)
+                  }}>
                   <Form.Item name="position_name" label="岗位名称" rules={[{ required: true }]}>
                     <Select showSearch placeholder="选择岗位（含部门）" options={posOptions}
                       filterOption={(inp, opt) => (opt?.label ?? '').toLowerCase().includes(inp.toLowerCase())}
-                      onChange={(val: string) => { const parts = val.split('|||'); reqForm.setFieldsValue({ department: parts[0] || '' }) }} />
+                      onChange={handlePositionChange} />
                   </Form.Item>
                   <Form.Item name="department" hidden><Input /></Form.Item>
-                  <Form.Item name="headcount" label="招聘人数"><InputNumber min={1} /></Form.Item>
-                  <Form.Item name="requirements" label="岗位要求"><Input.TextArea rows={4} /></Form.Item>
-                  <Form.Item name="duties" label="岗位职责"><Input.TextArea rows={3} placeholder="可选，胜任度分析报告「岗位要求回顾」使用" /></Form.Item>
+                  <Form.Item name="headcount" label="招聘人数" className="mb-3"><InputNumber min={1} /></Form.Item>
+                  {positionInfoHint}
+                  <Form.Item name="requirements" label="岗位要求"><Input.TextArea rows={5} /></Form.Item>
+                  <Form.Item name="duties" label="岗位职责"><Input.TextArea rows={5} placeholder="可选，胜任度分析报告「岗位要求回顾」使用" /></Form.Item>
                   <Form.Item name="owner" label="用人部门负责人" tooltip="推送审核时默认发给此人">
                     <Select
                       showSearch
@@ -968,6 +1147,14 @@ export default function RecruitmentClient() {
                   {editingReq && <Form.Item name="status" label="状态"><Select options={[{ label: '招聘中', value: '招聘中' }, { label: '已关闭', value: '已关闭' }]} /></Form.Item>}
                 </Form>
               </Modal>
+
+              {/* 选中岗位还没配置招聘信息时，在需求弹窗上就地配置；保存后直接带进上面的表单 */}
+              <RecruitmentPositionInfoModal
+                open={infoEditorOpen}
+                position={infoEditorTarget}
+                onClose={() => setInfoEditorOpen(false)}
+                onSaved={handleInfoSaved}
+              />
 
               <Modal title={`拒绝候选人${rejectTarget?.name ? `「${rejectTarget.name}」` : ''}`} open={!!rejectTarget}
                 onCancel={() => setRejectTarget(null)} onOk={handleRejectSubmit}

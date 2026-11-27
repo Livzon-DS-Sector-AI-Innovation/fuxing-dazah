@@ -457,6 +457,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/candidates/.*/onboard", "hr:recruitment:manage"),
     # 招聘统计/漏斗含全公司数据：数据分析是 HR 专属工具，收紧为管理权限
     # （用人部门仅见"待我审核"，列表类接口另按数据范围收敛）
+    # 招聘岗位信息（岗位库上的岗位职责/任职要求）：招聘域权限，数据范围与岗位需求一致
+    (r"/recruitment/position-infos", {"GET": "hr:recruitment:read", "PUT": "hr:recruitment:manage"}),
     (r"/recruitment/stats", "hr:recruitment:manage"),
     (r"/recruitment", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                        "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),

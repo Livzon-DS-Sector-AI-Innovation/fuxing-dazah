@@ -1,0 +1,89 @@
+/* 岗位管理页（左侧部门导航 + 右侧岗位表格）的页面级样式，CSS Modules 隔离类名。
+   表格放在滚动容器里、表头吸顶：xl 及以上两栏撑满视口高度、各自内部滚动；窄屏表格区限高滚动。
+   antd 的类名必须包 :global()——否则会被当成本模块的类名一起哈希，选择器永远匹配不到
+   （同 lifecycleTable.module.css 踩过的坑）。选择器多带一层 .ant-table-container，
+   specificity 才压得过 antd 的 :where 哈希规则。 */
+
+/* 窄屏：限高滚动，表头吸顶，上方的部门下拉和搜索框不会被长列表卷走 */
+.scrollBody {
+  max-height: 70vh;
+  overflow: auto;
+}
+
+/* xl 及以上（同 Tailwind 的 xl 断点）改为撑满剩余高度。
+   这组属性不能带到窄屏：那里容器高度是自适应的，没有剩余空间可分配，
+   flex-basis: 0 + min-height: 0 会让这一块高度直接变成 0 */
+@media (min-width: 80rem) {
+  .scrollBody {
+    max-height: none;
+    min-height: 0;
+    flex: 1 1 0;
+  }
+}
+
+.scrollBody :global(.ant-table-container) :global(.ant-table-thead) > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.table :global(.ant-table-container) :global(.ant-table-thead) > tr > th {
+  background: var(--color-surface);
+  color: var(--color-slate);
+  font-weight: 500;
+}
+
+/* 「全部岗位」视图的部门分组列：淡底、贴顶，把同部门的行框成一块 */
+.table :global(.ant-table-container) :global(.ant-table-tbody) > tr > td.groupCell {
+  vertical-align: top;
+  background: var(--color-surface-soft);
+  border-bottom-color: transparent;
+  color: var(--color-ink);
+  font-weight: 500;
+}
+
+/* 组内各行之间是 antd 的浅线；组与组之间换一条稍深的通栏线。写在 groupCell 之后：
+   只有一行的组同属两条规则，靠后者胜出才画得出底线 */
+.table :global(.ant-table-container) :global(.ant-table-tbody) > tr.groupLast > td {
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+/* 关联培训大类：次要信息，用中性浅灰小标签 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--color-tint-gray);
+  color: var(--color-slate);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.chipMore {
+  background: transparent;
+  color: var(--color-primary);
+}
+
+/* 新增成功的行闪一下，指明它落在了哪里 */
+.rowNew > td {
+  animation: rowFlash 2.4s ease-out;
+}
+
+@keyframes rowFlash {
+  from {
+    background-color: var(--color-primary-bg);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rowNew > td {
+    animation: none;
+  }
+}
