@@ -1,0 +1,302 @@
+/* SOP 目录页（左侧部门导航 + 右侧岗位分组与条目）的页面级样式，CSS Modules 隔离类名。
+   右侧放在滚动容器里：xl 及以上两栏撑满视口高度、各自内部滚动；窄屏表格区限高滚动。
+   antd 的类名必须包 :global()——否则会被当成本模块的类名一起哈希，选择器永远匹配不到
+   （同 lifecycleTable.module.css / positions.module.css 踩过的坑）。 */
+
+/* ── 右栏滚动区 ── */
+
+/* 窄屏：限高滚动，上方的部门下拉和搜索框不会被长列表卷走 */
+.scrollBody {
+  max-height: 70vh;
+  overflow: auto;
+}
+
+/* xl 及以上（同 Tailwind 的 xl 断点）改为撑满剩余高度。
+   这组属性不能带到窄屏：那里容器高度是自适应的，没有剩余空间可分配，
+   flex-basis: 0 + min-height: 0 会让这一块高度直接变成 0 */
+@media (min-width: 80rem) {
+  .scrollBody {
+    max-height: none;
+    min-height: 0;
+    flex: 1 1 0;
+  }
+}
+
+/* ── 部门小节（「全部部门」视图下每个部门一节，标题吸顶）── */
+
+.sectionHead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 4px 6px;
+  background: var(--color-canvas);
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.sectionMeta {
+  font-size: 12px;
+  color: var(--color-steel);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 岗位分组（Collapse 面板）── */
+
+/* antd 6.6.2 的 Collapse 结构：
+     .ant-collapse.ant-collapse-borderless > .ant-collapse-item(-active)
+       > .ant-collapse-header > [.ant-collapse-expand-icon, .ant-collapse-title]
+       > .ant-collapse-panel > .ant-collapse-body          （没有旧版的 -content / -content-box）
+   组件上传了 bordered={false}，这里把容器底色去净，每个面板画成一行带边框的卡片。
+   根元素上同时挂着本模块类和 .ant-collapse-*，要写成复合选择器；
+   antd 的规则形如 :where(.hash).ant-collapse-borderless > .ant-collapse-item > .ant-collapse-header，
+   这里在根上多带一个类，整组特异性都压过它一头 */
+.collapse:global(.ant-collapse-borderless) {
+  background: transparent;
+}
+
+.collapse:global(.ant-collapse-borderless) > :global(.ant-collapse-item) {
+  margin-bottom: 6px;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-bottom: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--color-canvas);
+}
+
+.collapse:global(.ant-collapse-borderless) > :global(.ant-collapse-item):last-child {
+  margin-bottom: 0;
+}
+
+.collapse:global(.ant-collapse-borderless) > :global(.ant-collapse-item-active) {
+  border-color: var(--color-hairline-strong);
+}
+
+.collapse:global(.ant-collapse-borderless) > :global(.ant-collapse-item) > :global(.ant-collapse-header) {
+  align-items: center;
+  padding: 9px 16px;
+  color: var(--color-charcoal);
+}
+
+.collapse:global(.ant-collapse-borderless) > :global(.ant-collapse-item) > :global(.ant-collapse-header) > :global(.ant-collapse-title) {
+  min-width: 0;
+}
+
+.collapse:global(.ant-collapse-borderless) > :global(.ant-collapse-item) > :global(.ant-collapse-panel) > :global(.ant-collapse-body) {
+  padding: 0 14px 12px 42px;
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.groupName {
+  flex: none;
+  max-width: 46%;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 未指定岗位：名字照常显示，旁边带一行来源说明 */
+.groupHint {
+  flex: none;
+  color: var(--color-stone);
+  font-size: 12px;
+}
+
+/* 培训类别预览：窄屏放不下，不显示 */
+.groupChips {
+  display: none;
+}
+
+@media (min-width: 64rem) {
+  .groupChips {
+    display: flex;
+    flex: 1 1 0;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+  }
+}
+
+.groupCount {
+  flex: none;
+  margin-left: auto;
+  color: var(--color-steel);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 培训类别预览胶囊：次要信息，用中性浅灰 */
+.chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--color-tint-gray);
+  color: var(--color-slate);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.chipMore {
+  background: transparent;
+  color: var(--color-primary);
+}
+
+/* ── 展开后的条目表 ── */
+
+.itemsBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  padding: 2px 4px 2px 6px;
+}
+
+.itemsMeta {
+  color: var(--color-steel);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.itemsTable {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.colCategory {
+  width: 32%;
+}
+
+.colSop {
+  width: 150px;
+}
+
+.colAction {
+  width: 72px;
+}
+
+.itemsTable th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-hairline);
+  color: var(--color-steel);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.itemsTable td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  color: var(--color-ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+.itemsTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.itemsTable th.cellAction,
+.itemsTable td.cellAction {
+  padding-right: 2px;
+  text-align: right;
+}
+
+/* 窄屏放不下四列：SOP 编号列让位（搜索结果表里仍然看得到） */
+@media (max-width: 48rem) {
+  .colSop,
+  .cellSop {
+    display: none;
+  }
+}
+
+.cellPlaceholder {
+  color: var(--color-stone);
+}
+
+.cellMuted {
+  color: var(--color-steel);
+}
+
+.cellSop {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── 搜索结果表：表头吸顶 ── */
+
+.table :global(.ant-table-container) :global(.ant-table-thead) > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-surface);
+  color: var(--color-slate);
+  font-weight: 500;
+}
+
+/* 搜索命中的片段 */
+.mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--color-tint-peach);
+  color: inherit;
+}
+
+/* 新增成功的行闪一下，指明它落在了哪里 */
+.rowNew > td,
+.itemNew > td {
+  animation: rowFlash 2.4s ease-out;
+}
+
+@keyframes rowFlash {
+  from {
+    background-color: var(--color-primary-bg);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rowNew > td,
+  .itemNew > td {
+    animation: none;
+  }
+}
+
+/* 上传结果弹窗里的未导入明细 */
+.errorList {
+  max-height: 320px;
+  margin: 0;
+  padding-left: 18px;
+  overflow-y: auto;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  line-height: 1.7;
+}

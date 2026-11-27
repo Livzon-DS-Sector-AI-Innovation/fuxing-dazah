@@ -6013,7 +6013,14 @@ async def list_sop_catalog(
         count_q = count_q.where(SopCatalog.file_name.ilike(f"%{keyword}%"))
 
     total = (await session.execute(count_q)).scalar() or 0
-    rows = (await session.execute(query.order_by(SopCatalog.category, SopCatalog.file_name).offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    # 排序必须落到唯一键上：类别、文件名称两列大量并列，只按它们排序时分页结果不稳定——
+    # 并列行每次查询先后不同，OFFSET 翻页会漏行、重行（本地库 3011 条实测只翻出 2919 条不重复）
+    rows = (await session.execute(
+        query.order_by(
+            SopCatalog.category, SopCatalog.file_name,
+            SopCatalog.department, SopCatalog.position_name, SopCatalog.id,
+        ).offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
 
     return paginated_response(
         data=[SopCatalogResponse.model_validate(r).model_dump(mode="json") for r in rows],
