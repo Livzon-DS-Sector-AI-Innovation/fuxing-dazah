@@ -72,7 +72,8 @@ async def _lookup_level1_trainer(session: AsyncSession, department: str) -> str 
         select(HrTrainer).where(
             HrTrainer.is_deleted == False,  # noqa: E712
             HrTrainer.department == department,
-            HrTrainer.is_level1.in_(["是", "1", "true", "True"]),
+            # 「一级培训师」是页面新增/Excel 归一化后的取值；是/1/true 兼容历史存量值
+            HrTrainer.is_level1.in_(["一级培训师", "是", "1", "true", "True"]),
         ).order_by(HrTrainer.created_at.asc())
     )).scalars().first()
     return trainer.name if trainer else None

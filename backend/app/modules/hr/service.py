@@ -435,6 +435,11 @@ class EmployeeService:
                                 # 非空但无法解析：跳过该列，不能清空已有日期
                                 continue
                             v = parsed
+                        if fn == "is_level1":
+                            # 取值归一化：与页面新增口径一致（是/否），SOP 兜底与列表筛选依赖此口径
+                            v = "一级培训师" if v in ("是", "1", "true", "True") else (
+                                "-" if v in ("否", "0", "false", "False") else v
+                            )
                         data[fn] = v
                     if "name" not in data or "department" not in data:
                         outcome = "error_missing"

@@ -351,3 +351,74 @@ class TestMaterialsHelpers:
         )
         counts = {row["tag_name"]: row["count"] for row in json.loads(res.body)["data"]}
         assert counts.get(tag) == 1
+
+
+class TestDeptTrainerLookup:
+    """部门一级培训师查找链：配置表优先，内训师台账兜底（is_level1 取值口径统一）。"""
+
+    @pytest.mark.asyncio
+    async def test_lookup_prefers_config_table(self, db_session):
+        """配置表有值时优先返回，不看内训师台账。"""
+        from app.modules.hr.models import DeptTrainingPersonnel, HrTrainer
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        db_session.add(DeptTrainingPersonnel(
+            display_department="甲部门", department="甲部门", level1_trainer="张培训师"))
+        db_session.add(HrTrainer(name="王讲师", department="甲部门", is_level1="一级培训师"))
+        await db_session.flush()
+        assert await _lookup_level1_trainer(db_session, "甲部门") == "张培训师"
+
+    @pytest.mark.asyncio
+    async def test_lookup_falls_back_to_trainers_ledger(self, db_session):
+        """配置表未配置 → 兜底取内训师台账 is_level1=一级培训师（页面新增口径）的行。"""
+        from app.modules.hr.models import HrTrainer
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        db_session.add(HrTrainer(name="王讲师", department="乙部门", is_level1="一级培训师"))
+        db_session.add(HrTrainer(name="李讲师", department="乙部门", is_level1="-"))
+        await db_session.flush()
+        assert await _lookup_level1_trainer(db_session, "乙部门") == "王讲师"
+
+    @pytest.mark.asyncio
+    async def test_lookup_fallback_matches_legacy_yes_value(self, db_session):
+        """历史存量 is_level1=是 仍可兜底命中。"""
+        from app.modules.hr.models import HrTrainer
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        db_session.add(HrTrainer(name="陈讲师", department="乙部门", is_level1="是"))
+        await db_session.flush()
+        assert await _lookup_level1_trainer(db_session, "乙部门") == "陈讲师"
+
+    @pytest.mark.asyncio
+    async def test_lookup_empty_when_nothing_configured(self, db_session):
+        """两级都无数据 → 返回 None（不阻塞登记）。"""
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        assert await _lookup_level1_trainer(db_session, "无配置部门") is None
+
+
+class TestTrainerUploadLevel1Normalization:
+    """上传内训师 Excel 时 is_level1 取值归一化到页面口径（一级培训师 / -）。"""
+
+    @pytest.mark.asyncio
+    async def test_upload_normalizes_is_level1_values(self, db_session):
+        import io
+
+        from openpyxl import Workbook
+
+        from app.modules.hr.models import HrTrainer
+        from app.modules.hr.service import EmployeeService
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["姓名", "部门", "是否一级培训师"])
+        ws.append(["归一甲", "甲部门", "是"])
+        ws.append(["归一乙", "乙部门", "false"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        result = await EmployeeService(db_session).upload_trainers(buf.getvalue())
+        assert result["created"] == 2
+
+        rows = (await db_session.execute(
+            select(HrTrainer).where(HrTrainer.name.in_(["归一甲", "归一乙"]))
+        )).scalars().all()
+        assert {r.name: r.is_level1 for r in rows} == {
+            "归一甲": "一级培训师",
+            "归一乙": "-",
+        }
