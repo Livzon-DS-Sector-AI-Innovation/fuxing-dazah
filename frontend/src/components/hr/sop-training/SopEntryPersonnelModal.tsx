@@ -1,7 +1,8 @@
 'use client'
 
 // SOP 培训二级表：给一条二级表记录选「自定义分类」和「分类人员」。
-// 选分类后自动带出该分类下的部门人员并默认全选（已保存过人员的记录不覆盖），可再调整。
+// 分类仅本人创建的可见；选分类后跨部门联动带出该分类全部人员并默认全选
+// （已保存过人员的记录不覆盖），可再调整。
 
 import { useEffect, useMemo, useState } from 'react'
 import { App, Button, Form, Modal, Select } from 'antd'
@@ -64,10 +65,10 @@ export default function SopEntryPersonnelModal({
     let cancelled = false
     ;(async () => {
       const [clsRes, peopleRes] = await Promise.all([
-        fetchSopClassifications(entry.department).catch(() => null),
+        fetchSopClassifications().catch(() => null),
         // 已有保存人员时只加载选项不覆盖；无保存人员时才默认全选分类下人员
         entry.classification
-          ? fetchSopPersonnel(entry.department, entry.classification).catch(() => null)
+          ? fetchSopPersonnel(entry.classification).catch(() => null)
           : Promise.resolve(null),
       ])
       if (cancelled) return
@@ -89,7 +90,7 @@ export default function SopEntryPersonnelModal({
   const loadPersonnel = async (classification: string) => {
     if (!entry) return []
     try {
-      return (await fetchSopPersonnel(entry.department, classification)).data || []
+      return (await fetchSopPersonnel(classification)).data || []
     } catch (e) {
       message.error(e instanceof Error ? e.message : '获取分类人员失败')
       return []
@@ -184,7 +185,7 @@ export default function SopEntryPersonnelModal({
         <Form.Item
           name="classification"
           label="自定义分类"
-          tooltip="对应部门的员工分类；生成材料时，这里选的人员会自动归入该分类"
+          tooltip="我创建的员工分类（仅本人可见），选中后带出该分类全部人员；生成材料时，这里选的人员会自动归入该分类"
         >
           <Select
             allowClear

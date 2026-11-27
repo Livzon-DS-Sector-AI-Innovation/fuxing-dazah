@@ -1306,24 +1306,26 @@ async def batch_generate_materials(
 
 @router.get("/sop-training-entries/classifications", summary="部门自定义分类选项")
 async def sop_entry_classifications(
-    department: str = Query(..., description="部门"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """二级表分类选项 = 当前用户在员工档案里的分类（清单 + 打过的标签）。
 
-    员工档案「分类管理」建的清单即使尚未给本部门员工打标签（0 人）也展示；
+    员工档案「分类管理」建的清单即使尚未打标签（0 人）也展示；
     直接在员工行上打的标签（如「分类1/分类2」）同样出现——都是本人创建的
     分类，按创建人过滤，看不到别人的分类/测试数据。
-    人数按本部门实际标签统计。
+    人数按标签全量统计（分类人员跨部门联动，不按二级表记录的部门过滤）；
+    受限用户只统计授权部门内的人员。
     """
-    # 数据范围：受限用户只能查授权部门（员工标签/分类属于员工 PII）
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
+    # 数据范围：受限用户只能看授权部门内的人员（员工标签/分类属于员工 PII）
+    dept_filter = ""
+    tag_params: dict = {"creator": creator}
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
-        if department not in hr_scope.scoped_departments:
-            raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
-    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
+        dept_filter = "AND p.department = ANY(:scoped)"
+        tag_params["scoped"] = sorted(hr_scope.scoped_departments)
     # ① 本人的分类清单（员工档案「分类管理」）
     catalog = (await session.execute(
         text(
@@ -1332,20 +1334,20 @@ async def sop_entry_classifications(
         ),
         {"creator": creator},
     )).fetchall()
-    # ② 本人在该部门打过的标签计数（直接打标签没建清单的分类也在这里）
+    # ② 本人打过的标签计数（直接打标签没建清单的分类也在这里）
     # 人员口径 = 培训人员名单（脱敏独立数据集），不再读员工总表
     tag_rows = (await session.execute(
-        text("""
+        text(f"""
             SELECT t.tag_name, count(DISTINCT t.employee_number)
             FROM hr.employee_tags t
             JOIN hr.training_roster_profiles p ON p.employee_number = t.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
               AND t.created_by = :creator
-              AND p.department = :dept
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
+              {dept_filter}
             GROUP BY t.tag_name
         """),
-        {"dept": department, "creator": creator},
+        tag_params,
     )).fetchall()
     counts = {r[0]: r[1] for r in tag_rows}
     result: list[dict] = []
@@ -1366,33 +1368,38 @@ async def sop_entry_classifications(
 
 @router.get("/sop-training-entries/personnel", summary="分类人员查询")
 async def sop_entry_personnel(
-    department: str = Query(..., description="部门"),
     classification: str = Query(..., description="自定义分类"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """按部门 + 自定义分类拉取人员（标签可多打，人员可重复分类）。"""
+    """按自定义分类拉取人员（标签可多打，人员可重复分类）。
+
+    分类人员跨部门联动：只认本人打的标签，不按二级表记录的部门过滤；
+    受限用户只返回授权部门内的人员。排除离职/待审批/病假/产假。
+    """
     # 数据范围：受限用户只能查授权部门（员工姓名/工号/岗位/状态属于 PII）
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
+    dept_filter = ""
+    params: dict = {"tag": classification, "creator": creator}
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
-        if department not in hr_scope.scoped_departments:
-            raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
+        dept_filter = "AND p.department = ANY(:scoped)"
+        params["scoped"] = sorted(hr_scope.scoped_departments)
     # 人员口径 = 培训人员名单（脱敏独立数据集，状态由培训管理独立维护）；
     # 与分类选项一致，只看本人打的标签，避免同名分类串到别人的测试数据
-    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     rows = (await session.execute(
-        text("""
+        text(f"""
             SELECT p.employee_number, p.name, p.position, p.status
             FROM hr.training_roster_profiles p
             JOIN hr.employee_tags t ON t.employee_number = p.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
               AND t.tag_name = :tag AND t.created_by = :creator
-              AND p.department = :dept
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
+              {dept_filter}
             ORDER BY p.employee_number
         """),
-        {"dept": department, "tag": classification, "creator": creator},
+        params,
     )).fetchall()
     return success_response(data=[
         {"employee_number": r[0], "name": r[1], "position": r[2], "status": r[3]}

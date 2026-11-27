@@ -589,13 +589,14 @@ export async function previewSopBatchMaterials(ids: string[]): Promise<SopMateri
   return res.data
 }
 
-export async function fetchSopClassifications(department: string): Promise<{ code: number; message: string; data: SopClassificationOption[] }> {
-  const qs = buildQueryString({ department })
-  return fetchHrApi(`/hr/sop-training-entries/classifications${qs}`, { errorMessage: '获取分类失败' })
+/** SOP 二级表分类选项：本人创建的分类（清单 ∪ 打过的标签），人数按标签全量统计 */
+export async function fetchSopClassifications(): Promise<{ code: number; message: string; data: SopClassificationOption[] }> {
+  return fetchHrApi(`/hr/sop-training-entries/classifications`, { errorMessage: '获取分类失败' })
 }
 
-export async function fetchSopPersonnel(department: string, classification: string): Promise<{ code: number; message: string; data: SopPersonnelOption[] }> {
-  const qs = buildQueryString({ department, classification })
+/** 分类人员：跨部门联动，只认本人打的标签，不按二级表记录的部门过滤 */
+export async function fetchSopPersonnel(classification: string): Promise<{ code: number; message: string; data: SopPersonnelOption[] }> {
+  const qs = buildQueryString({ classification })
   return fetchHrApi(`/hr/sop-training-entries/personnel${qs}`, { errorMessage: '获取分类人员失败' })
 }
 

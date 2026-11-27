@@ -176,7 +176,7 @@ class TestSopRegisterFlow:
 
     @pytest.mark.asyncio
     async def test_classifications_and_personnel(self, db_session, client):
-        """部门自定义分类选项 + 按分类拉取人员（选项 = 当前用户的清单 ∪ 标签）"""
+        """分类选项 + 按分类拉取人员（选项 = 当前用户的清单 ∪ 标签；人员跨部门联动）"""
         from datetime import date as _date
 
         from app.modules.hr.models import (
@@ -194,9 +194,19 @@ class TestSopRegisterFlow:
             employee_number="SOP001", name="员工甲", department="甲部门",
             position="操作工", status="在职",
         ))
+        # 跨部门联动：乙部门的人打了同一标签，同样带出（不按记录部门过滤）
+        db_session.add(Employee(
+            employee_number="SOP002", name="员工乙", department="乙部门",
+            position="操作工", status="在职", hire_date=_date.today(),
+        ))
+        db_session.add(TrainingRosterProfile(
+            employee_number="SOP002", name="员工乙", department="乙部门",
+            position="操作工", status="在职",
+        ))
         # 当前用户（HR测试员）建的清单 + 打的标签
         db_session.add(EmployeeClassification(name="新员工", created_by="HR测试员"))
         db_session.add(EmployeeTag(employee_number="SOP001", tag_name="新员工", created_by="HR测试员"))
+        db_session.add(EmployeeTag(employee_number="SOP002", tag_name="新员工", created_by="HR测试员"))
         # 直接打标签（无清单）的分类：同样出现
         db_session.add(EmployeeTag(employee_number="SOP001", tag_name="分类1", created_by="HR测试员"))
         # 他人创建的：不出现
@@ -204,7 +214,7 @@ class TestSopRegisterFlow:
         db_session.add(EmployeeTag(employee_number="SOP001", tag_name="别人的标签", created_by="其他人"))
         await db_session.flush()
 
-        res = await client.get("/api/v1/hr/sop-training-entries/classifications", params={"department": "甲部门"})
+        res = await client.get("/api/v1/hr/sop-training-entries/classifications")
         assert res.status_code == 200, res.text
         names = [d["tag_name"] for d in res.json()["data"]]
         # 本人的清单 + 本人打的标签都出现；他人的不出现
@@ -212,13 +222,12 @@ class TestSopRegisterFlow:
         assert "分类1" in names
         assert "别人的分类" not in names
         assert "别人的标签" not in names
-        assert any(d["tag_name"] == "新员工" and d["count"] == 1 for d in res.json()["data"])
+        assert any(d["tag_name"] == "新员工" and d["count"] == 2 for d in res.json()["data"])
 
-        res2 = await client.get("/api/v1/hr/sop-training-entries/personnel", params={"department": "甲部门", "classification": "新员工"})
+        res2 = await client.get("/api/v1/hr/sop-training-entries/personnel", params={"classification": "新员工"})
         assert res2.status_code == 200, res2.text
         people = res2.json()["data"]
-        assert len(people) == 1
-        assert people[0]["name"] == "员工甲"
+        assert {p["name"] for p in people} == {"员工甲", "员工乙"}
 
     @pytest.mark.asyncio
     async def test_dept_trainers_lookup(self, db_session, client):
@@ -311,7 +320,7 @@ class TestMaterialsHelpers:
         assert content[:2] == b"PK"
 
     async def test_entry_personnel_excludes_leave(self, db_session):
-        """二级表分类人员拉取：排除病假/产假，且只认体现部门（实际部门命中不带入）。"""
+        """二级表分类人员拉取：排除病假/产假；跨部门联动带出，受限用户只看授权部门。"""
         from app.modules.hr import models as hr_models
         from app.modules.hr.deps import HrAccessContext
         from app.modules.hr.sop_training_routes import (
@@ -325,12 +334,11 @@ class TestMaterialsHelpers:
             ("正常甲", f"N{_rand()}", "在职", dept),
             ("病假乙", f"B{_rand()}", "病假", dept),
             ("产假丙", f"M{_rand()}", "产假", dept),
-            ("实际丁", f"S{_rand()}", "在职", other),
+            ("他部丁", f"S{_rand()}", "在职", other),
         ]:
             # 人员口径 = 培训人员名单（脱敏独立数据集）
             db_session.add(hr_models.TrainingRosterProfile(
                 name=name, employee_number=no, department=d,
-                actual_department=dept if d == other else None,
                 position="工程师", status=status,
             ))
             await db_session.flush()
@@ -342,22 +350,35 @@ class TestMaterialsHelpers:
         class _U:
             name = "口径测试员"
             employee_number = "TEST001"
-        scope = HrAccessContext(
-            user=_U(),  # type: ignore[arg-type]
-            data_scope="all",
-            department=None,
-            employee_number="TEST001",
-            scoped_departments=frozenset(),
-        )
+
+        def _scope(data_scope: str, scoped: frozenset[str]) -> HrAccessContext:
+            return HrAccessContext(
+                user=_U(),  # type: ignore[arg-type]
+                data_scope=data_scope,
+                department=None,
+                employee_number="TEST001",
+                scoped_departments=scoped,
+            )
+
+        # 全范围用户：跨部门联动，标签成员全部带出（病假/产假仍排除）
         res = await sop_entry_personnel(
-            department=dept, classification=tag, session=db_session, hr_scope=scope,
+            classification=tag, session=db_session, hr_scope=_scope("all", frozenset()),
+        )
+        names = [row["name"] for row in json.loads(res.body)["data"]]
+        assert set(names) == {"正常甲", "他部丁"}
+
+        res = await sop_entry_classifications(session=db_session, hr_scope=_scope("all", frozenset()))
+        counts = {row["tag_name"]: row["count"] for row in json.loads(res.body)["data"]}
+        assert counts.get(tag) == 2
+
+        # 受限用户：只返回授权部门内的人员
+        res = await sop_entry_personnel(
+            classification=tag, session=db_session, hr_scope=_scope("department", frozenset({dept})),
         )
         names = [row["name"] for row in json.loads(res.body)["data"]]
         assert names == ["正常甲"]
 
-        res = await sop_entry_classifications(
-            department=dept, session=db_session, hr_scope=scope,
-        )
+        res = await sop_entry_classifications(session=db_session, hr_scope=_scope("department", frozenset({dept})))
         counts = {row["tag_name"]: row["count"] for row in json.loads(res.body)["data"]}
         assert counts.get(tag) == 1
 
