@@ -431,6 +431,22 @@ export async function fetchSopDepartments(): Promise<{ data: string[] }> {
   return fetchHrApi('/hr/sop-catalog/departments', { errorMessage: '获取部门列表失败' })
 }
 
+/** 培训人员配置页部门选项：组织架构部门 ∪ SOP目录部门（兜底已撤销部门的历史文件），去重排序 */
+export async function fetchTrainingDepartmentOptions(): Promise<{ data: string[] }> {
+  const [deptsRes, sopRes] = await Promise.all([
+    fetchHrApi('/hr/departments?page=1&page_size=200', { errorMessage: '获取部门列表失败' }),
+    fetchHrApi('/hr/sop-catalog/departments', { errorMessage: '获取部门列表失败' }),
+  ])
+  const names = new Set<string>()
+  for (const d of deptsRes?.data || []) {
+    if (d?.name) names.add(d.name as string)
+  }
+  for (const d of sopRes?.data || []) {
+    if (d) names.add(d as string)
+  }
+  return { data: [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')) }
+}
+
 export async function fetchSopCatalog(params?: {
   department?: string
   page?: number
