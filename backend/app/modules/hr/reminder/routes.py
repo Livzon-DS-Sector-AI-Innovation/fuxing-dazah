@@ -16,11 +16,17 @@ from app.modules.hr.title_review.notify import _lookup_open_id
 
 router = APIRouter(tags=["HR-人事提醒"])
 
-_KIND_LABEL = {"probation": "转正提醒", "contract": "合同到期提醒"}
+_KIND_LABEL = {
+    "probation": "转正提醒",
+    "contract": "合同到期提醒",
+    "offboarding_lead": "离职发起时限提醒",
+    "offboarding_clearance_due": "离职手续催办",
+}
+_TEST_KINDS = "|".join(_KIND_LABEL)
 
 
 class ReminderTestPayload(BaseModel):
-    kind: str = Field("contract", pattern="^(probation|contract)$")
+    kind: str = Field("contract", pattern=f"^({_TEST_KINDS})$")
     receivers: list[str] = Field(default_factory=list, max_length=50)
 
 

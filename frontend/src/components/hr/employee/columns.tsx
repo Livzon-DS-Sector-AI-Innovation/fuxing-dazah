@@ -29,6 +29,11 @@ export interface EmployeeColumnHandlers {
 export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Employee> {
   const { onDetail, onProbation, onEdit, onTransfer, canEditProfile, canTransfer, syncMode } = h
 
+  // 操作列最大可见按钮数（与下方 render 的显示条件一一对应）：
+  // 详情恒显；转正评估跟随档案编辑权限（同步模式下也保留）；编辑/异动仅在非同步模式
+  const actionCount =
+    1 + (canEditProfile ? 1 : 0) + (canEditProfile && !syncMode ? 1 : 0) + (canTransfer && !syncMode ? 1 : 0)
+
   // 列宽原则：常用列视图（默认）要在 1366 宽的屏幕上不出横向滚动条——
   // 固定列按内容所需收紧，「部门」「职务」两列不设宽度、随容器伸缩（见 EmployeeTable 的 scroll.x 计算）。
   return [
@@ -279,8 +284,10 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
     {
       title: '操作',
       key: 'action',
-      // 完整档案入口已挪到姓名链接，操作列只剩图标；同步模式仅剩「详情」，宽度随可见按钮数自适应
-      width: syncMode ? 60 : 118,
+      // 完整档案入口已挪到姓名链接，操作列只剩图标。
+      // 宽度按最大可见按钮数算：图标按钮 36px + Space 间距 2px + 单元格左右内边距 24px。
+      // 此前同步模式写死 60（按「只剩详情」估计），试用期行还有「发起转正评估」，第二枚被裁在列外。
+      width: 36 * actionCount + 2 * (actionCount - 1) + 24,
       fixed: 'right' as const,
       render: (_, record: Employee) => (
         <Space size={2}>

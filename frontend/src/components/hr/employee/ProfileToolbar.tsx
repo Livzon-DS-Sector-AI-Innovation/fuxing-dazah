@@ -1,13 +1,13 @@
 'use client'
 
-// 档案页 Tab 栏右侧工具栏：关键词搜索（防抖）、状态筛选、字段筛选面板开关（带角标）。
-// 从 EmployeeProfileClient 拆出；状态本体（keyword/status/filterOpen）仍在页面容器。
+// 档案页工具栏：关键词搜索（防抖）+ 状态筛选。字段级筛选已下沉到表格列头
+// （employee/columnFilters），此处不再有筛选面板开关。
+// 从 EmployeeProfileClient 拆出；状态本体（keyword/status）仍在页面容器。
 // 搜索框显示值由本地 state 即时回显——若直接受控于防抖后的 store 值，防抖窗口内
 // 列表响应回来触发重渲染会把 DOM 值弹回旧值（打字/删除吃字，且可能停在带空格中间态）。
 
 import { useState } from 'react'
-import { Badge, Button, Input, Select } from 'antd'
-import { FilterOutlined } from '@ant-design/icons'
+import { Input, Select } from 'antd'
 
 interface ProfileToolbarProps {
   keyword: string
@@ -17,8 +17,6 @@ interface ProfileToolbarProps {
   onKeywordCommit: (val: string) => void
   status: string
   onStatusChange: (val: string) => void
-  filterCount: number
-  onToggleFilter: () => void
 }
 
 export default function ProfileToolbar({
@@ -27,8 +25,6 @@ export default function ProfileToolbar({
   onKeywordCommit,
   status,
   onStatusChange,
-  filterCount,
-  onToggleFilter,
 }: ProfileToolbarProps) {
   // 本地即时回显；外部值变化（回车提交/跨页恢复/清空）时在渲染期回同步
   // （React 官方 adjust-state-during-render 模式，替代 effect 同步派生 state）
@@ -74,11 +70,6 @@ export default function ProfileToolbar({
           { value: '产假复岗', label: '产假复岗' },
         ]}
       />
-      <Badge count={filterCount} size="small" offset={[2, -2]}>
-        <Button icon={<FilterOutlined />} onClick={onToggleFilter}>
-          筛选
-        </Button>
-      </Badge>
     </div>
   )
 }

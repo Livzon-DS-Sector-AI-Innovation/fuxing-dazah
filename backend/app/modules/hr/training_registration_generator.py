@@ -12,7 +12,7 @@ from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from app.modules.hr.template_utils import find_hr_template
+from app.modules.hr.template_utils import find_hr_template_bytes
 
 # 简单文本占位符 -> 记录字段
 _PLACEHOLDERS = ["姓名", "性别", "体现部门", "体现岗位", "学历", "毕业院校", "专业", "证书"]
@@ -56,9 +56,13 @@ def _page_break_paragraph():
     return p
 
 
-def generate_training_registration_sync(records: list[dict]) -> BytesIO:
+def generate_training_registration_sync(
+    records: list[dict],
+    template_bytes: bytes | None = None,
+) -> BytesIO:
     """生成个人培训登记表。records: 每名员工一个占位符字段 dict。"""
-    doc = Document(str(find_hr_template("个人培训登记表.docx")))
+    raw = template_bytes or find_hr_template_bytes("training_registration")
+    doc = Document(BytesIO(raw))
 
     # 移除 {#台账} / {/台账} 循环标记段落（空名单也要清，避免导出字面量）
     for paragraph in list(doc.paragraphs):

@@ -15,17 +15,22 @@
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date as date_cls
 from io import BytesIO
+from typing import Any
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.hr.labor_contract.models import LaborContract
+from app.modules.hr.labor_contract.service import compute_end_date, term_for_seq
 from app.modules.hr.models import (
     DepartureRecord,
+    Employee,
     HrIncidentRecord,
     OnboardingRecord,
     TrainingLedger,
@@ -47,6 +52,7 @@ class LedgerColumn:
     required: bool = False
     is_date: bool = False
     is_float: bool = False
+    is_int: bool = False
     choices: dict[str, str] | None = None  # 中文取值 → 库值（如 工伤→work_injury）
 
 
@@ -60,6 +66,9 @@ class LedgerImportSpec:
     dup_key_display: str  # 查重键中文说明（预检明细展示用）
     example_row: list[object]  # 模板示例行（与 columns 一一对应）
     date_str_fields: tuple[str, ...] = ()  # 库中为字符串的日期字段（比对时 isoformat 化）
+    # 行级派生钩子（可选）：existing=None 为新建（可直接改写 data 后落库），
+    # 非 None 为覆盖更新后（可在实例上补派生字段）；抛异常按行级错误处理。
+    row_finalizer: Callable[[dict[str, Any], object | None, AsyncSession], Awaitable[None]] | None = None
 
 
 ONBOARDING_SPEC = LedgerImportSpec(
@@ -154,8 +163,101 @@ INCIDENT_SPEC = LedgerImportSpec(
     date_str_fields=("occurred_date",),
 )
 
+async def _contract_row_finalizer(data: dict[str, Any], existing: object | None, db: AsyncSession) -> None:
+    """合同导入行派生：档案快照带出 + 期限按签订次数自动计算（需求口径，Excel 不提供期限列）。
+
+    - 工号必须存在于员工档案（快照来源），否则行级报错
+    - end_date 留空：按期限规则自动算（第 1 次 3 年、第 2 次 6 年、第 3 次起无固定期限）
+    - end_date 给了且与规则不一致：存量非标准期限按 fixed+实际年数记录
+    - status 缺省 active；sign_date 缺省同起始日
+    """
+    from datetime import date as _date
+
+    # 覆盖更新：仅骨架 setattr 的 Excel 非空列生效，不做期限/快照派生重写——
+    # 否则存量非标准期限（如 fixed/9 年）会被按规则重算覆盖（实测踩过的坑）。
+    if existing is not None:
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+        if start_date and end_date and end_date <= start_date:
+            raise ValueError(f"到期日({end_date})应晚于起始日({start_date})")
+        return
+
+    # ── 以下仅新建行 ──
+    seq_no: int = data["seq_no"]
+    start_date: _date | None = data.get("start_date")
+    if start_date is None:
+        raise ValueError("新建行必须填「合同起始日」")
+
+    employee = (await db.execute(
+        select(Employee).where(
+            Employee.employee_number == data["employee_number"],
+            Employee.is_deleted.is_(False),
+        )
+    )).scalars().first()
+    if employee is None:
+        raise ValueError(f"员工档案中不存在工号 {data['employee_number']}")
+
+    # 快照以档案为准（Excel 的姓名/部门/岗位仅兜底）
+    data["name"] = employee.name
+    data["department"] = employee.department
+    if not data.get("position"):
+        data["position"] = employee.position
+
+    end_date: _date | None = data.get("end_date")
+    term_type, years = term_for_seq(seq_no)
+    if end_date is None:
+        if term_type != "open":
+            end_date = compute_end_date(start_date, term_type, years)
+    elif end_date <= start_date:
+        raise ValueError(f"到期日({end_date})应晚于起始日({start_date})")
+    else:
+        approx_years = round((end_date - start_date).days / 365.25, 2)
+        whole = max(1, int(approx_years + 0.5))
+        if seq_no <= 1 and whole == 3:
+            term_type, years = "fixed_3y", 3
+        elif seq_no == 2 and whole == 6:
+            term_type, years = "fixed_6y", 6
+        else:
+            term_type, years = "fixed", whole
+
+    data["term_type"] = term_type
+    data["term_years"] = years
+    data["end_date"] = end_date
+    data.setdefault("sign_date", start_date)
+    data.setdefault("status", LaborContract.STATUS_ACTIVE)
+
+
+CONTRACT_SPEC = LedgerImportSpec(
+    code="contract",
+    label="劳动合同",
+    model=LaborContract,
+    columns=[
+        LedgerColumn("工号", "employee_number", required=True),
+        LedgerColumn("签订次序", "seq_no", required=True, is_int=True),
+        LedgerColumn("姓名", "name"),
+        LedgerColumn("部门", "department", required=True),
+        LedgerColumn("岗位", "position"),
+        LedgerColumn("合同起始日", "start_date", is_date=True),  # 新建必填（finalizer 校验），修正行可缺省
+        LedgerColumn("合同到期日", "end_date", is_date=True),
+        LedgerColumn("签订日", "sign_date", is_date=True),
+        LedgerColumn("状态", "status", choices={
+            "生效中": "active",
+            "公告期": "pending_renewal",
+            "续签办理中": "renewing",
+            "已续签取代": "superseded",
+            "已终止": "terminated",
+            "到期未续签": "expired_unrenewed",
+        }),
+        LedgerColumn("备注", "remark"),
+    ],
+    dup_key_fields=["employee_number", "seq_no"],
+    dup_key_display="工号+签订次序",
+    example_row=["10086", "1", "张三", "甲部门", "操作工", "2024-01-15", "2027-01-14", "2024-01-15", "生效中", ""],
+    row_finalizer=_contract_row_finalizer,
+)
+
 LEDGER_IMPORT_SPECS: dict[str, LedgerImportSpec] = {
-    s.code: s for s in (ONBOARDING_SPEC, DEPARTURE_SPEC, TRAINING_SPEC, INCIDENT_SPEC)
+    s.code: s for s in (ONBOARDING_SPEC, DEPARTURE_SPEC, TRAINING_SPEC, INCIDENT_SPEC, CONTRACT_SPEC)
 }
 
 
@@ -235,8 +337,16 @@ async def parse_ledger_excel(file_bytes: bytes, spec: LedgerImportSpec) -> Parse
         raise ValueError(f"缺少必填列：{'、'.join(missing_required)}")
 
     parsed = ParsedLedger()
+
+    def _cells_of(row: tuple) -> list[str]:
+        return [str(c).strip() if c is not None else "" for c in row]
+
+    example_cells = [str(v).strip() if v is not None else "" for v in spec.example_row]
     for row_no, row in enumerate(rows[1:], start=2):
         if all(c is None or (isinstance(c, str) and not c.strip()) for c in row):
+            continue
+        # 模板自带灰色示例行：与示例行完全一致的行直接跳过（存量坑——此前示例行会被当数据导入）
+        if _cells_of(row) == example_cells:
             continue
         data: dict = {}
         row_errors: list[str] = []
@@ -257,6 +367,12 @@ async def parse_ledger_excel(file_bytes: bytes, spec: LedgerImportSpec) -> Parse
                     continue
                 # 库中为字符串的日期列（如工伤台账 occurred_date）落 isoformat 字符串
                 v = parsed_date.isoformat() if col.field in spec.date_str_fields else parsed_date
+            elif col.is_int:
+                try:
+                    v = int(float(v))
+                except (TypeError, ValueError):
+                    row_errors.append(f"「{col.header}」应为整数：{v}")
+                    continue
             elif col.is_float:
                 try:
                     v = float(v)
@@ -390,8 +506,12 @@ async def commit_import(
                                 continue
                             if getattr(existing, f) != v:
                                 setattr(existing, f, v)
+                        if spec.row_finalizer is not None:
+                            await spec.row_finalizer(row.data, existing, db)
                         outcome = "updated"
                     else:
+                        if spec.row_finalizer is not None:
+                            await spec.row_finalizer(row.data, None, db)
                         inst = model(**row.data)
                         db.add(inst)
                         await db.flush()

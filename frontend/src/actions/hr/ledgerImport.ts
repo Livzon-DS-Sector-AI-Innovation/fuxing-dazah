@@ -9,6 +9,7 @@ import { fetchHrApi, fetchHrDownload } from './_helpers'
 
 const LEDGER_LABELS: Record<LedgerImportLedger, string> = {
   onboarding: '入职台账',
+  contract: '劳动合同',
   departure: '离职台账',
   training: '培训台账',
   incident: '工伤纠纷台账',

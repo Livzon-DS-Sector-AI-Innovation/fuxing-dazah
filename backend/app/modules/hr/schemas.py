@@ -222,6 +222,8 @@ class TrainingSignInSheetInput(BaseModel):
     employee_departments: dict[str, str] = Field(default_factory=dict, description="员工姓名→部门映射")
     sick_count: int | None = Field(None, description="病假人数（无则0，后端自动统计）")
     maternity_count: int | None = Field(None, description="产假人数（无则0，后端自动统计）")
+    trainee_group: str | None = Field(None, max_length=64, description="培训对象群体词（缺省「全体成员」；按标签选人时传标签名，如「班组长」）")
+    omit_leave_note: bool = Field(False, description="省略「（病假x人、产假y人除外）」附注（按标签选人时该口径为全部门统计，不适用）")
     remarks: str | None = Field(None, max_length=512, description="备注")
 
 
@@ -246,6 +248,8 @@ class TrainingNotificationInput(BaseModel):
     trainee_names: list[str] = Field(default_factory=list, description="培训人员姓名列表")
     sick_count: int | None = Field(None, description="病假人数（无则0，后端自动统计）")
     maternity_count: int | None = Field(None, description="产假人数（无则0，后端自动统计）")
+    trainee_group: str | None = Field(None, max_length=64, description="培训对象群体词（缺省「全体成员」；按标签选人时传标签名，如「班组长」）")
+    omit_leave_note: bool = Field(False, description="省略「（病假x人、产假y人除外）」附注（按标签选人时该口径为全部门统计，不适用）")
     issuer_department: str | None = Field(None, max_length=64, description="落款部门")
     issue_date: date | None = Field(None, description="落款日期")
 
@@ -261,6 +265,7 @@ class TrainingEvaluationInput(BaseModel):
     trainee_names: list[str] = Field(default_factory=list)
     assessment_method: str | None = Field(None, max_length=32)
     department: str | None = Field(None, max_length=64, description="培训部门")
+    trainee_group: str | None = Field(None, max_length=64, description="培训对象群体词（缺省「全体成员」；按标签选人时传标签名，如「班组长」）")
 
 
 # ─── OffboardingRecord Schemas ───
@@ -413,6 +418,7 @@ class DepartureRecordResponse(DepartureRecordBase):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     # 离职证明签署
+    cert_issued_at: datetime | None = Field(None, description="解除劳动关系证明开具时间（离职办理流程回写）")
     cert_sign_status: str | None = None
     cert_signed_at: datetime | None = None
     cert_sign_name: str | None = None

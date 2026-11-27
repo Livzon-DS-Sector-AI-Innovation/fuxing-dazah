@@ -19,7 +19,13 @@ import {
   SopTrainingPersonnel,
   SopClassificationOption,
   SopPersonnelOption,
+  SopEvaluationStats,
+  SopMaterialsPreview,
+  ClassificationMember,
+  DepartmentTrainingPosition,
+  EmployeeClassification,
 } from '@/types/hr'
+import type { TrainingTemplateDef, TrainingTemplateVersion } from '@/types/hr/trainingTemplates'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
 
@@ -382,13 +388,24 @@ export async function fetchAnnualPlanItems(params?: { year?: number; keyword?: s
   return fetchHrApi(`/hr/annual-plan-items${qs}`, { errorMessage: '加载失败' })
 }
 
-/** 上传年度计划明细（Excel） */
-export async function uploadAnnualTrainingPlans(formData: FormData): Promise<{ code: number; message: string; data?: unknown }> {
-  return fetchHrApi('/hr/annual-training-plans/upload', {
-    method: 'POST',
-    body: formData,
-    errorMessage: '上传失败',
-  })
+/** 上传年度计划明细（Excel）
+ *
+ * 失败不抛错而是结构化返回：Server Action 抛出的错误在生产构建里会被 Next 脱敏成
+ * 「An error occurred in the Server Components render…」，后端的中文提示到不了用户眼前。
+ */
+export async function uploadAnnualTrainingPlans(
+  formData: FormData,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  try {
+    const res = await fetchHrApi<{ message?: string }>('/hr/annual-training-plans/upload', {
+      method: 'POST',
+      body: formData,
+      errorMessage: '上传失败',
+    })
+    return { ok: true, message: res.message || '上传成功' }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : '上传失败' }
+  }
 }
 
 /** 新建单条计划明细 */
@@ -412,6 +429,22 @@ export async function deleteAnnualPlanItem(planId: string, itemId: string) {
 
 export async function fetchSopDepartments(): Promise<{ data: string[] }> {
   return fetchHrApi('/hr/sop-catalog/departments', { errorMessage: '获取部门列表失败' })
+}
+
+/** 培训人员配置页部门选项：组织架构部门 ∪ SOP目录部门（兜底已撤销部门的历史文件），去重排序 */
+export async function fetchTrainingDepartmentOptions(): Promise<{ data: string[] }> {
+  const [deptsRes, sopRes] = await Promise.all([
+    fetchHrApi('/hr/departments?page=1&page_size=200', { errorMessage: '获取部门列表失败' }),
+    fetchHrApi('/hr/sop-catalog/departments', { errorMessage: '获取部门列表失败' }),
+  ])
+  const names = new Set<string>()
+  for (const d of deptsRes?.data || []) {
+    if (d?.name) names.add(d.name as string)
+  }
+  for (const d of sopRes?.data || []) {
+    if (d) names.add(d as string)
+  }
+  return { data: [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')) }
 }
 
 export async function fetchSopCatalog(params?: {
@@ -548,44 +581,40 @@ export async function updateSopTrainingEntry(id: string, data: {
   return res
 }
 
-export async function transferSopTrainingEntry(id: string): Promise<{ code: number; message: string; data: { trainer: string | null } }> {
-  const res = await fetchHrApi(`/hr/sop-training-entries/${id}/transfer`, {
-    method: 'POST',
-    errorMessage: '转培训失败',
-  })
-  revalidatePath('/hr/training/sop-secondary')
-  return res
-}
-
-/** 多条SOP一起转训（批量） */
-export async function batchTransferSopEntries(ids: string[]): Promise<{ code: number; message: string; data: { transferred: number } }> {
-  const res = await fetchHrApi('/hr/sop-training-entries/batch-transfer', {
-    method: 'POST',
-    body: JSON.stringify({ ids }),
-    errorMessage: '批量转培训失败',
-  })
-  revalidatePath('/hr/training/sop-secondary')
-  return res
-}
-
-/** 多条SOP生成一套培训材料（zip：每部门一份通知+签到表） */
-export async function generateSopTrainingMaterials(ids: string[]): Promise<{ base64: string; filename: string }> {
+/** 多条SOP生成一套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含））
+ *  生成即完成：后端带出培训师、关联分类标签并置「已生成」
+ *  stats 非空时评估表预填统计（不合格恒为 0）；缺省保持统计区空白 */
+export async function generateSopTrainingMaterials(
+  ids: string[],
+  stats?: SopEvaluationStats | null,
+): Promise<{ base64: string; filename: string }> {
   const { base64, filename } = await fetchHrDownload('/hr/sop-training-entries/batch-materials', {
     method: 'POST',
-    body: JSON.stringify({ ids }),
+    body: JSON.stringify(stats ? { ids, evaluation_stats: stats } : { ids }),
     errorMessage: '生成材料失败',
   })
   return { base64, filename: filename || 'SOP培训材料.zip' }
 }
 
-export async function fetchSopClassifications(department: string): Promise<{ code: number; message: string; data: SopClassificationOption[] }> {
-  const qs = buildQueryString({ department })
-  return fetchHrApi(`/hr/sop-training-entries/classifications${qs}`, { errorMessage: '获取分类失败' })
+/** 生成材料弹窗预填用：勾选条目一套材料的应到人数（分类人员并集）与部门病产假数 */
+export async function previewSopBatchMaterials(ids: string[]): Promise<SopMaterialsPreview> {
+  const res = await fetchHrApi<{ code: number; message: string; data: SopMaterialsPreview }>(
+    '/hr/sop-training-entries/materials-preview',
+    { method: 'POST', body: JSON.stringify({ ids }), errorMessage: '获取统计基数失败' },
+  )
+  return res.data
 }
 
-export async function fetchSopPersonnel(department: string, classification: string): Promise<{ code: number; message: string; data: SopPersonnelOption[] }> {
-  const qs = buildQueryString({ department, classification })
-  return fetchHrApi(`/hr/sop-training-entries/personnel${qs}`, { errorMessage: '获取分类人员失败' })
+/** SOP 二级表分类选项：本人创建的分类（清单 ∪ 打过的标签），人数按标签全量统计 */
+export async function fetchSopClassifications(): Promise<{ code: number; message: string; data: SopClassificationOption[] }> {
+  return fetchHrApi(`/hr/sop-training-entries/classifications`, { errorMessage: '获取分类失败' })
+}
+
+/** 分类人员：跨部门联动，只认本人打的标签，不按二级表记录的部门过滤；多分类取并集 */
+export async function fetchSopPersonnel(classifications: string[]): Promise<{ code: number; message: string; data: SopPersonnelOption[] }> {
+  const searchParams = new URLSearchParams()
+  for (const c of classifications) searchParams.append('classification', c)
+  return fetchHrApi(`/hr/sop-training-entries/personnel?${searchParams.toString()}`, { errorMessage: '获取分类人员失败' })
 }
 
 /** 导出二级表培训清单（xlsx） */
@@ -607,6 +636,14 @@ export async function fetchPositionTrainings(params: {
 }): Promise<{ data: unknown[] }> {
   const qs = buildQueryString(params)
   return fetchHrApi(`/hr/position-trainings${qs}`, { errorMessage: '加载培训内容失败' })
+}
+
+/** 按部门列培训岗位及各自的培训大类（入职培训页选择培训岗位用） */
+export async function fetchTrainingPositionsByDepartment(
+  department: string,
+): Promise<{ data: DepartmentTrainingPosition[] }> {
+  const qs = buildQueryString({ department })
+  return fetchHrApi(`/hr/position-trainings/by-department${qs}`, { errorMessage: '加载培训岗位失败' })
 }
 
 export async function createPositionTraining(data: Record<string, unknown>) {
@@ -731,7 +768,7 @@ export async function fetchEmployeeTagsByEmployee(employeeNumber: string): Promi
 
 // ─── 员工分类清单（下拉选项模式） ───
 
-export async function fetchEmployeeClassifications(): Promise<{ code: number; message: string; data: { id: string; name: string; count: number }[] }> {
+export async function fetchEmployeeClassifications(): Promise<{ code: number; message: string; data: EmployeeClassification[] }> {
   return fetchHrApi('/hr/employee-classifications', { errorMessage: '获取分类清单失败' })
 }
 
@@ -743,6 +780,15 @@ export async function createEmployeeClassification(name: string): Promise<{ code
   })
 }
 
+/** 分类改名：后端会把该分类下人员的同名标签一并改掉 */
+export async function renameEmployeeClassification(id: string, name: string): Promise<{ code: number; message: string; data: { id: string; name: string } }> {
+  return fetchHrApi(`/hr/employee-classifications/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+    errorMessage: '保存失败',
+  })
+}
+
 export async function deleteEmployeeClassification(id: string): Promise<{ code: number; message: string }> {
   return fetchHrApi(`/hr/employee-classifications/${id}`, {
     method: 'DELETE',
@@ -751,8 +797,7 @@ export async function deleteEmployeeClassification(id: string): Promise<{ code: 
 }
 
 export async function fetchClassificationMembers(id: string): Promise<{
-  code: number; message: string
-  data: { name: string; employee_number: string; department: string; position: string }[]
+  code: number; message: string; data: ClassificationMember[]
 }> {
   return fetchHrApi(`/hr/employee-classifications/${id}/members`, { errorMessage: '获取分类人员失败' })
 }
@@ -768,8 +813,110 @@ export async function removeClassificationMembers(id: string, employee_numbers: 
 }
 
 
-/** 统筹总表一键生成全套培训材料（通知+签到表+试卷+登记表 zip） */
-export async function downloadSopMasterMaterials(recordId: string): Promise<{ base64: string; filename: string | null }> {
-  const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/${recordId}/materials`, { method: 'POST' })
+/** 统筹总表一键生成全套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含））
+ *  stats 非空时评估表预填统计（不合格恒为 0）；缺省保持统计区空白 */
+export async function downloadSopMasterMaterials(
+  recordId: string,
+  stats?: SopEvaluationStats | null,
+): Promise<{ base64: string; filename: string | null }> {
+  const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/${recordId}/materials`, {
+    method: 'POST',
+    ...(stats ? { body: JSON.stringify({ evaluation_stats: stats }) } : {}),
+  })
   return { base64, filename: filename || 'SOP全套培训材料.zip' }
+}
+
+/** 生成材料弹窗预填用：单条材料导出时的应到人数（主办部门名单∪涉及部门一级培训师）与病产假数 */
+export async function previewSopMasterMaterials(recordId: string): Promise<SopMaterialsPreview> {
+  const res = await fetchHrApi<{ code: number; message: string; data: SopMaterialsPreview }>(
+    `/hr/sop-training-records/${recordId}/materials-preview`,
+    { errorMessage: '获取统计基数失败' },
+  )
+  return res.data
+}
+
+// ─── 培训导出模板管理（hr:training:template） ───
+
+export async function listTrainingExportTemplates(): Promise<{
+  code: number; message: string; data: TrainingTemplateDef[]
+}> {
+  return fetchHrApi('/hr/training-export-templates', { errorMessage: '获取模板清单失败' })
+}
+
+/** 上传向导预检：自动识别 docx 里实际出现的 {占位符}（只识别，不校验） */
+export async function inspectTrainingExportTemplate(formData: FormData): Promise<{
+  code: number; message: string; data: { markers: string[] }
+}> {
+  return fetchHrApi('/hr/training-export-templates/inspect', {
+    method: 'POST',
+    body: formData,
+    errorMessage: '识别占位符失败',
+  })
+}
+
+/** 上传向导：按标签对照自动生成缺失的 {占位符}（返回改好的文件，未入库） */
+export async function autofillTrainingExportTemplate(key: string, formData: FormData): Promise<{
+  code: number; message: string; data: {
+    file_base64: string | null
+    placements: { marker: string; where: string }[]
+    missing: string[]
+    message?: string
+  }
+}> {
+  return fetchHrApi(`/hr/training-export-templates/autofill`, {
+    method: 'POST',
+    body: formData,
+    errorMessage: '自动生成占位符失败',
+  })
+}
+
+export async function listTrainingExportTemplateVersions(key: string): Promise<{
+  code: number; message: string; data: TrainingTemplateVersion[]
+}> {
+  return fetchHrApi(`/hr/training-export-templates/${encodeURIComponent(key)}/versions`, {
+    errorMessage: '获取版本历史失败',
+  })
+}
+
+export async function uploadTrainingExportTemplate(key: string, formData: FormData): Promise<{
+  code: number; message: string; data: TrainingTemplateVersion
+}> {
+  return fetchHrApi(`/hr/training-export-templates/${encodeURIComponent(key)}/upload`, {
+    method: 'POST',
+    body: formData,
+    errorMessage: '上传失败',
+  })
+}
+
+export async function activateTrainingExportTemplateVersion(key: string, versionId: string): Promise<{
+  code: number; message: string; data: TrainingTemplateVersion
+}> {
+  return fetchHrApi(
+    `/hr/training-export-templates/${encodeURIComponent(key)}/versions/${versionId}/activate`,
+    { method: 'POST', errorMessage: '激活版本失败' },
+  )
+}
+
+export async function restoreTrainingExportTemplateDefault(key: string): Promise<{
+  code: number; message: string; data: null
+}> {
+  return fetchHrApi(`/hr/training-export-templates/${encodeURIComponent(key)}/restore-default`, {
+    method: 'POST',
+    errorMessage: '恢复默认失败',
+  })
+}
+
+/** 下载模板文件：current（缺省）/ 历史版本 / 官方默认模板 */
+export async function downloadTrainingExportTemplate(
+  key: string,
+  opts: { versionId?: string; isDefault?: boolean; fallbackName?: string } = {},
+): Promise<{ base64: string; filename: string | null }> {
+  const params = new URLSearchParams()
+  if (opts.versionId) params.set('version_id', opts.versionId)
+  if (opts.isDefault) params.set('default', 'true')
+  const qs = params.toString()
+  const { base64, filename } = await fetchHrDownload(
+    `/hr/training-export-templates/${encodeURIComponent(key)}/file${qs ? `?${qs}` : ''}`,
+  )
+  return { base64, filename: filename || opts.fallbackName || '模板.docx' }
 }

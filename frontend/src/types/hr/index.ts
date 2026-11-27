@@ -288,6 +288,36 @@ export interface OnboardingFilterOptions {
   years?: number[]
 }
 
+/** 入职培训下拉候选（与入职台账列表同源：员工档案 + 在职） */
+export interface TrainingCandidate {
+  id: string
+  employee_id: string
+  employee_number: string
+  name: string
+  department: string
+  position: string
+  hire_date: string | null
+  education: string | null
+  school: string | null
+  graduation_date: string | null
+  /** 入职台账记录来源；无台账记录时为「新入职」 */
+  source: string
+  /** 已完成入职培训：最近一次职位变动生效日期之后存在入职培训记录表导出写入的记录 */
+  prejob_completed: boolean
+  /** 职位变动记录（晋升/转岗/产假复岗），按生效日期降序，[0] 为最近一次 */
+  transfers: EmployeeTransfer[]
+}
+
+/** 部门下的培训岗位及其培训大类（岗位培训关联表与 SOP 目录取并集） */
+export interface DepartmentTrainingPosition {
+  position_name: string
+  categories: {
+    training_category: string
+    trainer: string | null
+    training_method: string | null
+  }[]
+}
+
 export interface EmployeeResponse {
   code: number
   message: string
@@ -307,15 +337,22 @@ export interface SyncStatusResponse {
   }
 }
 
+/** 部门负责人 / 分管领导的账号就绪状态（能否按姓名解析到飞书账号，与后端 department_manager_status 对齐）：
+ *  ok 就绪 / no_account 未登录过系统（收不到）/ ambiguous 同名多账号（不会发）/ left 已离职（会发给已离职的人） */
+export type ManagerAccountStatus = 'ok' | 'no_account' | 'ambiguous' | 'left'
+
 export interface Department {
   id: string
   name: string
   code: string
   description?: string
-  /** 部门负责人（转正审批第二级） */
+  /** 部门负责人（劳动合同续签审批提醒接收人；转正审批第二级） */
   department_manager_name?: string | null
   /** 分管领导（转正审批第三级） */
   supervising_leader_name?: string | null
+  /** 账号就绪状态；没填姓名时为空串 */
+  manager_account_status?: ManagerAccountStatus | ''
+  leader_account_status?: ManagerAccountStatus | ''
   employee_count?: number
   created_at?: string
   updated_at?: string
@@ -470,6 +507,8 @@ export interface DepartureRecord {
   feishu_synced_at?: string
   created_at?: string
   updated_at?: string
+  /** 解除劳动关系证明开具时间（离职办理流程回写） */
+  cert_issued_at?: string | null
   cert_sign_status?: string
   cert_signed_at?: string
   cert_sign_name?: string
@@ -553,6 +592,10 @@ export interface SopTrainingRecord {
   file_no: string | null
   effective_date: string | null
   method: string | null
+  /** 考核方式：阅读并理解/问答/笔试；空 = 后端按培训方式取默认（R→阅读并理解，T→问答） */
+  assessment_method?: string | null
+  /** 合并登记的文件列表；空 = 单文件（看 file_name/file_no） */
+  files?: { file_name: string; file_no: string | null }[] | null
   complete_time: string | null
   trainer: string | null
   trainees: string | null
@@ -581,11 +624,12 @@ export interface SopTrainingEntry {
   trainer: string | null
   status: string
   complete_time: string | null
+  /** 自定义分类，多选按「；」连接（对应创建人员工标签），展示用 splitSopEntryClassifications 拆 */
   classification: string | null
   personnel: SopTrainingPersonnel[]
   personnel_count: number
-  transferred_by: string | null
-  transferred_at: string | null
+  generated_by: string | null
+  generated_at: string | null
   created_at: string
   updated_at: string
 }
@@ -595,11 +639,42 @@ export interface SopClassificationOption {
   count: number
 }
 
+/** 培训效果评估表统计预填（生成材料弹窗）：不合格恒为 0，优秀+合格=参加考核 */
+export interface SopEvaluationStats {
+  actual_count: number
+  exam_count: number
+  excellent_count: number
+  qualified_count: number
+}
+
+/** 生成材料弹窗的统计基数（materials-preview 接口返回） */
+export interface SopMaterialsPreview {
+  expected_count: number
+  sick_leave: number
+  maternity_leave: number
+}
+
 export interface SopPersonnelOption {
   employee_number: string
   name: string
   position: string
   status: string
+}
+
+// ─── 培训人员名单 · 人员分类 ───
+
+/** 人员分类：按创建人隔离，人员通过同名标签归入分类 */
+export interface EmployeeClassification {
+  id: string
+  name: string
+  count: number
+}
+
+export interface ClassificationMember {
+  employee_number: string
+  name: string
+  department: string
+  position: string
 }
 
 // ─── AI 出题相关类型 ───
@@ -1617,6 +1692,76 @@ export interface CertificateRequirement {
   applies_to: 'all' | 'key_position'
 }
 
+/** 批量导入：员工补选项（姓名/工号模糊搜索） */
+export interface CertificateImportEmployeeOption {
+  id: string
+  name: string
+  employee_number: string | null
+  department: string | null
+}
+
+/** 批量导入预检行（一行 = ZIP 内一个文件） */
+export interface CertificateImportRow {
+  filename: string
+  /** ok=自动匹配 / unmatched=未匹配 / ambiguous=重名待选 / invalid=不可导入 */
+  status: 'ok' | 'unmatched' | 'ambiguous' | 'invalid'
+  error: string | null
+  name_hint: string | null
+  employee_number_hint: string | null
+  employee: CertificateImportEmployeeOption | null
+  /** 重名候选（ambiguous 时） */
+  candidates: CertificateImportEmployeeOption[]
+  category: CertificateCategory
+  /** false = 文件名里没识别出类别，默认「其他」待确认 */
+  category_matched: boolean
+  /** 暂存键（确认提交时原样带回） */
+  storage_key: string | null
+  content_type: string | null
+  size: number
+  /** 该员工该类别已有当前版本 → 本次导入将升版本换证 */
+  replaces: { version_no: number; expiry_date: string | null; is_permanent: boolean } | null
+  /** 同批同「员工×类别」多个文件 → 提交会被拒，需合并或改类别 */
+  dup_in_batch: boolean
+}
+
+export interface CertificateImportPrecheck {
+  rows: CertificateImportRow[]
+  summary: {
+    total: number
+    ok: number
+    unmatched: number
+    ambiguous: number
+    invalid: number
+    replaces: number
+  }
+}
+
+/** 批量导入确认提交行 */
+export interface CertificateImportCommitRow {
+  storage_key: string
+  filename: string
+  employee_id: string
+  category: CertificateCategory
+  certificate_name?: string | null
+  certificate_no?: string | null
+  issue_date?: string | null
+  expiry_date?: string | null
+  is_permanent?: boolean
+  remark?: string | null
+}
+
+export interface CertificateImportCommitResult {
+  results: {
+    filename: string
+    employee_name: string | null
+    category_label: string
+    version_no: number | null
+    ok: boolean
+    error: string | null
+  }[]
+  summary: { imported: number; failed: number }
+}
+
 export interface ProbationSafetyExamItem {
   id: string
   employee_id: string
@@ -1654,7 +1799,7 @@ export interface CertificateUploadInput {
 // ─── 台账 Excel 导入（两步预检式）───
 
 /** 可导入的台账类型（与后端 ledger_import.LEDGER_IMPORT_SPECS 对齐） */
-export type LedgerImportLedger = 'onboarding' | 'departure' | 'training' | 'incident'
+export type LedgerImportLedger = 'onboarding' | 'departure' | 'training' | 'incident' | 'contract'
 
 /** 预检结果：新增/重复/错误统计及明细（明细截断 50 条） */
 export interface LedgerImportPrecheck {
@@ -1675,4 +1820,589 @@ export interface LedgerImportResult {
   skipped: number
   skipped_scope: number
   errors: string[]
+}
+
+// ─── 劳动合同管理 ───
+
+/** 劳动合同状态（与后端 LaborContract.STATUS_* 对齐） */
+export type LaborContractStatus =
+  | 'active'
+  | 'pending_renewal'
+  | 'renewing'
+  | 'superseded'
+  | 'terminated'
+  | 'expired_unrenewed'
+
+export type LaborContractTermType = 'fixed_3y' | 'fixed_6y' | 'fixed' | 'open'
+
+/** 劳动合同（一份合同一行；期限/状态标签由后端按签订次数计算下发） */
+export interface LaborContract {
+  id: string
+  employee_number: string
+  name: string
+  department: string
+  position?: string | null
+  seq_no: number
+  seq_label: string
+  term_type: LaborContractTermType
+  term_label: string
+  term_years?: number | null
+  start_date?: string | null
+  end_date?: string | null
+  sign_date?: string | null
+  status: LaborContractStatus
+  status_label: string
+  remark?: string | null
+  dept_decision?: 'agree' | 'disagree' | null
+  dept_decision_label?: string | null
+  dept_decision_by?: string | null
+  dept_decision_at?: string | null
+  approval_mode?: 'feishu' | 'manual' | null
+  approval_mode_label?: string | null
+  approval_instance_code?: string | null
+  stamped_at?: string | null
+  delivered_at?: string | null
+  sign_confirmed_at?: string | null
+  terminated_reason?: string | null
+  terminated_at?: string | null
+  departure_record_id?: string | null
+  /** 电子归档（与合同状态正交）：合同行上的当前版扫描件快照 */
+  archive_status?: ContractArchiveStatus
+  archive_status_label?: string
+  archive_file_name?: string | null
+  archive_uploaded_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+/** 合同详情（含同一员工历次合同） */
+export interface LaborContractDetail extends LaborContract {
+  history: LaborContract[]
+  /** 飞书原生审批为可选增强：配置了审批定义编码才为 true（默认站内审批） */
+  renewal_approval_configured?: boolean
+  /** 归档能力随数据范围变化，由后端下发：can_archive 上传/删除扫描件（仅 HR）；
+   *  can_access_file 原件预览/下载（HR 与员工本人） */
+  can_archive?: boolean
+  can_access_file?: boolean
+}
+
+export interface LaborContractListParams {
+  status?: string
+  keyword?: string
+  expiring_days?: number
+  department?: string
+  page?: number
+  page_size?: number
+}
+
+export interface LaborContractCreateInput {
+  employee_number: string
+  start_date: string
+  sign_date?: string | null
+  seq_no?: number | null
+  remark?: string | null
+}
+
+/** 录入预推：签订次序与期限（缺省按入职日期+期限规则推算） */
+export interface ContractEntryPreview {
+  employee_number: string
+  seq_no: number
+  seq_label: string
+  term_type: string
+  term_years: number | null
+  end_date: string | null
+  years_employed: number | null
+  existing_contracts: number
+}
+
+export interface LaborContractUpdateInput {
+  start_date?: string
+  sign_date?: string
+  position?: string
+  remark?: string
+}
+
+export interface LaborContractRenewInput {
+  start_date: string
+  sign_date?: string | null
+}
+
+/** 签字页最小视图（免登；不含工号等可枚举信息） */
+export interface ContractSignView {
+  name: string
+  department: string
+  seq_no: number
+  seq_label: string
+  term_label: string
+  start_date?: string | null
+  end_date?: string | null
+  delivered_at?: string | null
+  sign_confirmed_at?: string | null
+}
+
+// ─── 劳动合同 · 电子档案库（P2）───
+
+export type ContractArchiveStatus = 'unarchived' | 'archived'
+
+/** 合同扫描件版本（一份合同一个合并文件；换传升版本，旧版保留可查） */
+export interface ContractArchiveVersion {
+  id: string
+  contract_id: string
+  version_no: number
+  is_current: boolean
+  /** 展示/下载名：工号+姓名+签订次数+起止日期（服务端生成） */
+  file_name: string
+  content_type: string
+  size: number
+  remark?: string | null
+  source: 'single' | 'batch'
+  uploaded_by?: string | null
+  uploaded_at?: string | null
+}
+
+/** 合同扫描件调阅/下载记录 */
+export interface ContractAccessLog {
+  id: string
+  viewer_name: string
+  action: 'view' | 'download'
+  action_label: string
+  version_no?: number | null
+  created_at?: string | null
+}
+
+/** 电子档案库台账行：合同 + 是否离职人员 + 归档能力（后端按数据范围下发） */
+export interface ContractArchiveRow extends LaborContract {
+  is_departed: boolean
+  can_archive?: boolean
+  can_access_file?: boolean
+}
+
+export interface ContractArchiveStats {
+  in_service_unarchived: number
+  in_service_archived: number
+  departed_unarchived: number
+  departed_archived: number
+  /** 上传/批量挂接等归档写操作：仅 HR（后端按数据范围下发） */
+  can_archive?: boolean
+}
+
+/** 未归档份数按部门（档案库部门下拉） */
+export interface ContractArchiveDepartment {
+  department: string
+  unarchived: number
+}
+
+export interface ContractArchiveListParams {
+  archive_status?: ContractArchiveStatus
+  /** 在职 / 离职 / 全部（后两者仅 HR 可用，其他范围自动收敛为在职） */
+  population?: 'in_service' | 'departed' | 'all'
+  keyword?: string
+  department?: string
+  page?: number
+  page_size?: number
+}
+
+/** 员工历次合同视图（员工档案「合同」页签：一人一事一档） */
+export interface EmployeeContractsView {
+  contracts: LaborContract[]
+  /** 原件调阅权限：HR 与员工本人为 true，部门范围只有基本信息 */
+  can_access_file: boolean
+  /** 上传/删除扫描件：仅 HR */
+  can_archive?: boolean
+}
+
+/** 批量挂接：可选的合同（多份待选 / 补选时挑签订次数） */
+export interface ContractImportContractOption {
+  id: string
+  seq_no: number
+  seq_label: string
+  period: string
+  status_label: string
+  archive_status: ContractArchiveStatus
+}
+
+export interface ContractImportPerson {
+  employee_number: string
+  name: string
+  department: string
+  source: 'employee' | 'departure'
+}
+
+/** 批量挂接预检行 */
+export interface ContractImportRow {
+  filename: string
+  status: 'ok' | 'ambiguous' | 'unmatched' | 'invalid'
+  error?: string | null
+  number_hint?: string | null
+  seq_hint?: number | null
+  remark?: string | null
+  employee?: ContractImportPerson | null
+  contract?: ContractImportContractOption | null
+  /** 多份合同待选时的候选 */
+  candidates?: ContractImportContractOption[]
+  /** 离职人员无合同行：提交时按离职记录合同信息建档 */
+  build_from_departure: boolean
+  storage_key?: string | null
+  content_type?: string | null
+  size: number
+  /** 已有扫描件：导入后升为新版本，旧版转历史 */
+  replaces?: { version_no: number; file_name: string } | null
+  dup_in_batch: boolean
+}
+
+export interface ContractImportPrecheck {
+  rows: ContractImportRow[]
+  summary: {
+    total: number
+    ok: number
+    ambiguous: number
+    unmatched: number
+    invalid: number
+    replaces: number
+    builds: number
+  }
+}
+
+/** 批量挂接补选：员工/离职人员 + 其合同清单 */
+export interface ContractImportOption extends ContractImportPerson {
+  contracts: ContractImportContractOption[]
+  build_from_departure: boolean
+}
+
+/** 批量挂接提交行：contract_id 与 employee_number 二选一（后者用于离职人员建档后挂接） */
+export interface ContractImportCommitRow {
+  storage_key: string
+  filename: string
+  contract_id?: string | null
+  employee_number?: string | null
+  remark?: string | null
+}
+
+export interface ContractImportCommitResult {
+  results: {
+    filename: string
+    employee_name?: string | null
+    seq_label?: string | null
+    version_no?: number | null
+    ok: boolean
+    error?: string | null
+  }[]
+  summary: { imported: number; failed: number }
+}
+
+// ─── 离职合同台账（P3）───
+
+/** 合同终止方式：expiry 到期终止 / resign 员工辞职解除 / employer 公司解除 / retire 退休终止 /
+ *  transfer 调动转签解除 / other 其他 / none 无合同记录 */
+export type ContractTerminationType =
+  | 'expiry'
+  | 'resign'
+  | 'employer'
+  | 'retire'
+  | 'transfer'
+  | 'other'
+  | 'none'
+
+/** 离职合同台账行：人员 / 合同 / 离职信息 / 手续状态四块 */
+export interface DepartureContractView {
+  id: string
+  // 人员信息
+  name: string
+  employee_number?: string | null
+  department: string
+  position: string
+  employee_category?: string | null
+  // 合同信息（按工号从合同表实时聚合；无合同行时退回离职记录自带起止日期）
+  has_contract_rows: boolean
+  has_contract: boolean
+  contract_count: number
+  /** false = 份数仅来自离职台账登记（历史离职人员不在合同表） */
+  contract_count_known: boolean
+  contracts: {
+    id: string
+    seq_no: number
+    seq_label: string
+    term_label: string
+    start_date?: string | null
+    end_date?: string | null
+    status: string
+    status_label: string
+    terminated_reason?: string | null
+    archive_status: ContractArchiveStatus
+    archive_status_label: string
+  }[]
+  contract_periods_text: string
+  contract_start_date?: string | null
+  contract_end_date?: string | null
+  term_type_last?: string | null
+  term_label_last?: string | null
+  archive_status: ContractArchiveStatus
+  archive_status_label: string
+  // 离职信息
+  offboarding_date?: string | null
+  offboarding_type: string
+  offboarding_reason?: string[] | string | null
+  termination_type: ContractTerminationType
+  termination_type_label: string
+  /** true = HR 人工更正过（否则按离职日期与离职类型自动判定） */
+  termination_type_overridden: boolean
+  termination_date?: string | null
+  approval_ref?: string | null
+  approval_refs: string[]
+  // 手续状态
+  separation_process_no?: string | null
+  /** case 离职办结单编号 / manual 人工补录 / null 未登记 */
+  process_no_source?: 'case' | 'manual' | null
+  certificate_status: 'pending' | 'issued' | 'delivering' | 'signed'
+  certificate_status_label: string
+  contract_original_status: 'unrecovered' | 'recovered' | 'waived'
+  contract_original_status_label: string
+}
+
+export interface DepartureContractListParams {
+  department?: string
+  date_from?: string
+  date_to?: string
+  termination_type?: ContractTerminationType
+  keyword?: string
+  page?: number
+  page_size?: number
+}
+
+export interface DepartureContractFilterOptions {
+  termination_types: { value: ContractTerminationType; label: string }[]
+  certificate_statuses: { value: string; label: string }[]
+  original_statuses: { value: NonNullable<DepartureContractView['contract_original_status']>; label: string }[]
+}
+
+/** 离职合同台账人工项（终止方式更正 / 审批依据 / 流程单号 / 原件回收状态） */
+export interface DepartureContractProcedureInput {
+  /** 传空串 = 清除更正，恢复自动判定 */
+  termination_type?: string | null
+  approval_ref?: string | null
+  separation_process_no?: string | null
+  contract_original_status: NonNullable<DepartureContractView['contract_original_status']>
+}
+
+// ─── 离职办理（OffboardingCase 状态机）───
+
+export type OffboardingCaseStatus =
+  | 'draft'
+  | 'approving'
+  | 'clearing'
+  | 'cert_issuing'
+  | 'delivering'
+  | 'signed'
+  | 'closed'
+  | 'canceled'
+
+export type ClearanceCategory = 'admin' | 'finance' | 'hr' | 'work'
+
+export interface OffboardingClearanceItem {
+  id: string
+  category: ClearanceCategory
+  category_label: string
+  item_name: string
+  status: 'pending' | 'confirmed' | 'deducted'
+  status_label: string
+  deduction_amount?: number | null
+  supplement_amount?: number | null
+  remark?: string | null
+  confirmed_by?: string | null
+  confirmed_at?: string | null
+  /** manual HR 登记 / feishu_form 飞书实例回读 / seed 进入清退时落的默认清单 */
+  source?: 'manual' | 'feishu_form' | 'seed'
+}
+
+export interface OffboardingCase {
+  id: string
+  case_no: string
+  employee_id: string
+  departure_record_id?: string | null
+  employee_number: string
+  name: string
+  department: string
+  position?: string | null
+  level?: string | null
+  /** 发起人姓名快照 */
+  initiator_name?: string | null
+  offboarding_date: string
+  offboarding_type: string
+  reason?: string | null
+  employee_category?: string | null
+  application_submitted: boolean
+  status: OffboardingCaseStatus
+  status_label: string
+  approval_track?: 'staff' | 'director' | null
+  resignation_instance_code?: string | null
+  resignation_finished_at?: string | null
+  clearance_instance_code?: string | null
+  clearance_finished_at?: string | null
+  health_check_required: boolean
+  health_check_done: boolean
+  health_check_date?: string | null
+  health_check_file_name?: string | null
+  has_health_check_file?: boolean
+  /** electronic 电子单张（链接线上签收）/ paper 纸质两联（当面签收） */
+  cert_template?: 'electronic' | 'paper' | null
+  cert_issued_at?: string | null
+  /** 开具人（HR 经办人姓名快照） */
+  cert_issued_by?: string | null
+  has_cert_file?: boolean
+  mail_recipient?: string | null
+  mail_sent_at?: string | null
+  mail_status?: string | null
+  sms_phone?: string | null
+  sms_status?: string | null
+  delivery_channel?: string | null
+  paper_signed_at?: string | null
+  paper_signed_by?: string | null
+  account_deactivated: boolean
+  closed_at?: string | null
+  remark?: string | null
+  created_at?: string | null
+}
+
+/** 办理详情：含清退明细与台账签字状态 */
+export interface OffboardingCaseDetail extends OffboardingCase {
+  clearance_items?: OffboardingClearanceItem[]
+  /** 两个审批环节是否接了飞书：未接则走站内登记办结 */
+  resignation_feishu?: boolean
+  clearance_feishu?: boolean
+  sign_state?: {
+    cert_sign_status?: string | null
+    cert_signed_at?: string | null
+    cert_sign_name?: string | null
+    has_sign_image?: boolean
+    cert_issued_at?: string | null
+  } | null
+}
+
+/** 看板页头统计：各状态单数 + 临期单数（审批 / 清退中且距离职日 ≤ 2 天） */
+export interface OffboardingCaseStats {
+  counts: Partial<Record<OffboardingCaseStatus, number>>
+  overdue: number
+  /** 全部有效单（不含已取消之外的历史单都算） */
+  total: number
+  /** 进行中：待发起 ~ 已签字 */
+  active: number
+}
+
+/** 开具 / 补发送达的响应：办结单 + 交回 HR 人工转发的签署链接 */
+export interface OffboardingCaseDeliveryResponse extends OffboardingCase {
+  sign_url?: string | null
+}
+
+/** 离职证明签字 H5 视图（免登，token 一次性） */
+export interface DepartureCertSignView {
+  name: string
+  department: string
+  position: string
+  leave_date: string
+  has_pdf: boolean
+  /** 联系人文案（有疑问找谁） */
+  contact?: string
+  certificate_html: string
+}
+
+/** 签字确认响应：签字后 token 已作废，PDF 内容随响应带回供下载 */
+export interface DepartureCertSignResult {
+  signed_at?: string | null
+  case_status?: OffboardingCaseStatus | null
+  has_pdf: boolean
+  pdf_base64?: string | null
+  pdf_filename?: string | null
+}
+
+// ─── 离职台账增强（筛选 / 勾选导出 / 保存视图 / 导出留痕）───
+
+/** 台账筛选条件：键名与后端一致，保存视图 / 导出留痕里存的就是它 */
+export interface DepartureLedgerFilters {
+  keyword?: string
+  department?: string
+  position?: string
+  offboarding_type?: string
+  offboarding_reason?: string
+  gender?: string
+  education?: string
+  employee_category?: string
+  offboarding_date_from?: string
+  offboarding_date_to?: string
+  /** 办结单状态；'none' = 未发起办理 */
+  approval_status?: string
+  cert_issued?: boolean
+  cert_signed?: boolean
+}
+
+export interface DepartureLedgerSort {
+  sort_by?: 'offboarding_date' | 'name' | 'department'
+  sort_order?: 'asc' | 'desc'
+}
+
+/** 台账行 = 离职台账记录 + 办理流程信息（按工号挂最近一张办结单） */
+export interface DepartureLedgerRow extends DepartureRecord {
+  has_sign_image?: boolean
+  case_id?: string | null
+  case_no?: string | null
+  approval_status?: OffboardingCaseStatus | null
+  approval_status_label?: string
+  cert_issued?: boolean
+  cert_signed?: boolean
+  /** 四部门清退进度与扣补金额（没有办结单时各项为 0） */
+  clearance?: Record<ClearanceCategory, ClearanceSummary>
+}
+
+export interface ClearanceSummary {
+  total: number
+  done: number
+  deduction: number
+  supplement: number
+}
+
+export interface DepartureLedgerFilterOptions {
+  departments?: string[]
+  positions?: string[]
+  offboarding_types?: string[]
+  genders?: string[]
+  educations?: string[]
+  employee_categories?: string[]
+  offboarding_reasons?: string[]
+  approval_statuses?: { value: string; label: string }[]
+}
+
+export interface DepartureExportColumn {
+  key: string
+  label: string
+  group: string
+}
+
+export interface DepartureExportColumnCatalog {
+  columns: DepartureExportColumn[]
+  default_keys: string[]
+}
+
+/** 保存视图（个人维度）：常用筛选条件 + 导出字段一键调用 */
+export interface DepartureSavedView {
+  id: string
+  name: string
+  filters: DepartureLedgerFilters
+  columns: string[]
+  is_default: boolean
+  created_at?: string | null
+}
+
+/** 导出留痕：操作人 / 时间 / 筛选条件 / 字段 / 条数 */
+export interface DepartureExportLog {
+  id: string
+  operator_name: string
+  created_at?: string | null
+  /** 键已还原成中文字段名 */
+  filters: Record<string, unknown>
+  columns: string[]
+  row_count: number
+}
+
+export interface DepartureLedgerQueryParams extends DepartureLedgerFilters, DepartureLedgerSort {
+  page?: number
+  page_size?: number
 }

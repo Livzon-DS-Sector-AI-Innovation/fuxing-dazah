@@ -1,19 +1,12 @@
-"""笔试试卷生成器 — 基于 assets/hr/试卷模板.docx。"""
+"""笔试试卷生成器 — 基于 {标记} 模板（模板可由用户自维护）。"""
 
 from datetime import date
 from io import BytesIO
-from pathlib import Path
 
 from docx import Document
 from docx.shared import Pt
 
-TEMPLATE = Path(__file__).parent.parent.parent.parent / "assets/hr/试卷模板.docx"
-
-
-def _find_template() -> Path:
-    for p in [TEMPLATE, Path("assets/hr/试卷模板.docx"), Path("../assets/hr/试卷模板.docx")]:
-        if p.exists(): return p
-    raise FileNotFoundError("试卷模板.docx 未找到")
+from app.modules.hr.template_utils import find_hr_template_bytes
 
 
 def _replace_para_text(paragraph, text: str) -> None:
@@ -63,8 +56,10 @@ def generate_exam_paper_docx(
     *, subject: str, department: str | None = None,
     training_date: date | None = None, training_method: str | None = None,
     questions: list[dict] | None = None, full_score: int = 100, pass_line: int = 60,
+    template_bytes: bytes | None = None,
 ) -> BytesIO:
-    doc = Document(str(_find_template()))
+    raw = template_bytes or find_hr_template_bytes("exam_paper")
+    doc = Document(BytesIO(raw))
 
     # 替换标题占位符
     for p in doc.paragraphs:
@@ -92,7 +87,7 @@ def generate_exam_paper_docx(
     return buf
 
 
-def generate_exam_paper(paper) -> BytesIO:
+def generate_exam_paper(paper, template_bytes: bytes | None = None) -> BytesIO:
     """从 ExamPaper ORM 对象生成 Word 文档。"""
     questions = paper.questions or {}
     # 按来源分类标注 type，兼容无 type 字段的旧数据
@@ -117,4 +112,5 @@ def generate_exam_paper(paper) -> BytesIO:
         questions=q_list,
         full_score=paper.full_score,
         pass_line=paper.pass_line,
+        template_bytes=template_bytes,
     )

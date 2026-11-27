@@ -4,15 +4,21 @@
 走 service 层（真实 DB 回滚）。
 """
 
-from datetime import date
+from datetime import date, timedelta
+from typing import Any
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DuplicateException, NotFoundException
+from app.main import app
+from app.modules.hr.deps import HrAccessContext, get_hr_scope
+from app.modules.hr.models import Employee, TransferRecord
 from app.modules.hr.schemas import EmployeeCreate, EmployeeUpdate
 from app.modules.hr.service import EmployeeService
+from app.platform.identity.models import User
 from tests.modules.hr.conftest import _rand
 
 # ── 辅助函数 ──
@@ -338,6 +344,253 @@ async def test_api_get_training_candidates(client):
     assert "培训候选员工" in names
 
 
+async def _add_synced_employee(
+    db: AsyncSession,
+    *,
+    name: str,
+    department: str = "入职培训测试部",
+    hire_date: date | None = None,
+    status: str = "在职",
+) -> Employee:
+    """模拟飞书同步的员工：只有员工档案行，没有入职台账行。"""
+    emp = Employee(
+        employee_number=_rand("SYNC"),
+        name=name,
+        department=department,
+        position="操作工",
+        hire_date=hire_date or date.today(),
+        status=status,
+    )
+    db.add(emp)
+    await db.flush()
+    return emp
+
+
+async def _get_candidates(client: AsyncClient, **params: Any) -> dict[str, dict[str, Any]]:
+    """查询入职培训下拉候选，返回 {姓名: 候选}。"""
+    resp = await client.get("/api/v1/hr/employees/training-candidates", params=params)
+    assert resp.status_code == 200, resp.text
+    return {c["name"]: c for c in resp.json()["data"]}
+
+
+async def _add_transfer(
+    db: AsyncSession,
+    emp: Employee,
+    *,
+    effective_date: date,
+    transfer_type: str = "转岗",
+) -> TransferRecord:
+    """直接落一条职位变动记录（真实入口 POST /transfers，这里为聚焦判定逻辑走 ORM）。"""
+    t = TransferRecord(
+        employee_id=emp.id,
+        transfer_type=transfer_type,
+        from_department=emp.department,
+        to_department=emp.department,
+        effective_date=effective_date,
+    )
+    db.add(t)
+    await db.flush()
+    return t
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_include_synced_employee_without_onboarding_row(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """下拉与入职台账列表同源：飞书同步进员工档案、没有入职台账行的员工也能搜到。"""
+    name = _rand("同步员工")
+    emp = await _add_synced_employee(db_session, name=name)
+
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["employee_number"] == emp.employee_number
+    assert found[name]["employee_id"] == str(emp.id)
+    assert found[name]["prejob_completed"] is False
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_hide_completed_by_default(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """培训台账有入职培训记录表导出记录（prejob_export）的员工默认不返回，
+    include_completed=true 时返回并标记已完成；岗前计划导出记录（prejob）不算完成。"""
+    name = _rand("已完成员工")
+    emp = await _add_synced_employee(db_session, name=name)
+
+    resp = await client.post("/api/v1/hr/training-ledgers", json={
+        "employee_number": emp.employee_number,
+        "training_date": str(date.today()),
+        "training_subject": "岗前安全教育",
+        "source_type": "prejob",
+    })
+    assert resp.status_code == 201, resp.text
+    assert name in await _get_candidates(client, keyword=name)
+
+    resp = await client.post("/api/v1/hr/training-ledgers", json={
+        "employee_number": emp.employee_number,
+        "training_date": str(date.today()),
+        "training_subject": "入职培训记录表导出写入",
+        "source_type": "prejob_export",
+    })
+    assert resp.status_code == 201, resp.text
+
+    assert name not in await _get_candidates(client, keyword=name)
+    shown = await _get_candidates(client, keyword=name, include_completed="true")
+    assert shown[name]["prejob_completed"] is True
+
+
+async def _add_prejob_export_ledger(client: AsyncClient, number: str, training_date: date) -> None:
+    """经培训台账接口写入一条入职培训完成记录（与页面导出写台账同链路）。"""
+    resp = await client.post("/api/v1/hr/training-ledgers", json={
+        "employee_number": number,
+        "training_date": str(training_date),
+        "training_subject": f"入职培训记录表导出写入-{training_date}",
+        "source_type": "prejob_export",
+    })
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_transfer_resets_completion(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """转岗/晋升后需重新培训：异动前的完成记录不算数，员工重新进入待培训名单；
+    异动生效日期之后重新完成（培训日期 ≥ 生效日）才再次视为完成。"""
+    name = _rand("转岗员工")
+    emp = await _add_synced_employee(db_session, name=name)
+    transfer_day = date.today()
+
+    # 异动前的完成记录（培训日期早于异动生效日）
+    await _add_prejob_export_ledger(client, emp.employee_number, date.today() - timedelta(days=30))
+    await _add_transfer(db_session, emp, effective_date=transfer_day, transfer_type="转岗")
+
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["prejob_completed"] is False
+    assert found[name]["transfers"][0]["transfer_type"] == "转岗"
+    assert found[name]["transfers"][0]["effective_date"] == str(transfer_day)
+
+    # 异动后重新完成 → 默认隐藏，include_completed 时标记已完成
+    await _add_prejob_export_ledger(client, emp.employee_number, transfer_day)
+    assert name not in await _get_candidates(client, keyword=name)
+    shown = await _get_candidates(client, keyword=name, include_completed="true")
+    assert shown[name]["prejob_completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_maternity_return_triggers_retraining(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """产假复岗与晋升/转岗同口径：复岗异动同样重置入职培训完成状态。"""
+    name = _rand("产假复岗员工")
+    emp = await _add_synced_employee(db_session, name=name)
+    await _add_prejob_export_ledger(client, emp.employee_number, date.today() - timedelta(days=60))
+    return_day = date.today() - timedelta(days=7)
+    await _add_transfer(db_session, emp, effective_date=return_day, transfer_type="产假复岗")
+
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["prejob_completed"] is False
+    assert found[name]["transfers"][0]["transfer_type"] == "产假复岗"
+
+    # 复岗后重新完成（培训日期 ≥ 复岗生效日）→ 再次视为完成
+    await _add_prejob_export_ledger(client, emp.employee_number, return_day)
+    assert name not in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_multiple_transfers_use_latest(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """多次职位变动取最近一次生效日期判定：完成记录夹在两次异动之间不算完成，
+    transfers 按生效日期降序、[0] 是最近一次。"""
+    name = _rand("多次异动员工")
+    emp = await _add_synced_employee(db_session, name=name)
+    today = date.today()
+    await _add_transfer(db_session, emp, effective_date=today - timedelta(days=20), transfer_type="调动")
+    await _add_transfer(db_session, emp, effective_date=today - timedelta(days=5), transfer_type="晋升")
+
+    # 完成记录晚于第一次异动、早于最近一次 → 仍需重新培训
+    await _add_prejob_export_ledger(client, emp.employee_number, today - timedelta(days=10))
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["prejob_completed"] is False
+    assert [t["transfer_type"] for t in found[name]["transfers"]] == ["晋升", "调动"]
+
+    # 异动当日或之后完成才算完成（≥ 口径）
+    await _add_prejob_export_ledger(client, emp.employee_number, today - timedelta(days=5))
+    assert name not in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_year_matches_transfer_year(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """year 命中入职年份或最近异动年份：往年入职、今年异动的员工进默认「当年」视图。"""
+    name = _rand("异动年份员工")
+    this_year = date.today().year
+    emp = await _add_synced_employee(db_session, name=name, hire_date=date(this_year - 3, 6, 1))
+    await _add_transfer(db_session, emp, effective_date=date(this_year, 3, 1))
+
+    assert name in await _get_candidates(client, keyword=name, year=this_year)
+    assert name in await _get_candidates(client, keyword=name, year=this_year - 3)
+    assert name not in await _get_candidates(client, keyword=name, year=this_year - 1)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_exclude_departed(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """与入职台账列表同口径：状态为「离职」的员工不在下拉候选中。"""
+    name = _rand("离职员工")
+    await _add_synced_employee(db_session, name=name, status="离职")
+
+    assert name not in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_filter_by_year(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """year 按入职日期所在年份筛选（与入职台账列表一致）；不传则不限年份。"""
+    name = _rand("往年员工")
+    this_year = date.today().year
+    await _add_synced_employee(db_session, name=name, hire_date=date(this_year - 1, 6, 1))
+
+    assert name not in await _get_candidates(client, keyword=name, year=this_year)
+    assert name in await _get_candidates(client, keyword=name, year=this_year - 1)
+    assert name in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_restricted_to_scoped_departments(
+    db_session: AsyncSession, client: AsyncClient, test_user: User,
+) -> None:
+    """数据范围受限时只返回授权部门的员工。"""
+    dept_a, dept_b = _rand("授权部"), _rand("外部部")
+    emp_a = await _add_synced_employee(
+        db_session, name=_rand("授权员工"), department=dept_a,
+    )
+    emp_b = await _add_synced_employee(
+        db_session, name=_rand("外部员工"), department=dept_b,
+    )
+
+    async def _scoped() -> HrAccessContext:
+        return HrAccessContext(
+            user=test_user,
+            data_scope="department",
+            department=dept_a,
+            employee_number=test_user.employee_no,
+            scoped_departments=frozenset({dept_a}),
+        )
+
+    app.dependency_overrides[get_hr_scope] = _scoped
+    try:
+        resp = await client.get("/api/v1/hr/employees/training-candidates")
+    finally:
+        app.dependency_overrides.pop(get_hr_scope, None)
+    assert resp.status_code == 200, resp.text
+    numbers = {c["employee_number"] for c in resp.json()["data"]}
+    assert emp_a.employee_number in numbers
+    assert emp_b.employee_number not in numbers
+
+
 # ═══════════════════════════════════════════════════════════════
 # 职位 & 岗位培训 API
 # ═══════════════════════════════════════════════════════════════
@@ -399,6 +652,70 @@ async def test_api_get_position_trainings(client):
     resp = await client.get("/api/v1/hr/position-trainings")
     assert resp.status_code == 200
     assert "data" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_training_positions_by_department_merges_linked_table_and_catalog(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """部门下的培训岗位取「岗位培训关联表 ∪ SOP 目录」：历史数据可能只落在其中一张表。
+
+    同一大类两表都有时只出一次，培训师 / 培训方式以关联表为准；
+    SOP 目录未填适用岗位的条目、别的部门的条目都不算本部门的培训岗位。
+    """
+    from app.modules.hr.models import PositionTraining, SopCatalog
+
+    dept = _rand("培训岗")
+    db_session.add_all([
+        PositionTraining(department=dept, position_name="工艺员", training_category="工艺操作",
+                         trainer="张三", training_method="面授", sop_number="S-1", file_name="粗提岗位操作规程"),
+        PositionTraining(department=dept, position_name="工艺员", training_category="质量管理",
+                         sop_number="S-2", file_name="偏差处理管理规程"),
+        SopCatalog(department=dept, position_name="工艺员", category="工艺操作",
+                   sop_number="S-1", file_name="粗提岗位操作规程"),
+        SopCatalog(department=dept, position_name="工艺员", category="设备操作",
+                   sop_number="S-3", file_name="离心机操作规程"),
+        SopCatalog(department=dept, position_name="班组长", category="安全管理",
+                   sop_number="S-4", file_name="受限空间作业安全操作规程"),
+        SopCatalog(department=dept, position_name=None, category="文件管理",
+                   sop_number="S-5", file_name="文件管理规程"),
+        SopCatalog(department=_rand("别的部门"), position_name="检验员", category="质量管理",
+                   sop_number="S-6", file_name="偏差处理管理规程"),
+    ])
+    await db_session.flush()
+
+    resp = await client.get(
+        "/api/v1/hr/position-trainings/by-department", params={"department": dept},
+    )
+    assert resp.status_code == 200, resp.text
+    positions = {p["position_name"]: p["categories"] for p in resp.json()["data"]}
+    assert set(positions) == {"工艺员", "班组长"}
+
+    gongyi = {c["training_category"]: c for c in positions["工艺员"]}
+    assert set(gongyi) == {"工艺操作", "质量管理", "设备操作"}
+    # 关联表带培训师 / 培训方式；只在 SOP 目录里的大类没有
+    assert gongyi["工艺操作"] == {
+        "training_category": "工艺操作", "trainer": "张三", "training_method": "面授",
+    }
+    assert gongyi["设备操作"] == {
+        "training_category": "设备操作", "trainer": None, "training_method": None,
+    }
+    assert [c["training_category"] for c in positions["班组长"]] == ["安全管理"]
+
+
+@pytest.mark.asyncio
+async def test_training_positions_by_department_empty_and_required(
+    client: AsyncClient,
+) -> None:
+    """没配置过培训内容的部门返回空列表；department 为必填参数。"""
+    resp = await client.get(
+        "/api/v1/hr/position-trainings/by-department", params={"department": _rand("空部门")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"] == []
+
+    missing = await client.get("/api/v1/hr/position-trainings/by-department")
+    assert missing.status_code == 422
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -1,6 +1,7 @@
 'use client'
 
-// 员工档案页容器：页头 + 工具栏（部门下拉 / 搜索 / 状态 / 筛选 / 列设置）+ 筛选面板 + 员工表格。
+// 员工档案页容器：页头 + 工具栏（部门下拉 / 搜索 / 状态 / 列设置）+ 活跃筛选标签 + 员工表格。
+// 字段级筛选在表格列头（employee/columnFilters），此处持有筛选值本体（列表查询与导出共用口径）。
 // 数据加载已收敛至 hooks/hr（列表/部门/筛选选项），本组件只保留查询条件编排与一次性动作（导出/同步）。
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
@@ -14,7 +15,7 @@ import { useDebouncedCallback, useEmployeeList, useHrDepartments, useHrFilterOpt
 import PageHeader from './PageHeader'
 import EmployeeTable from './EmployeeTable'
 import EmployeeForm from './EmployeeForm'
-import EmployeeFilterPanel, { countActiveFilters } from './EmployeeFilterPanel'
+import { ActiveFilterChips, countActiveFilters } from './employee/columnFilters'
 import ProfileToolbar from './employee/ProfileToolbar'
 import ColumnSettings, { useProfileColumnSettings } from './employee/ColumnSettings'
 
@@ -42,8 +43,8 @@ export default function EmployeeProfileClient({
 
   const [formOpen, setFormOpen] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null)
+  // 字段级筛选（列头筛选的值本体；列表查询与导出共用同一份口径）
   const [filters, setFilters] = useState<EmployeeFieldFilters>({})
-  const [filterOpen, setFilterOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   // 列设置：默认「常用列」，选择持久化在本地（employee/ColumnSettings）
   const columnSettings = useProfileColumnSettings()
@@ -216,8 +217,6 @@ export default function EmployeeProfileClient({
           onKeywordCommit={handleKeywordCommit}
           status={status}
           onStatusChange={(value) => setStatus(value || '')}
-          filterCount={activeFilterCount}
-          onToggleFilter={() => setFilterOpen((v) => !v)}
         />
         <div className="ml-auto">
           <ColumnSettings
@@ -230,14 +229,8 @@ export default function EmployeeProfileClient({
         </div>
       </div>
 
-      {filterOpen && (
-        <EmployeeFilterPanel
-          options={filterOptions}
-          value={filters}
-          onChange={setFilters}
-          onClose={() => setFilterOpen(false)}
-        />
-      )}
+      {/* 活跃筛选标签：列头图标只在列可见时看得见，被隐藏列上的筛选在此可见、可单独清除 */}
+      {activeFilterCount > 0 && <ActiveFilterChips filters={filters} onChange={setFilters} />}
 
       <EmployeeTable loading={loading}
         employees={employees}
@@ -248,6 +241,9 @@ export default function EmployeeProfileClient({
         onEdit={handleEdit}
         syncMode={Boolean(syncInfo)}
         hiddenColumns={columnSettings.hiddenSet}
+        filterOptions={filterOptions}
+        fieldFilters={filters}
+        onFieldFiltersChange={setFilters}
       />
 
       {!syncInfo && (

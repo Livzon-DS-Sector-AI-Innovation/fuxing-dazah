@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.hr.employee_sync.report_level import compute_report_level
-from app.modules.hr.models import TrainingRosterProfile
+from app.modules.hr.models import EmployeeTag, TrainingRosterProfile
 from tests.modules.hr.conftest import _rand
 
 # ─── 公式（纯函数） ───
@@ -132,6 +132,31 @@ async def test_roster_rows_include_report_level(db_session: AsyncSession, client
     assert rows[staff.employee_number]["report_level"] == "其他人员"
     # 原始级别字段不外显（脱敏白名单）
     assert "level" not in rows[gm.employee_number]
+
+
+async def test_roster_rows_carry_tags(db_session: AsyncSession, client: AsyncClient):
+    """名单行带 tags（分类标签随行下发，页面不再逐行补查）：不限创建人，已软删的不出现。"""
+    tag = _rand("标签")
+    dept = _rand("标签部")
+    tagged = await _add_roster(db_session, department=dept, name="带标签甲")
+    untagged = await _add_roster(db_session, department=dept, name="无标签乙")
+    db_session.add_all([
+        EmployeeTag(employee_number=tagged.employee_number, tag_name=tag, created_by="别的管理员"),
+        EmployeeTag(
+            employee_number=tagged.employee_number, tag_name=f"{tag}已删",
+            created_by="HR测试员", is_deleted=True,
+        ),
+    ])
+    await db_session.flush()
+
+    res = await client.get(
+        "/api/v1/hr/employee-sync/training-roster",
+        params={"department": dept, "page_size": 500},
+    )
+    assert res.status_code == 200, res.text
+    rows = {r["employee_number"]: r for r in res.json()["data"]}
+    assert rows[tagged.employee_number]["tags"] == [tag]
+    assert rows[untagged.employee_number]["tags"] == []
 
 
 # ─── 名单导出 ───

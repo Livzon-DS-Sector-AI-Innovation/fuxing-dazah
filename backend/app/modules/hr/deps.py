@@ -288,11 +288,26 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 试用期安全考试（安全办录入；查看随档案读权限）
     (r"/probation-safety-exams", {"GET": "hr:profile:read", "POST": "hr:probation:exam:manage",
                                   "DELETE": "hr:probation:exam:manage"}),
+    # 劳动合同台账（部门负责人在数据范围内可审批/办理本部门合同）
+    (r"/labor-contracts", {"GET": "hr:contract:read", "POST": "hr:contract:manage"}),
+    (r"/labor-contracts/.*", {"GET": "hr:contract:read", "POST": "hr:contract:manage",
+                              "PUT": "hr:contract:manage", "DELETE": "hr:contract:manage"}),
+    # 劳动合同公开签字（挂全局 api_router 免登，token 即凭证；登记仅为通过路由覆盖巡检，None=不设权限）
+    (r"/contract-sign/.*", None),
+    # 离职办理（权限复用离职台账读写）。路径是子串匹配、首个命中即止：
+    # 带子路径的条目必须排在前面，否则会被宽泛条目遮住、其 PUT/DELETE 取不到权限码
+    (r"/offboarding-cases/.+", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
+                                "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
+    (r"/offboarding-cases", {"GET": "hr:departure:read", "POST": "hr:departure:manage"}),
+    # 离职证明公开签字（免登，token 即凭证）
+    (r"/departure-cert-sign/.*", None),
     # 员工证件资料库（具体子路径在通用条目之前）
     (r"/certificates/access-logs", "hr:certificate:audit"),
     (r"/certificates/requirements", {"GET": "hr:certificate:read",
                                      "POST": "hr:certificate:manage",
                                      "DELETE": "hr:certificate:manage"}),
+    (r"/certificates/batch-import/employee-options", "hr:certificate:read"),
+    (r"/certificates/batch-import", "hr:certificate:manage"),
     (r"/certificates/.*/file", "hr:certificate:read"),
     (r"/certificates", {"GET": "hr:certificate:read", "POST": "hr:certificate:manage",
                         "PUT": "hr:certificate:manage", "DELETE": "hr:certificate:manage"}),
@@ -312,6 +327,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
                      "PUT": "hr:profile:update", "DELETE": "hr:profile:delete"}),
     # 花名册
     (r"/roster", "hr:roster:read"),
+    # 培训导出模板管理（用户自维护 docx 模板）
+    (r"/training-export-templates.*", "hr:training:template"),
     # 组织架构
     (r"/departments/", {"GET": "hr:org:read", "POST": "hr:org:manage",
                         "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
@@ -347,12 +364,12 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
                          "DELETE": ("hr:profile:update", "hr:training:manage")}),
     (r"/employee-classifications", {"GET": "hr:profile:read",
                                     "POST": ("hr:profile:update", "hr:training:manage"),
+                                    "PUT": ("hr:profile:update", "hr:training:manage"),
                                     "DELETE": ("hr:profile:update", "hr:training:manage")}),
     (r"/sop-catalog", {"GET": "hr:training:read", "POST": "hr:training:manage",
                        "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # SOP培训文件登记表（查看/编辑对所有人开放）
-    # SOP培训二级表（查看开放；编辑/转培训需培训管理权限；批量生成材料需培训文档权限）
-    (r"/sop-training-entries/batch-transfer", {"POST": "hr:training:manage"}),
+    # SOP培训二级表（查看开放；编辑需培训管理权限；生成材料需培训文档权限）
     (r"/sop-training-entries/batch-materials", {"POST": "hr:training:document"}),
     (r"/sop-training-records/.*/materials", {"POST": "hr:training:document"}),
     # GET 不设权限码，但数据范围必须按 training resource 计算：
@@ -374,6 +391,17 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 离职管理
     (r"/departure-records", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
                              "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
+    # 离职台账增强：筛选查询 / 勾选导出 / 保存视图走读权限，导出记录仅管理权限可见。
+    # 同样是子串匹配、首个命中即止，越具体的路径越靠前
+    # （/export 会命中 /export-logs，/saved-views 会命中 /saved-views/<id>）
+    (r"/departure-ledger/export-logs", "hr:departure:manage"),
+    (r"/departure-ledger/export", {"POST": "hr:departure:read"}),
+    (r"/departure-ledger/saved-views/", {"GET": "hr:departure:read", "POST": "hr:departure:read",
+                                         "PUT": "hr:departure:read", "DELETE": "hr:departure:read"}),
+    (r"/departure-ledger/saved-views", {"GET": "hr:departure:read", "POST": "hr:departure:read"}),
+    (r"/departure-ledger", "hr:departure:read"),
+    # 离职合同台账（劳动合同管理 P3；handler 内另限全量数据范围，部门范围不可见离职人员合同）
+    (r"/departure-contracts", {"GET": "hr:departure:read"}),
     (r"/offboarding-records", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
                                "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
     # 培训台账

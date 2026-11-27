@@ -5,11 +5,12 @@
 
 import { useMemo, useState } from 'react'
 import { Table } from 'antd'
-import { Employee } from '@/types/hr'
+import { Employee, EmployeeFieldFilters, EmployeeFilterOptions } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
 import styles from './lifecycleTable.module.css'
 import EmployeeInfoModal from './EmployeeInfoModal'
 import { applyColumnVisibility, buildEmployeeColumns } from './employee/columns'
+import { applyColumnFilters } from './employee/columnFilters'
 import TransferRecordModal from './employee/TransferRecordModal'
 import ProbationReviewModal from './employee/ProbationReviewModal'
 
@@ -30,6 +31,12 @@ interface EmployeeTableProps {
   syncMode?: boolean
   /** 用户在「列设置」里隐藏的列（key 集合）；默认常用列，见 employee/ColumnSettings */
   hiddenColumns?: ReadonlySet<string>
+  /** 列头筛选：后端聚合的下拉选项（不传则列头不带筛选） */
+  filterOptions?: EmployeeFilterOptions
+  /** 列头筛选的受控筛选值（列表查询与导出共用口径，见 EmployeeProfileClient） */
+  fieldFilters?: EmployeeFieldFilters
+  /** 任一列头筛选变化 */
+  onFieldFiltersChange?: (next: EmployeeFieldFilters) => void
 }
 
 export default function EmployeeTable({
@@ -41,7 +48,10 @@ export default function EmployeeTable({
   onEdit,
   loading = false,
   syncMode = false,
-  hiddenColumns }: EmployeeTableProps) {
+  hiddenColumns,
+  filterOptions,
+  fieldFilters,
+  onFieldFiltersChange }: EmployeeTableProps) {
   const { hasPermission } = usePermission()
   // 员工档案基础信息不开放给培训管理员等无档案编辑权限的角色
   const canEditProfile = hasPermission('hr:profile:update')
@@ -63,9 +73,17 @@ export default function EmployeeTable({
     canTransfer,
     syncMode,
   }), [onEdit, canEditProfile, canTransfer, syncMode])
+  // 列头筛选（受控 filteredValue + filterDropdown，服务端过滤，见 employee/columnFilters）→ 列显隐
+  const filteredColumns = useMemo(() => {
+    if (!onFieldFiltersChange) return allColumns
+    return applyColumnFilters(allColumns, {
+      options: filterOptions ?? {},
+      filters: fieldFilters ?? {},
+      onChange: onFieldFiltersChange })
+  }, [allColumns, filterOptions, fieldFilters, onFieldFiltersChange])
   const columns = useMemo(
-    () => applyColumnVisibility(allColumns, hiddenColumns ?? EMPTY_HIDDEN),
-    [allColumns, hiddenColumns],
+    () => applyColumnVisibility(filteredColumns, hiddenColumns ?? EMPTY_HIDDEN),
+    [filteredColumns, hiddenColumns],
   )
   // 横向宽度 = 固定列宽之和 + 弹性列（未设 width，如部门/职务）按最小宽度计：
   // 容器更宽时弹性列自动拉伸填满（常用列视图不出横向滚动条），列多放不下时才横向滚动

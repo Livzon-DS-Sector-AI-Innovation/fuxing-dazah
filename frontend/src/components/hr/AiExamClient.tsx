@@ -14,6 +14,7 @@ import {
   Spin,
   Switch,
   Segmented,
+  Tooltip,
 } from 'antd'
 import {
   UploadOutlined,
@@ -53,6 +54,8 @@ export default function AiExamClient() {
   // ── 问答考核出题状态 ──
   const [qaFileList, setQaFileList] = useState<UploadFile[]>([])
   const [qaSubject, setQaSubject] = useState('')
+  // SOP 编号：题库按编号匹配，SOP 培训「生成一套材料」的问答实操记录表/试卷按编号带题
+  const [qaFileNo, setQaFileNo] = useState('')
   const [qaCount, setQaCount] = useState(4)
   const [qaGenerating, setQaGenerating] = useState(false)
   const [qaQuestions, setQaQuestions] = useState<{ type?: string; question: string; answer: string; score?: number }[]>([])
@@ -257,6 +260,7 @@ export default function AiExamClient() {
     setQaSyncing(true)
     try {
       const res = await syncQaToBank({
+        file_no: qaFileNo.trim() || undefined,
         subject: qaSubject || qaTitle || (qaFileList[0]?.name || '问答考核').replace(/\.[^.]+$/, ''),
         questions: qaQuestions,
       })
@@ -310,6 +314,16 @@ export default function AiExamClient() {
                   onChange={(e) => setQaSubject(e.target.value)}
                   style={{ width: 320 }}
                 />
+                <Text>SOP 编号：</Text>
+                <Tooltip title="选填。填了编号，SOP 培训「生成一套材料」的问答实操记录表/试卷就能按编号自动带出这些题">
+                  <Input
+                    placeholder="如 SOP-FG-001（选填）"
+                    value={qaFileNo}
+                    onChange={(e) => setQaFileNo(e.target.value)}
+                    style={{ width: 200 }}
+                    allowClear
+                  />
+                </Tooltip>
                 <Text>题数：</Text>
                 <InputNumber min={1} max={10} value={qaCount} onChange={(v) => setQaCount(v ?? 4)} />
               </Space>

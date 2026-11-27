@@ -19,6 +19,7 @@ from app.core.exceptions import ForbiddenException
 from app.core.response import paginated_response, success_response
 from app.modules.hr.analysis_api import router as analysis_router
 from app.modules.hr.candidate_routes import router as candidate_router
+from app.modules.hr.department_manager_status import account_statuses
 from app.modules.hr.headcount_routes import router as headcount_router
 from app.modules.hr.deps import (
     HrAccessContext,
@@ -37,6 +38,13 @@ from app.modules.hr.resume_screening_routes import router as resume_screening_ro
 from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.modules.hr.employee_info_collection_routes import router as employee_info_collection_router
 from app.modules.hr.employee_certificate_routes import router as employee_certificate_router
+from app.modules.hr.labor_contract.archive_routes import router as labor_contract_archive_router
+from app.modules.hr.labor_contract.departure_contract_routes import (
+    router as departure_contract_router,
+)
+from app.modules.hr.labor_contract.routes import router as labor_contract_router
+from app.modules.hr.offboarding.ledger.routes import router as departure_ledger_router
+from app.modules.hr.offboarding.routes import router as offboarding_router
 from app.modules.hr.probation_routes import router as probation_router
 from app.modules.hr.reminder.routes import router as reminder_router
 from app.modules.hr.notification_document_generator import (
@@ -44,6 +52,7 @@ from app.modules.hr.notification_document_generator import (
 )
 from app.modules.hr.prejob_document_generator import generate_prejob_training_plan
 from app.modules.hr.repository import PerformanceEvaluationRepository
+from app.modules.hr.training_template_store import render_training_document
 from app.modules.hr.schemas import (
     AnnualTrainingPlanCreate,
     AnnualTrainingPlanItemBatchUpdate,
@@ -101,6 +110,7 @@ from app.modules.hr.signin_document_generator import generate_training_sign_in_s
 from app.modules.hr.sop_training_routes import router as sop_training_router
 from app.modules.hr.system_settings_routes import router as system_settings_router
 from app.modules.hr.title_review.routes import router as title_review_router
+from app.modules.hr.training_template_routes import router as training_template_router
 from app.modules.hr.user_department_access_routes import router as uda_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
@@ -119,9 +129,15 @@ router.include_router(resume_screening_router)
 router.include_router(job_requirement_router)
 router.include_router(employee_info_collection_router)
 router.include_router(employee_certificate_router)
+router.include_router(labor_contract_router)
+router.include_router(labor_contract_archive_router)
+router.include_router(departure_contract_router)
+router.include_router(offboarding_router)
+router.include_router(departure_ledger_router)
 router.include_router(probation_router)
 router.include_router(analysis_router)
 router.include_router(sop_training_router)
+router.include_router(training_template_router)
 router.include_router(title_review_router)
 router.include_router(employee_sync_router)
 router.include_router(reminder_router)
@@ -460,7 +476,10 @@ async def download_roster(
         employees = [e for e in employees if e[1] == department]
     elif not hr_scope.is_unrestricted and hr_scope.scoped_departments:
         employees = [e for e in employees if e[1] in hr_scope.scoped_departments]
-    buffer = generate_roster_sync(employees, department)
+    buffer = await render_training_document(
+        session, "roster",
+        lambda tb: generate_roster_sync(employees, department, template_bytes=tb),
+    )
     filename = f"花名册_{department or '全部'}.docx"
     return StreamingResponse(
         iter([buffer.read()]),
@@ -507,7 +526,10 @@ async def download_training_registration(
             "入职日期": str(e.hire_date) if e.hire_date else "",
         })
 
-    buffer = generate_training_registration_sync(records)
+    buffer = await render_training_document(
+        session, "training_registration",
+        lambda tb: generate_training_registration_sync(records, template_bytes=tb),
+    )
     filename = f"个人培训登记表_{department or '全部'}.docx"
     return StreamingResponse(
         iter([buffer.read()]),
@@ -519,76 +541,45 @@ async def download_training_registration(
 @router.get("/employees/training-candidates", summary="待培训人员列表")
 async def training_candidates(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
-    session: AsyncSession = Depends(get_db),
+    year: int | None = Query(None, ge=1900, le=2999, description="入职年份，不传则不限年份"),
+    include_completed: bool = Query(False, description="是否包含已完成入职培训的员工"),
+    service: OnboardingRecordService = Depends(get_onboarding_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """返回入职台账中在职的员工列表，同时关联员工表获取异动等完整信息。"""
-    from app.modules.hr.models import Employee, OnboardingRecord, TransferRecord
-    stmt = select(OnboardingRecord).where(
-        OnboardingRecord.is_deleted == False,
-        OnboardingRecord.is_employed == "是",
+    """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。
+
+    已完成入职培训（培训台账存在入职培训记录表导出写入的记录）的员工默认不返回。
+    转岗/晋升等职位变动后需重新培训：异动员工只有异动生效日期之后的完成记录
+    才算完成，否则自动重新进入待培训名单；year 命中入职年份或最近异动年份。
+    transfers 按生效日期降序，[0] 即最近一次异动。
+    """
+    candidates, transfer_map = await service.list_training_candidates(
+        hr_scope=hr_scope,
+        keyword=keyword,
+        year=year,
+        include_completed=include_completed,
     )
-    # 数据范围受限时强制收敛到本部门/本人
-    # （OnboardingRecord 无 actual_department 列，不能用 apply_list_scope 的未分类分支）
-    if not hr_scope.is_unrestricted:
-        if hr_scope.data_scope == "self_only":
-            stmt = stmt.where(OnboardingRecord.employee_number == hr_scope.employee_number)
-        elif hr_scope.scoped_departments:
-            stmt = stmt.where(OnboardingRecord.department.in_(hr_scope.scoped_departments))
-        else:
-            raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
-    if keyword:
-        stmt = stmt.where(
-            OnboardingRecord.name.ilike(f"{keyword}%")
-            | OnboardingRecord.employee_number.ilike(f"{keyword}%")
-        )
-    stmt = stmt.order_by(OnboardingRecord.hire_date.desc().nulls_last())
-    r = await session.execute(stmt)
-    records = r.scalars().all()
-    # 批量查询关联的 Employee 记录和异动记录
-    emp_numbers = [rec.employee_number for rec in records if rec.employee_number]
-    emp_map = {}
-    transfer_map: dict[str, list] = {}
-    if emp_numbers:
-        emp_rows = (await session.execute(
-            select(Employee).where(Employee.employee_number.in_(emp_numbers), Employee.is_deleted == False)
-        )).scalars().all()
-        emp_map = {e.employee_number: e for e in emp_rows}
-        emp_ids = [e.id for e in emp_rows]
-        if emp_ids:
-            emp_id_map = {e.id: e.employee_number for e in emp_rows}
-            t_rows = (await session.execute(
-                select(TransferRecord).where(
-                    TransferRecord.employee_id.in_(emp_ids),
-                    TransferRecord.is_deleted == False,
-                ).order_by(TransferRecord.effective_date.desc())
-            )).scalars().all()
-            for t in t_rows:
-                en = emp_id_map.get(t.employee_id)
-                if en:
-                    transfer_map.setdefault(en, []).append({
-                            "id": str(t.id), "transfer_type": t.transfer_type,
-                            "from_department": t.from_department, "to_department": t.to_department,
-                            "from_position": t.from_position, "to_position": t.to_position,
-                            "effective_date": str(t.effective_date) if t.effective_date else None,
-                            "reason": t.reason,
-                        })
+    # 来源标签与入职台账列表同口径：按工号取入职台账记录的 source
+    sources = await service.ledger_sources(
+        [e.employee_number for e, _ in candidates if e.employee_number]
+    )
     return success_response(data=[
         {
-            "id": str(rec.id),
-            "employee_number": rec.employee_number,
-            "name": rec.name,
-            "department": rec.department,
-            "position": rec.position,
-            "hire_date": str(rec.hire_date) if rec.hire_date else None,
-            "education": rec.education,
-            "school": rec.school,
-            "graduation_date": str(rec.graduation_date) if rec.graduation_date else None,
-            "source": rec.source or "新入职",
-            "transfers": transfer_map.get(rec.employee_number, []),
-            "employee_id": str(emp_map[rec.employee_number].id) if rec.employee_number in emp_map else None,
+            "id": str(e.id),
+            "employee_number": e.employee_number,
+            "name": e.name,
+            "department": e.department,
+            "position": e.position,
+            "hire_date": str(e.hire_date) if e.hire_date else None,
+            "education": e.education,
+            "school": e.school,
+            "graduation_date": str(e.graduation_date) if e.graduation_date else None,
+            "source": sources.get(e.employee_number) or "新入职",
+            "transfers": transfer_map.get(e.employee_number, []),
+            "employee_id": str(e.id),
+            "prejob_completed": completed,
         }
-        for rec in records
+        for e, completed in candidates
     ])
 
 
@@ -1524,6 +1515,7 @@ async def export_onboarding_training_record(
     employee_number: str,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     """根据员工工号自动生成并下载入职培训记录 Word 文档。"""
     emp = await service.repo.get_by_employee_number(employee_number)
@@ -1531,7 +1523,10 @@ async def export_onboarding_training_record(
         hr_scope.ensure_can_access_employee(emp)
     employee = await service.get_employee_by_number(employee_number)
     try:
-        buffer: BytesIO = generate_onboarding_training_record(employee)
+        buffer: BytesIO = await render_training_document(
+            session, "training_record",
+            lambda tb: generate_onboarding_training_record(employee, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1558,6 +1553,8 @@ class TrainingItem(BaseModel):
 
 class TrainingExportRequest(BaseModel):
     training_items: list[TrainingItem] = []
+    # 培训岗位：传入时文档里的「体现岗位」写它，而不是员工实际岗位
+    training_position: str | None = None
 
 
 @router.post(
@@ -1569,13 +1566,17 @@ async def export_onboarding_training_record_with_items(
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     """根据员工工号和前端选中的培训项，生成入职培训记录 Word 文档。"""
     employee = await service.get_employee_by_number(employee_number)
     hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
     try:
-        buffer: BytesIO = generate_onboarding_training_record(employee, training_items=items)
+        buffer: BytesIO = await render_training_document(
+            session, "training_record",
+            lambda tb: generate_onboarding_training_record(employee, training_items=items, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1600,6 +1601,7 @@ async def export_training_record(
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     """根据员工工号和培训项，生成新员工培训记录 Word 文档。"""
     from app.modules.hr.training_record_generator import generate_training_record
@@ -1608,8 +1610,18 @@ async def export_training_record(
     employee = await service.get_employee_by_number(employee_number)
     hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
+    # 转岗/晋升员工按最近一次异动的目标部门/岗位出文档（HR 显式选的培训岗位优先）
+    eff_dept, eff_pos = await _effective_position_fields(session, employee)
     try:
-        buffer: BytesIO = generate_training_record(employee, training_items=items)
+        buffer: BytesIO = await render_training_document(
+            session, "training_record",
+            lambda tb: generate_training_record(
+                employee, training_items=items,
+                training_position=body.training_position or eff_pos,
+                department=eff_dept,
+                template_bytes=tb,
+            ),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1634,6 +1646,7 @@ async def export_work_permit(
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     emp = await service.repo.get_by_employee_number(employee_number)
     if emp:
@@ -1643,8 +1656,15 @@ async def export_work_permit(
 
     employee = await service.get_employee_by_number(employee_number)
     items = [it.model_dump() for it in body.training_items]
+    # 转岗/晋升员工上岗证的「体现部门」按最近一次异动的目标部门
+    eff_dept, _ = await _effective_position_fields(session, employee)
     try:
-        buffer: BytesIO = generate_work_permit(employee, training_items=items)
+        buffer: BytesIO = await render_training_document(
+            session, "work_permit",
+            lambda tb: generate_work_permit(
+                employee, training_items=items, department=eff_dept, template_bytes=tb,
+            ),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1662,6 +1682,33 @@ async def export_work_permit(
 
 class PrejobTrainingItems(BaseModel):
     training_items: list[dict] = []
+    # 培训岗位：传入时文档里的「体现岗位」写它，而不是员工实际岗位
+    training_position: str | None = None
+
+
+async def _latest_transfer(session: AsyncSession, employee):
+    """员工最近一次异动记录（晋升/转岗/产假复岗，按生效日期取最新）；无则 None。"""
+    from app.modules.hr.models import TransferRecord
+    return (await session.execute(
+        select(TransferRecord).where(
+            TransferRecord.employee_id == employee.id,
+            TransferRecord.is_deleted == False,  # noqa: E712
+        ).order_by(TransferRecord.effective_date.desc()).limit(1)
+    )).scalar_one_or_none()
+
+
+async def _effective_position_fields(
+    session: AsyncSession, employee,
+) -> tuple[str | None, str | None]:
+    """转岗/晋升员工的「有效部门/岗位」：最近一次异动的目标部门/岗位优先。
+
+    异动记录只落历史、不回写档案（档案部门靠飞书同步/手工更新），同步跟进前
+    培训内容与导出文档应按异动后的岗位口径取值。无异动记录返回 (None, None)。
+    """
+    t = await _latest_transfer(session, employee)
+    if not t:
+        return None, None
+    return t.to_department or None, t.to_position or None
 
 
 async def _sync_prejob_plan_to_ledger(
@@ -1762,6 +1809,20 @@ async def export_prejob_training_plan(
         dept = person.department
         pos = person.position
 
+    # 转岗/晋升员工按最近一次异动的目标部门/岗位（异动记录不回写档案，
+    # 档案/入职台账同步跟进前按异动口径取培训内容与文档字段）；
+    # 类别同步用异动类型（如 转岗/产假复岗），不再写「新员工」
+    latest_t = await _latest_transfer(session, employee)
+    eff_dept = latest_t.to_department if latest_t else None
+    eff_pos = latest_t.to_position if latest_t else None
+    transfer_category = latest_t.transfer_type if latest_t else None
+    dept = eff_dept or dept
+    pos = eff_pos or pos
+
+    # 指定了培训岗位时，后面按培训岗位查关联培训内容
+    if payload and payload.training_position:
+        pos = payload.training_position
+
     # 前端传了培训项则优先用，否则查数据库
     if payload and payload.training_items:
         training_items = [
@@ -1803,7 +1864,14 @@ async def export_prejob_training_plan(
         ]
 
     try:
-        buffer: BytesIO = generate_prejob_training_plan(person, training_items)
+        buffer: BytesIO = await render_training_document(
+            session, "prejob_plan",
+            lambda tb: generate_prejob_training_plan(
+                person, training_items, pos,
+                department=dept, transfer_type=transfer_category,
+                template_bytes=tb,
+            ),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1834,22 +1902,28 @@ async def list_employee_varieties(
     department: str = Query(...),
     session: AsyncSession = Depends(get_db),
 ):
-    """获取指定部门（含兼任部门）名单人员的品种列表（去重），用于签到表二级筛选。
+    """获取指定部门名单人员的品种列表（去重），用于签到表二级筛选。
 
-    人员口径 = 培训人员名单（脱敏独立数据集）。
+    人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门
+    （与按部门带入人员的口径一致，兼任部门不参与）；
+    「厂级」= 全厂培训，取写了真实体现部门的人（「未分类」不是体现部门、不算）。
     """
     from app.modules.hr.models import TrainingRosterProfile
-    # 签到表人员口径：仅体现部门+兼任部门，不引入「未分类」人员
+    conditions = [
+        TrainingRosterProfile.is_deleted == False,
+        TrainingRosterProfile.status == '在职',
+    ]
+    if department == "厂级":
+        conditions += [
+            TrainingRosterProfile.department.isnot(None),
+            TrainingRosterProfile.department != "",
+            TrainingRosterProfile.department != "未分类",
+        ]
+    else:
+        conditions.append(TrainingRosterProfile.department == department)
     rows = (await session.execute(
         select(TrainingRosterProfile.variety, TrainingRosterProfile.concurrent_variety)
-        .where(
-            TrainingRosterProfile.is_deleted == False,
-            TrainingRosterProfile.status == '在职',
-            or_(
-                TrainingRosterProfile.department == department,
-                TrainingRosterProfile.concurrent_departments.ilike(f"%{department}%"),
-            ),
-        )
+        .where(*conditions)
     )).all()
     varieties: list[str] = []
     for variety, concurrent in rows:
@@ -1866,14 +1940,16 @@ async def list_employee_varieties(
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
     """统计部门病假/产假人数（无则 0），供通知/签到表人数栏展示。
 
-    人员口径 = 培训人员名单（脱敏独立数据集）。
+    人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门；
+    「厂级」= 全厂培训，取写了真实体现部门的人（「未分类」不是体现部门、不算）。
     """
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.training_roster_profiles "
-                "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                "WHERE ((:dept = '厂级' AND department IS NOT NULL "
+                "AND department NOT IN ('', '未分类')) OR department = :dept) "
                 "AND is_deleted = false "
                 "AND status IN ('病假', '产假') GROUP BY status"
             ),
@@ -1903,7 +1979,10 @@ async def export_training_sign_in_sheet(
     payload.maternity_count = maternity
     safe_date = str(payload.training_date).replace("-", "")
     try:
-        buffer: BytesIO = generate_training_sign_in_sheet(payload)
+        buffer: BytesIO = await render_training_document(
+            session, "training_signin_sheet",
+            lambda tb: generate_training_sign_in_sheet(payload, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1964,7 +2043,10 @@ async def export_training_notification(
     payload.sick_count = sick
     payload.maternity_count = maternity
     try:
-        buffer: BytesIO = generate_training_notification(payload)
+        buffer: BytesIO = await render_training_document(
+            session, "training_notification",
+            lambda tb: generate_training_notification(payload, template_bytes=tb),
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1995,7 +2077,7 @@ async def generate_assessment_questions(
         raise HTTPException(400, "问答考核已停用 AI 出题，请从题库选题")
     try:
         content = await file.read()
-        # 尝试解码文件内容
+        # 尝试解码文件内容（入平台文件统一 .docx；旧版 .doc 不处理，提示另存）
         text = ""
         if file.filename.endswith(".txt"):
             text = content.decode("utf-8")
@@ -2006,48 +2088,7 @@ async def generate_assessment_questions(
             doc = Document(BytesIO(content))
             text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         elif file.filename.endswith(".doc"):
-            # 转换旧版 .doc 文件（兼容 macOS / Linux）
-            import asyncio
-            import os
-            import shutil
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-            try:
-                text = ""
-                if shutil.which("textutil"):
-                    out_path = tmp_path + ".txt"
-                    proc = await asyncio.create_subprocess_exec(
-                        "textutil", "-convert", "txt", tmp_path, "-output", out_path,
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    )
-                    await asyncio.wait_for(proc.communicate(), timeout=30)
-                    if proc.returncode == 0 and os.path.exists(out_path):
-                        with open(out_path) as f:
-                            text = f.read()
-                    if os.path.exists(out_path):
-                        os.unlink(out_path)
-                elif shutil.which("antiword"):
-                    proc = await asyncio.create_subprocess_exec(
-                        "antiword", tmp_path,
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                    if proc.returncode == 0:
-                        text = stdout.decode("utf-8", errors="ignore")
-                elif shutil.which("catdoc"):
-                    proc = await asyncio.create_subprocess_exec(
-                        "catdoc", tmp_path,
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                    if proc.returncode == 0:
-                        text = stdout.decode("utf-8", errors="ignore")
-                if not text:
-                    text = "（提示：服务器未安装 .doc 转换工具，请上传 .docx 或 .txt 格式文件）"
-            finally:
-                os.unlink(tmp_path)
+            raise HTTPException(400, "暂不支持旧版 .doc：请用 Word 另存为 .docx（或 .txt）后上传")
         else:
             text = content.decode("utf-8", errors="ignore")
 
@@ -2174,6 +2215,7 @@ async def export_training_evaluation_admin(
                 break
 
     # 从台账统计成绩（混合文字+数字）
+    scores: list = []
     if department and training_subject:
         if department and training_subject:
             scores_result = await session.execute(
@@ -2214,7 +2256,7 @@ async def export_training_evaluation_admin(
     if department:
         emp_count = (await session.execute(
             text("SELECT count(*) FROM hr.training_roster_profiles "
-                 "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                 "WHERE department = :dept "
                  "AND is_deleted = false AND status = '在职'"),
             {"dept": department},
         )).scalar()
@@ -2247,10 +2289,11 @@ async def export_training_evaluation_admin(
         duration_hours=plan_duration,
         expected_count=plan_expected or None,
         actual_count=actual_count or None,
-        exam_count=exam_count or None,
-        excellent_count=excellent_count or None,
-        qualified_count=qualified_count or None,
-        unqualified_count=unqualified_count or None,
+        # 台账有成绩时统计如实呈现（0 也写 0）；无成绩时统计区留空
+        exam_count=exam_count if scores else None,
+        excellent_count=excellent_count if scores else None,
+        qualified_count=qualified_count if scores else None,
+        unqualified_count=unqualified_count if scores else None,
         trainee_names=trainee_names,
         participation_rate=participation_rate,
         pass_rate=pass_rate,
@@ -2259,7 +2302,10 @@ async def export_training_evaluation_admin(
         sick_leave=sick_count if department else None,
         maternity_leave=maternity_count if department else None,
     )
-    buffer: BytesIO = generate_training_evaluation(payload)
+    buffer: BytesIO = await render_training_document(
+        session, "training_evaluation",
+        lambda tb: generate_training_evaluation(payload, template_bytes=tb),
+    )
     safe_date = training_date.replace("-", "") if training_date else "nodate"
     filename = f"training_evaluation_{safe_date}.docx"
     return StreamingResponse(
@@ -2272,9 +2318,13 @@ async def export_training_evaluation_admin(
 @router.post("/training-evaluation", summary="生成培训效果评估表")
 async def export_training_evaluation(
     payload: TrainingEvaluationInput,
+    session: AsyncSession = Depends(get_db),
 ):
     """根据填写的培训信息自动生成培训效果评估表 Word 文档。"""
-    buffer: BytesIO = generate_training_evaluation(payload)
+    buffer: BytesIO = await render_training_document(
+        session, "training_evaluation",
+        lambda tb: generate_training_evaluation(payload, template_bytes=tb),
+    )
 
     def _iterfile():
         buffer.seek(0)
@@ -2299,6 +2349,7 @@ async def list_departments(
     page_params: PageParams = Depends(),
     service: DepartmentService = Depends(get_department_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     # 数据范围限制：只返回授权部门
     if hr_scope.scoped_departments:
@@ -2320,9 +2371,19 @@ async def list_departments(
         departments, total = await service.list_departments(
             keyword=keyword, page=page_params.page, page_size=page_params.page_size,
         )
+    # 负责人 / 分管领导的账号就绪状态：列表上提示 HR 谁收不到提醒和审批（未登录 / 同名 / 已离职）
+    statuses = await account_statuses(session, [
+        name
+        for department in departments
+        for name in (department.department_manager_name, department.supervising_leader_name)
+    ])
     data = [
-        DepartmentResponse.model_validate(d).model_dump(mode="json")
-        for d in departments
+        {
+            **DepartmentResponse.model_validate(department).model_dump(mode="json"),
+            "manager_account_status": statuses.get(department.department_manager_name or "", ""),
+            "leader_account_status": statuses.get(department.supervising_leader_name or "", ""),
+        }
+        for department in departments
     ]
     return paginated_response(
         data=data,
@@ -2573,6 +2634,15 @@ async def list_position_trainings(
         for r in rows
     ]
     return success_response(data=data)
+
+
+@router.get("/position-trainings/by-department", summary="按部门列培训岗位及培训内容")
+async def list_position_trainings_by_department(
+    department: str = Query(..., min_length=1, description="部门名称"),
+    service: EmployeeService = Depends(get_employee_service),
+):
+    """入职培训页选择培训岗位用：部门下配置过培训内容的岗位及各自的培训大类。"""
+    return success_response(data=await service.list_training_positions(department))
 
 
 class PositionTrainingCreate(BaseModel):
@@ -3661,6 +3731,28 @@ async def qbank_search(file_no: str | None = Query(None), keyword: str | None = 
     )
 
 
+@router.get("/question-bank/counts", summary="按文件编号批量统计题库题数")
+async def qbank_counts(
+    file_nos: str = Query("", description="逗号分隔的文件编号（精确匹配，同材料打包口径）"),
+    session: AsyncSession = Depends(get_db),
+):
+    """SOP 培训总表/登记表单展示「题库已有几题」用；编号无题也返回 0，不跳过。"""
+    nos = list(dict.fromkeys(s.strip() for s in file_nos.split(",") if s.strip()))
+    counts = {n: 0 for n in nos}
+    if nos:
+        rows = (await session.execute(
+            text(
+                "SELECT file_no, COUNT(*) FROM hr.question_bank "
+                "WHERE is_deleted = false AND file_no = ANY(:nos) GROUP BY file_no"
+            ),
+            {"nos": nos},
+        )).all()
+        for file_no, cnt in rows:
+            if file_no in counts:
+                counts[file_no] = int(cnt)
+    return success_response(data={"counts": counts})
+
+
 @router.delete("/question-bank/{item_id}", summary="删除题目")
 async def delete_question_bank_item(
     item_id: UUID,
@@ -4613,7 +4705,13 @@ async def export_score_report(
                 )
     await session.commit()
 
-    buffer = generate_score_report(training_content=body.training_content, training_date=body.training_date, department=body.training_department, scores=scores)
+    buffer = await render_training_document(
+        session, "score_report",
+        lambda tb: generate_score_report(
+            training_content=body.training_content, training_date=body.training_date,
+            department=body.training_department, scores=scores, template_bytes=tb,
+        ),
+    )
     filename = f"成绩单_{body.training_date}.docx"
     return StreamingResponse(
         iter([buffer.read()]),
@@ -4631,6 +4729,7 @@ async def export_training_qa_record(
     training_department: str = Form("", description="受训部门"),
     questions_json: str = Form("[]", description="题目JSON"),
     trainee_names_json: str = Form("[]", description="学员姓名JSON"),
+    session: AsyncSession = Depends(get_db),
 ):
     """从培训通知页直接导出问答实操记录表（无评分数据，供打印后手写）。"""
     import json as _json
@@ -4641,14 +4740,18 @@ async def export_training_qa_record(
     trainee_names = _json.loads(trainee_names_json) if trainee_names_json else []
     training_date_val = date.fromisoformat(training_date) if training_date else None
 
-    buffer = generate_qa_record(
-        training_content=training_content,
-        training_purpose=training_purpose,
-        training_date=training_date_val,
-        training_method=training_method,
-        training_department=training_department,
-        questions=questions,
-        trainee_names=trainee_names,
+    buffer = await render_training_document(
+        session, "qa_record",
+        lambda tb: generate_qa_record(
+            training_content=training_content,
+            training_purpose=training_purpose,
+            training_date=training_date_val,
+            training_method=training_method,
+            training_department=training_department,
+            questions=questions,
+            trainee_names=trainee_names,
+            template_bytes=tb,
+        ),
     )
     filename = f"问答实操记录表_{training_date}.docx"
     return StreamingResponse(
@@ -4702,15 +4805,19 @@ async def export_qa_record(
         })
 
     try:
-        buffer = generate_qa_record(
-            training_content=row[0] or "",
-            training_department=row[1] or "",
-            training_date=row[2],
-            training_method=row[3] or "",
-            trainer_name=row[4] or "",
-            questions=questions,
-            trainee_names=trainee_names,
-            scores=score_entries,
+        buffer = await render_training_document(
+            session, "qa_record",
+            lambda tb: generate_qa_record(
+                training_content=row[0] or "",
+                training_department=row[1] or "",
+                training_date=row[2],
+                training_method=row[3] or "",
+                trainer_name=row[4] or "",
+                questions=questions,
+                trainee_names=trainee_names,
+                scores=score_entries,
+                template_bytes=tb,
+            ),
         )
     except Exception as e:
         raise HTTPException(400, f"生成记录表失败: {e}")
@@ -4755,7 +4862,7 @@ async def export_qa_evaluation(
 
     # 应到人数 = 部门总人数
     dept_count = (await session.execute(
-        text("SELECT count(*) FROM hr.training_roster_profiles WHERE (department = :d OR (department = '未分类' AND actual_department = :d)) AND is_deleted = false AND status = '在职'"),
+        text("SELECT count(*) FROM hr.training_roster_profiles WHERE department = :d AND is_deleted = false AND status = '在职'"),
         {"d": row[1] or ""},
     )).scalar()
     expected = dept_count if dept_count else None
@@ -4780,7 +4887,10 @@ async def export_qa_evaluation(
         participation_rate=participation or None,
     )
     try:
-        buffer = generate_training_evaluation(payload)
+        buffer = await render_training_document(
+            session, "training_evaluation",
+            lambda tb: generate_training_evaluation(payload, template_bytes=tb),
+        )
     except Exception as e:
         raise HTTPException(400, f"生成评估表失败: {e}")
 
@@ -4883,11 +4993,15 @@ async def export_qa_scores(
     await session.commit()
 
     try:
-        buffer = generate_score_report(
-            training_content=row[0] or "",
-            training_date=str(row[2] or ""),
-            department=row[1] or "",
-            scores=score_list,
+        buffer = await render_training_document(
+            session, "score_report",
+            lambda tb: generate_score_report(
+                training_content=row[0] or "",
+                training_date=str(row[2] or ""),
+                department=row[1] or "",
+                scores=score_list,
+                template_bytes=tb,
+            ),
         )
     except FileNotFoundError as e:
         raise HTTPException(400, str(e))
@@ -4953,8 +5067,8 @@ async def upload_annual_training_plan(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel 年度培训计划，按年度+部门自动分类为计划项。受限用户仅可导入授权部门行。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式；旧版 .xls 请用 Excel 另存为 .xlsx 后上传")
     allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     try:
         content = await file.read()
@@ -5423,8 +5537,8 @@ async def upload_trainers(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel 内训师名单，按姓名+部门自动新增或更新。受限用户仅可导入本部门数据。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式；旧版 .xls 请用 Excel 另存为 .xlsx 后上传")
     allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     if not hr_scope.is_unrestricted and not allowed:
         raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
@@ -5742,18 +5856,14 @@ async def upload_dept_training_personnel(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel 部门培训人员表，按体现部门+品种去重 upsert。受限用户仅可导入本部门数据。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式；旧版 .xls 请用 Excel 另存为 .xlsx 后上传")
 
     try:
         content = await file.read()
-        from io import BytesIO
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
-        import openpyxl
-
-        wb = openpyxl.load_workbook(BytesIO(content))
-        ws = wb.active
-        rows = list(ws.iter_rows(min_row=2, values_only=True))  # skip header
+        rows = read_first_sheet_rows(content)[1:]  # skip header
 
         created = 0
         updated = 0
@@ -5862,15 +5972,15 @@ async def upload_sop_catalog(
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """上传 Excel SOP 目录，按 SOP编号 自动新增或更新。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    """上传 SOP 目录（Excel .xlsx 或 GMP 文件目录 Word .docx），按 SOP编号 自动新增或更新。"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".docx")):
+        raise HTTPException(400, "仅支持 .xlsx / .docx 格式；旧版 .doc / .xls 请先用 Office 另存为新格式再上传")
     allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     if not hr_scope.is_unrestricted and not allowed:
         raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
     try:
         content = await file.read()
-        result = await service.upload_sop_catalog(content, allowed_departments=allowed)
+        result = await service.upload_sop_catalog(content, allowed_departments=allowed, filename=file.filename)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")
@@ -6073,7 +6183,10 @@ async def download_exam_paper(
     if not paper:
         raise HTTPException(404, "试卷不存在")
 
-    buffer = generate_exam_paper(paper)
+    buffer = await render_training_document(
+        session, "exam_paper",
+        lambda tb: generate_exam_paper(paper, template_bytes=tb),
+    )
     filename = f"笔试试卷_{paper.subject}.docx"
     return StreamingResponse(
         iter([buffer.read()]),
@@ -6132,7 +6245,7 @@ async def list_employee_tags(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import EmployeeTag
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     result = await session.execute(
         select(EmployeeTag.tag_name, func.count().label('cnt'))
         .where(EmployeeTag.is_deleted == False, EmployeeTag.created_by == creator)
@@ -6150,7 +6263,7 @@ async def save_employee_tag(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import EmployeeTag
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     emp_no = payload.get("employee_number", "")
     tag_name = payload.get("tag_name", "")
     action = payload.get("action", "add")
@@ -6158,7 +6271,7 @@ async def save_employee_tag(
         raise HTTPException(400, "员工工号和标签名不能为空")
     await _ensure_ledger_employee_in_scope(session, hr_scope, emp_no)
     if action == "remove":
-        # 删除该工号+标签的全部行（不限创建人）：转训自动打上的标签
+        # 删除该工号+标签的全部行（不限创建人）：二级表生成材料自动打上的标签
         # 在员工档案中必须能被移除，否则删了又出现
         await session.execute(
             text("UPDATE hr.employee_tags SET is_deleted = true WHERE employee_number = :en AND tag_name = :tn AND is_deleted = false"),
@@ -6215,7 +6328,7 @@ async def list_employee_classifications(
 ):
     """返回当前用户的分类清单（含每个分类下的人数）。"""
     from app.modules.hr.models import EmployeeClassification, EmployeeTag
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     rows = (await session.execute(
         select(EmployeeClassification)
         .where(
@@ -6242,7 +6355,7 @@ async def create_employee_classification(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     name = str(payload.get("name", "")).strip()
     if not name:
         raise HTTPException(400, "分类名称不能为空")
@@ -6261,6 +6374,65 @@ async def create_employee_classification(
     return success_response(data={"id": str(c.id), "name": c.name}, message="已新增", status_code=201)
 
 
+@router.put("/employee-classifications/{class_id}", summary="修改分类名称")
+async def rename_employee_classification(
+    class_id: UUID,
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """分类改名。标签只按名称关联（无外键），同名标签须一并改，否则成员全部失联。"""
+    from app.modules.hr.models import EmployeeClassification
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
+    c = (await session.execute(
+        select(EmployeeClassification).where(
+            EmployeeClassification.id == class_id,
+            EmployeeClassification.is_deleted == False,  # noqa: E712
+            EmployeeClassification.created_by == creator,
+        )
+    )).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "分类不存在")
+    new_name = str(payload.get("name", "")).strip()
+    if not new_name:
+        raise HTTPException(400, "分类名称不能为空")
+    if len(new_name) > 64:
+        raise HTTPException(400, "分类名称不能超过 64 个字符")
+    if new_name == c.name:
+        return success_response(data={"id": str(c.id), "name": c.name})
+    exist = (await session.execute(
+        select(EmployeeClassification).where(
+            EmployeeClassification.is_deleted == False,  # noqa: E712
+            EmployeeClassification.created_by == creator,
+            EmployeeClassification.name == new_name,
+        )
+    )).scalar_one_or_none()
+    if exist:
+        raise HTTPException(400, "该分类已存在")
+    params = {"old": c.name, "new": new_name, "cb": creator}
+    # 同一人已另有新名标签：先软删那一行，否则改名会撞「活跃行唯一」部分索引
+    await session.execute(
+        text("""
+            UPDATE hr.employee_tags b SET is_deleted = true
+            FROM hr.employee_tags a
+            WHERE a.tag_name = :old AND a.created_by = :cb AND a.is_deleted = false
+              AND b.employee_number = a.employee_number
+              AND b.tag_name = :new AND b.is_deleted = false
+        """),
+        params,
+    )
+    await session.execute(
+        text("""
+            UPDATE hr.employee_tags SET tag_name = :new
+            WHERE tag_name = :old AND created_by = :cb AND is_deleted = false
+        """),
+        params,
+    )
+    c.name = new_name
+    await session.commit()
+    return success_response(data={"id": str(c.id), "name": new_name}, message="已保存")
+
+
 @router.get("/employee-classifications/{class_id}/members", summary="分类下的人员")
 async def list_classification_members(
     class_id: UUID,
@@ -6269,7 +6441,7 @@ async def list_classification_members(
 ):
     """查看某分类下收纳的具体人员。"""
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     c = (await session.execute(
         select(EmployeeClassification).where(
             EmployeeClassification.id == class_id,
@@ -6305,7 +6477,7 @@ async def remove_classification_members(
 ):
     """把选中的人员从该分类中移除（仅解除分类，不影响员工档案）。"""
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     c = (await session.execute(
         select(EmployeeClassification).where(
             EmployeeClassification.id == class_id,
@@ -6338,7 +6510,7 @@ async def delete_employee_classification(
 ):
     """删除分类清单项，同时解除该分类下所有员工的标签。"""
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     c = (await session.execute(
         select(EmployeeClassification).where(
             EmployeeClassification.id == class_id,

@@ -15,3 +15,6 @@ export * from './headcount'
 
 export * from './incidents'
 export * from './ledgerImport'
+export * from './laborContracts'
+export * from './laborContractArchive'
+export * from './offboarding'

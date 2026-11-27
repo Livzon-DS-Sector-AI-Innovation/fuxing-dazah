@@ -3,29 +3,13 @@
 from copy import deepcopy
 from datetime import date
 from io import BytesIO
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from docx import Document
 from docx.oxml.ns import qn
 
-TEMPLATE_FILENAME = "新员工培训计划-模板.docx"
-
-
-def _find_template() -> Path:
-    """Locate the docx template, trying several path candidates."""
-    candidates = [
-        Path("assets/hr") / TEMPLATE_FILENAME,
-        Path("../assets/hr") / TEMPLATE_FILENAME,
-        Path(__file__).resolve().parent.parent.parent.parent
-        / "assets/hr"
-        / TEMPLATE_FILENAME,
-    ]
-    for p in candidates:
-        if p.exists():
-            return p.resolve()
-    raise FileNotFoundError(f"模板文件未找到: {TEMPLATE_FILENAME}")
+from app.modules.hr.template_utils import find_hr_template_bytes
 
 
 def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
@@ -72,6 +56,10 @@ def _cleanup_markers(doc: Document) -> None:
 def generate_prejob_training_plan(
     person: Any,
     training_items: list[dict[str, str]] | None = None,
+    training_position: str | None = None,
+    template_bytes: bytes | None = None,
+    department: str | None = None,
+    transfer_type: str | None = None,
 ) -> BytesIO:
     """根据人员数据和培训内容生成岗前培训计划 Word 文档。
 
@@ -79,9 +67,15 @@ def generate_prejob_training_plan(
         person: 人员对象，需有 name, department, position, hire_date,
                 education, school, graduation_date, classification, transfer_history
         training_items: 培训内容列表，每项包含 training_category, trainer, training_method
+        training_position: 培训岗位。员工的实际岗位名常与培训岗位不同（如「万古纯化」对「工艺员」），
+                传入时「体现岗位」写培训岗位，否则写员工实际岗位
+        department: 体现部门覆盖值。转岗/晋升员工传最近一次异动的目标部门（异动记录
+                不回写档案，档案/入职台账同步跟进前按异动口径出文档），不传写 person 的部门
+        transfer_type: 异动类别覆盖值（晋升/转岗/产假复岗）。传入时「异动类别」写它；
+                不传沿用原口径：transfer_history 文本有值写「岗位变动」，否则「新员工」
     """
-    template_path = _find_template()
-    doc = Document(str(template_path))
+    raw = template_bytes or find_hr_template_bytes("prejob_plan")
+    doc = Document(BytesIO(raw))
 
     def s(val) -> str:
         if val is None:
@@ -95,13 +89,13 @@ def generate_prejob_training_plan(
         "{学历}": s(getattr(person, "education", None)),
         "{毕业院校}": s(getattr(person, "school", None)),
         "{毕业时间}": s(getattr(person, "graduation_date", None)),
-        "{体现部门}": s(getattr(person, "department", None)),
-        "{体现岗位}": s(getattr(person, "position", None)),
+        "{体现部门}": s(department or getattr(person, "department", None)),
+        "{体现岗位}": s(training_position or getattr(person, "position", None)),
         "{入职日期}": s(getattr(person, "hire_date", None)),
         "{证书}": s(getattr(person, "classification", None)),
         "{异动类别}": (
-            "岗位变动" if getattr(person, "transfer_history", None)
-            else "新员工"
+            transfer_type
+            or ("岗位变动" if getattr(person, "transfer_history", None) else "新员工")
         ),
     }
 

@@ -129,6 +129,15 @@ export async function deleteQuestionBankItem(id: string) {
   })
 }
 
+/** 按文件编号批量统计题库题数（精确匹配，同材料打包口径；无题编号返回 0） */
+export async function fetchQuestionBankCounts(fileNos: string[]): Promise<{
+  data: { counts: Record<string, number> }
+}> {
+  return fetchHrApi(`/hr/question-bank/counts?file_nos=${encodeURIComponent(fileNos.join(','))}`, {
+    errorMessage: '题库计数失败',
+  })
+}
+
 /** 从历史记录表（docx）导入题目 */
 export async function importQuestionBankDocx(formData: FormData) {
   return fetchHrApi<{ code: number; message: string; data?: unknown }>('/hr/question-bank/import-docx', {

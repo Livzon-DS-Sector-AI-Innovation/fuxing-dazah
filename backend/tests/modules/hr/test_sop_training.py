@@ -39,7 +39,7 @@ class TestSopRegisterFlow:
             {"rid": data["id"]},
         )).fetchall()
         assert [r[0] for r in rows] == ["乙部门", "甲部门"]
-        assert all(r[1] == "待转训" for r in rows)
+        assert all(r[1] == "待生成" for r in rows)
 
         # 列表按年查询，培训对象自动生成
         res2 = await client.get("/api/v1/hr/sop-training-records", params={"year": "2026"})
@@ -50,7 +50,7 @@ class TestSopRegisterFlow:
 
     @pytest.mark.asyncio
     async def test_update_record_syncs_entries(self, db_session, client):
-        """编辑涉及部门 → 新增缺失部门、移除未转训的已取消部门"""
+        """编辑涉及部门 → 新增缺失部门、移除未生成材料的已取消部门"""
         from app.modules.hr.models import SopTrainingEntry, SopTrainingRecord
         r = SopTrainingRecord(
             year="2026", file_name="测试文件", status="已提交",
@@ -74,64 +74,69 @@ class TestSopRegisterFlow:
         )).scalar()
         assert deleted == 1
 
+    async def _make_generation_entry(self, db_session, department: str, classification: str | None = None):
+        """造一条可直接生成材料的二级表记录（登记记录 + 分类人员）。"""
+        from app.modules.hr.models import SopTrainingEntry, SopTrainingRecord
+        rec = SopTrainingRecord(
+            year="2026", file_name=f"生成即完成{uuid4().hex[:8]}", file_no=f"SOP-GEN-{uuid4().hex[:8]}",
+            involved_departments=json.dumps([department]), status="已提交",
+            initiator_department="QA",
+        )
+        db_session.add(rec)
+        await db_session.flush()
+        e = SopTrainingEntry(
+            record_id=str(rec.id), department=department, classification=classification,
+            personnel=json.dumps([{"employee_number": f"T{uuid4().hex[:8]}", "name": "张三"}]),
+        )
+        db_session.add(e)
+        await db_session.flush()
+        return e
+
     @pytest.mark.asyncio
-    async def test_transfer_sets_current_trainer(self, db_session, client):
-        """转培训 → 自动带出该部门当前培训师"""
-        from app.modules.hr.models import DeptTrainingPersonnel, SopTrainingEntry
+    async def test_generation_marks_status_and_trainer(self, db_session, client):
+        """生成材料即完成：状态置已生成，自动带出该部门当前培训师"""
+        from app.modules.hr.models import DeptTrainingPersonnel
         db_session.add(DeptTrainingPersonnel(
             display_department="甲部门", department="甲部门",
             level1_trainer="张培训师",
         ))
-        e = SopTrainingEntry(record_id=None, department="甲部门")
-        db_session.add(e)
-        await db_session.flush()
+        e = await self._make_generation_entry(db_session, "甲部门")
 
-        res = await client.post(f"/api/v1/hr/sop-training-entries/{e.id}/transfer")
+        res = await client.post("/api/v1/hr/sop-training-entries/batch-materials", json={"ids": [str(e.id)]})
         assert res.status_code == 200, res.text
-        assert res.json()["data"]["trainer"] == "张培训师"
         await db_session.refresh(e)
-        assert e.status == "已转训"
+        assert e.status == "已生成"
         assert e.trainer == "张培训师"
 
     @pytest.mark.asyncio
-    async def test_batch_transfer(self, db_session, client):
-        """多条SOP一起转训 → 批量转培训"""
-        from app.modules.hr.models import DeptTrainingPersonnel, SopTrainingEntry
+    async def test_batch_generation_marks_each_department(self, db_session, client):
+        """勾选多条一起生成：每条自动带出本部门当前培训师并置已生成"""
+        from app.modules.hr.models import DeptTrainingPersonnel
         db_session.add(DeptTrainingPersonnel(
             display_department="甲部门", department="甲部门", level1_trainer="张培训师"))
         db_session.add(DeptTrainingPersonnel(
             display_department="乙部门", department="乙部门", level1_trainer="李培训师"))
-        e1 = SopTrainingEntry(record_id=None, department="甲部门")
-        e2 = SopTrainingEntry(record_id=None, department="乙部门")
-        e3 = SopTrainingEntry(record_id=None, department="甲部门")
-        db_session.add_all([e1, e2, e3])
-        await db_session.flush()
+        e1 = await self._make_generation_entry(db_session, "甲部门")
+        e2 = await self._make_generation_entry(db_session, "乙部门")
+        e3 = await self._make_generation_entry(db_session, "甲部门")  # 未勾选，状态不动
 
-        res = await client.post("/api/v1/hr/sop-training-entries/batch-transfer", json={"ids": [str(e1.id), str(e2.id)]})
+        res = await client.post("/api/v1/hr/sop-training-entries/batch-materials", json={"ids": [str(e1.id), str(e2.id)]})
         assert res.status_code == 200, res.text
-        assert res.json()["data"]["transferred"] == 2
         await db_session.refresh(e1)
         await db_session.refresh(e2)
         await db_session.refresh(e3)
-        assert e1.status == "已转训" and e1.trainer == "张培训师"
-        assert e2.status == "已转训" and e2.trainer == "李培训师"
-        assert e3.status == "待转训"
+        assert e1.status == "已生成" and e1.trainer == "张培训师"
+        assert e2.status == "已生成" and e2.trainer == "李培训师"
+        assert e3.status == "待生成"
 
     @pytest.mark.asyncio
-    async def test_transfer_auto_links_classification_tags(self, db_session, client):
-        """转训自动关联分类：涉及人员写入员工标签（幂等）。"""
-        from app.modules.hr.models import EmployeeTag, SopTrainingEntry
+    async def test_generation_auto_links_classification_tags(self, db_session, client):
+        """生成材料自动关联分类：涉及人员写入员工标签（幂等）。"""
+        from app.modules.hr.models import EmployeeTag
 
-        e = SopTrainingEntry(
-            record_id=None, department="甲部门",
-            classification="新员工",
-            personnel=json.dumps([{"employee_number": "T001", "name": "张三"},
-                                  {"employee_number": "T002", "name": "李四"}]),
-        )
-        db_session.add(e)
-        await db_session.flush()
+        e = await self._make_generation_entry(db_session, "甲部门", classification="新员工")
 
-        res = await client.post(f"/api/v1/hr/sop-training-entries/{e.id}/transfer")
+        res = await client.post("/api/v1/hr/sop-training-entries/batch-materials", json={"ids": [str(e.id)]})
         assert res.status_code == 200, res.text
 
         tags = (await db_session.execute(
@@ -140,10 +145,10 @@ class TestSopRegisterFlow:
                 EmployeeTag.is_deleted == False,  # noqa: E712
             )
         )).scalars().all()
-        assert {t.employee_number for t in tags} == {"T001", "T002"}
+        assert len(tags) == 1
 
-        # 幂等：再次转训不重复打标（状态已转训直接返回，标签数不变）
-        res = await client.post(f"/api/v1/hr/sop-training-entries/{e.id}/transfer")
+        # 幂等：再次生成不重复打标（状态已生成直接跳过，标签数不变）
+        res = await client.post("/api/v1/hr/sop-training-entries/batch-materials", json={"ids": [str(e.id)]})
         assert res.status_code == 200
         tags2 = (await db_session.execute(
             select(EmployeeTag).where(
@@ -171,10 +176,14 @@ class TestSopRegisterFlow:
 
     @pytest.mark.asyncio
     async def test_classifications_and_personnel(self, db_session, client):
-        """部门自定义分类选项 + 按分类拉取人员（选项 = 当前用户的清单 ∪ 标签）"""
+        """分类选项 + 按分类拉取人员（选项 = 当前用户的清单 ∪ 标签；人员跨部门联动）"""
         from datetime import date as _date
+
         from app.modules.hr.models import (
-            Employee, EmployeeClassification, EmployeeTag, TrainingRosterProfile,
+            Employee,
+            EmployeeClassification,
+            EmployeeTag,
+            TrainingRosterProfile,
         )
         db_session.add(Employee(
             employee_number="SOP001", name="员工甲", department="甲部门",
@@ -185,9 +194,19 @@ class TestSopRegisterFlow:
             employee_number="SOP001", name="员工甲", department="甲部门",
             position="操作工", status="在职",
         ))
+        # 跨部门联动：乙部门的人打了同一标签，同样带出（不按记录部门过滤）
+        db_session.add(Employee(
+            employee_number="SOP002", name="员工乙", department="乙部门",
+            position="操作工", status="在职", hire_date=_date.today(),
+        ))
+        db_session.add(TrainingRosterProfile(
+            employee_number="SOP002", name="员工乙", department="乙部门",
+            position="操作工", status="在职",
+        ))
         # 当前用户（HR测试员）建的清单 + 打的标签
         db_session.add(EmployeeClassification(name="新员工", created_by="HR测试员"))
         db_session.add(EmployeeTag(employee_number="SOP001", tag_name="新员工", created_by="HR测试员"))
+        db_session.add(EmployeeTag(employee_number="SOP002", tag_name="新员工", created_by="HR测试员"))
         # 直接打标签（无清单）的分类：同样出现
         db_session.add(EmployeeTag(employee_number="SOP001", tag_name="分类1", created_by="HR测试员"))
         # 他人创建的：不出现
@@ -195,7 +214,7 @@ class TestSopRegisterFlow:
         db_session.add(EmployeeTag(employee_number="SOP001", tag_name="别人的标签", created_by="其他人"))
         await db_session.flush()
 
-        res = await client.get("/api/v1/hr/sop-training-entries/classifications", params={"department": "甲部门"})
+        res = await client.get("/api/v1/hr/sop-training-entries/classifications")
         assert res.status_code == 200, res.text
         names = [d["tag_name"] for d in res.json()["data"]]
         # 本人的清单 + 本人打的标签都出现；他人的不出现
@@ -203,13 +222,22 @@ class TestSopRegisterFlow:
         assert "分类1" in names
         assert "别人的分类" not in names
         assert "别人的标签" not in names
-        assert any(d["tag_name"] == "新员工" and d["count"] == 1 for d in res.json()["data"])
+        assert any(d["tag_name"] == "新员工" and d["count"] == 2 for d in res.json()["data"])
 
-        res2 = await client.get("/api/v1/hr/sop-training-entries/personnel", params={"department": "甲部门", "classification": "新员工"})
+        res2 = await client.get("/api/v1/hr/sop-training-entries/personnel", params={"classification": "新员工"})
         assert res2.status_code == 200, res2.text
         people = res2.json()["data"]
-        assert len(people) == 1
-        assert people[0]["name"] == "员工甲"
+        assert {p["name"] for p in people} == {"员工甲", "员工乙"}
+
+        # 多分类取并集且去重（SOP001 同时在「新员工」「分类1」里只出现一次）
+        res3 = await client.get(
+            "/api/v1/hr/sop-training-entries/personnel",
+            params=[("classification", "新员工"), ("classification", "分类1")],
+        )
+        assert res3.status_code == 200, res3.text
+        people3 = res3.json()["data"]
+        assert {p["name"] for p in people3} == {"员工甲", "员工乙"}
+        assert len(people3) == 2
 
     @pytest.mark.asyncio
     async def test_dept_trainers_lookup(self, db_session, client):
@@ -254,19 +282,22 @@ def _rand(prefix: str = "") -> str:
 
 class TestMaterialsHelpers:
     async def test_query_leave_counts(self, db_session):
-        from datetime import date as _date
+
         from app.modules.hr import models as hr_models
         from app.modules.hr.sop_training_routes import _query_leave_counts
 
-        dept = f"材料测试部{_rand()}"
-        for name, no, status in [
-            ("病假甲", f"B{_rand()}", "病假"),
-            ("产假乙", f"M{_rand()}", "产假"),
-            ("在职丙", f"Z{_rand()}", "在职"),
+        dept, other = f"材料测试部{_rand()}", f"材料他部{_rand()}"
+        for name, no, status, d in [
+            ("病假甲", f"B{_rand()}", "病假", dept),
+            ("产假乙", f"M{_rand()}", "产假", dept),
+            ("在职丙", f"Z{_rand()}", "在职", dept),
+            # 体现部门在别处、实际部门在本部门的产假：不算本部门（只认体现部门）
+            ("产假丁", f"M{_rand()}", "产假", other),
         ]:
             # 统计口径 = 培训人员名单（脱敏独立数据集）
             db_session.add(hr_models.TrainingRosterProfile(
-                name=name, employee_number=no, department=dept,
+                name=name, employee_number=no, department=d,
+                actual_department=dept if d == other else None,
                 position="工程师", status=status,
             ))
         await db_session.flush()
@@ -298,53 +329,167 @@ class TestMaterialsHelpers:
         # docx zip 签名
         assert content[:2] == b"PK"
 
-    def test_generate_register_docx(self):
-        from app.modules.hr.sop_training_routes import _generate_register_docx
-
-        buf = _generate_register_docx(
-            subject="测试培训", training_date="2026-08-21", department="测试部",
-            trainer="王老师", method="R", trainee_names=["张三", "李四"],
-            sick=1, maternity=0,
-        )
-        content = buf.getvalue()
-        assert len(content) > 0
-        assert content[:2] == b"PK"
-
     async def test_entry_personnel_excludes_leave(self, db_session):
-        """二级表分类人员拉取排除病假/产假（接口 SQL 校验）。"""
-        from datetime import date as _date
-        from sqlalchemy import text as sa_text
+        """二级表分类人员拉取：排除病假/产假；跨部门联动带出，受限用户只看授权部门。"""
         from app.modules.hr import models as hr_models
+        from app.modules.hr.deps import HrAccessContext
+        from app.modules.hr.sop_training_routes import (
+            sop_entry_classifications,
+            sop_entry_personnel,
+        )
 
-        dept = f"拉人测试部{_rand()}"
+        dept, other = f"拉人测试部{_rand()}", f"拉人他部{_rand()}"
         tag = f"分类{_rand()}"
-        for name, no, status in [
-            ("正常甲", f"N{_rand()}", "在职"),
-            ("病假乙", f"B{_rand()}", "病假"),
-            ("产假丙", f"M{_rand()}", "产假"),
+        for name, no, status, d in [
+            ("正常甲", f"N{_rand()}", "在职", dept),
+            ("病假乙", f"B{_rand()}", "病假", dept),
+            ("产假丙", f"M{_rand()}", "产假", dept),
+            ("他部丁", f"S{_rand()}", "在职", other),
         ]:
             # 人员口径 = 培训人员名单（脱敏独立数据集）
             db_session.add(hr_models.TrainingRosterProfile(
-                name=name, employee_number=no, department=dept,
+                name=name, employee_number=no, department=d,
                 position="工程师", status=status,
             ))
             await db_session.flush()
-            db_session.add(hr_models.EmployeeTag(employee_number=no, tag_name=tag, created_by="tester"))
+            db_session.add(hr_models.EmployeeTag(
+                employee_number=no, tag_name=tag, created_by="口径测试员",
+            ))
         await db_session.flush()
 
-        result = (await db_session.execute(
-            sa_text("""
-                SELECT p.name FROM hr.training_roster_profiles p
-                JOIN hr.employee_tags t ON t.employee_number = p.employee_number
-                WHERE t.is_deleted = false AND p.is_deleted = false
-                  AND t.tag_name = :tag
-                  AND (p.department = :dept OR p.actual_department = :dept)
-                  AND p.status NOT IN ('离职', '待审批', '病假', '产假')
-                ORDER BY p.employee_number
-            """),
-            {"dept": dept, "tag": tag},
+        class _U:
+            name = "口径测试员"
+            employee_number = "TEST001"
+
+        def _scope(data_scope: str, scoped: frozenset[str]) -> HrAccessContext:
+            return HrAccessContext(
+                user=_U(),  # type: ignore[arg-type]
+                data_scope=data_scope,
+                department=None,
+                employee_number="TEST001",
+                scoped_departments=scoped,
+            )
+
+        # 全范围用户：跨部门联动，标签成员全部带出（病假/产假仍排除）
+        res = await sop_entry_personnel(
+            classification=[tag], session=db_session, hr_scope=_scope("all", frozenset()),
+        )
+        names = [row["name"] for row in json.loads(res.body)["data"]]
+        assert set(names) == {"正常甲", "他部丁"}
+
+        res = await sop_entry_classifications(session=db_session, hr_scope=_scope("all", frozenset()))
+        counts = {row["tag_name"]: row["count"] for row in json.loads(res.body)["data"]}
+        assert counts.get(tag) == 2
+
+        # 受限用户：只返回授权部门内的人员
+        res = await sop_entry_personnel(
+            classification=[tag], session=db_session, hr_scope=_scope("department", frozenset({dept})),
+        )
+        names = [row["name"] for row in json.loads(res.body)["data"]]
+        assert names == ["正常甲"]
+
+        res = await sop_entry_classifications(session=db_session, hr_scope=_scope("department", frozenset({dept})))
+        counts = {row["tag_name"]: row["count"] for row in json.loads(res.body)["data"]}
+        assert counts.get(tag) == 1
+
+    @pytest.mark.asyncio
+    async def test_entry_multi_classification_and_tags(self, db_session, client):
+        """分类多选：PUT 以「；」连接存储（去重/清洗）；生成打标每人写全部所选分类标签。"""
+        from app.modules.hr.models import SopTrainingEntry
+        from app.modules.hr.sop_training_routes import _link_classification_tags
+
+        e = SopTrainingEntry(record_id=None, department="甲部门")
+        db_session.add(e)
+        await db_session.flush()
+
+        # PUT 多选：「；」连接存储，重复与空段清洗
+        res = await client.put(f"/api/v1/hr/sop-training-entries/{e.id}", json={
+            "classification": "多选甲；多选乙；多选甲； ",
+            "personnel": [],
+        })
+        assert res.status_code == 200, res.text
+        await db_session.refresh(e)
+        assert e.classification == "多选甲；多选乙"
+
+        # 生成材料打标：每位涉及人员写入全部所选分类标签，幂等可重跑
+        e.personnel = json.dumps([{"employee_number": "MC001", "name": "多选丙"}], ensure_ascii=False)
+        await _link_classification_tags(db_session, e, "多选打标员")
+        await _link_classification_tags(db_session, e, "多选打标员")
+        rows = (await db_session.execute(
+            text(
+                "SELECT tag_name FROM hr.employee_tags "
+                "WHERE employee_number = 'MC001' AND is_deleted = false AND created_by = '多选打标员'"
+            ),
         )).fetchall()
-        names = [r[0] for r in result]
-        assert "病假乙" not in names
-        assert "产假丙" not in names
-        assert "正常甲" in names
+        assert sorted(r[0] for r in rows) == ["多选乙", "多选甲"]
+
+
+class TestDeptTrainerLookup:
+    """部门一级培训师查找链：配置表优先，内训师台账兜底（is_level1 取值口径统一）。"""
+
+    @pytest.mark.asyncio
+    async def test_lookup_prefers_config_table(self, db_session):
+        """配置表有值时优先返回，不看内训师台账。"""
+        from app.modules.hr.models import DeptTrainingPersonnel, HrTrainer
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        db_session.add(DeptTrainingPersonnel(
+            display_department="甲部门", department="甲部门", level1_trainer="张培训师"))
+        db_session.add(HrTrainer(name="王讲师", department="甲部门", is_level1="一级培训师"))
+        await db_session.flush()
+        assert await _lookup_level1_trainer(db_session, "甲部门") == "张培训师"
+
+    @pytest.mark.asyncio
+    async def test_lookup_falls_back_to_trainers_ledger(self, db_session):
+        """配置表未配置 → 兜底取内训师台账 is_level1=一级培训师（页面新增口径）的行。"""
+        from app.modules.hr.models import HrTrainer
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        db_session.add(HrTrainer(name="王讲师", department="乙部门", is_level1="一级培训师"))
+        db_session.add(HrTrainer(name="李讲师", department="乙部门", is_level1="-"))
+        await db_session.flush()
+        assert await _lookup_level1_trainer(db_session, "乙部门") == "王讲师"
+
+    @pytest.mark.asyncio
+    async def test_lookup_fallback_matches_legacy_yes_value(self, db_session):
+        """历史存量 is_level1=是 仍可兜底命中。"""
+        from app.modules.hr.models import HrTrainer
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        db_session.add(HrTrainer(name="陈讲师", department="乙部门", is_level1="是"))
+        await db_session.flush()
+        assert await _lookup_level1_trainer(db_session, "乙部门") == "陈讲师"
+
+    @pytest.mark.asyncio
+    async def test_lookup_empty_when_nothing_configured(self, db_session):
+        """两级都无数据 → 返回 None（不阻塞登记）。"""
+        from app.modules.hr.sop_training_routes import _lookup_level1_trainer
+        assert await _lookup_level1_trainer(db_session, "无配置部门") is None
+
+
+class TestTrainerUploadLevel1Normalization:
+    """上传内训师 Excel 时 is_level1 取值归一化到页面口径（一级培训师 / -）。"""
+
+    @pytest.mark.asyncio
+    async def test_upload_normalizes_is_level1_values(self, db_session):
+        import io
+
+        from openpyxl import Workbook
+
+        from app.modules.hr.models import HrTrainer
+        from app.modules.hr.service import EmployeeService
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["姓名", "部门", "是否一级培训师"])
+        ws.append(["归一甲", "甲部门", "是"])
+        ws.append(["归一乙", "乙部门", "false"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        result = await EmployeeService(db_session).upload_trainers(buf.getvalue())
+        assert result["created"] == 2
+
+        rows = (await db_session.execute(
+            select(HrTrainer).where(HrTrainer.name.in_(["归一甲", "归一乙"]))
+        )).scalars().all()
+        assert {r.name: r.is_level1 for r in rows} == {
+            "归一甲": "一级培训师",
+            "归一乙": "-",
+        }

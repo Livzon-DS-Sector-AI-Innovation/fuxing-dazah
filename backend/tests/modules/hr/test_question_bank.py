@@ -127,3 +127,35 @@ async def test_import_docx_rejects_bad_inputs(client: AsyncClient):
     )
     assert empty.status_code == 400
     assert "未从文档中提取到问答题目" in empty.json()["message"]
+
+
+async def test_counts_by_file_nos(client: AsyncClient):
+    """批量计数：无题编号返回 0 不跳过；软删的不计；重复编号去重。"""
+    file_no = _rand("SOP")
+    other = _rand("SOP")
+    await client.post("/api/v1/hr/question-bank", json={
+        "items": [
+            {"file_no": file_no, "question": f"{file_no} 清洁浓度?", "answer": "0.5%", "score": 10},
+            {"file_no": file_no, "question": f"{file_no} 清洁温度?", "answer": "室温", "score": 10},
+        ],
+    })
+    assert (await client.get("/api/v1/hr/question-bank", params={"file_no": file_no})).json()["meta"]["total"] == 2
+
+    res = await client.get("/api/v1/hr/question-bank/counts", params={"file_nos": f"{file_no},{other},{file_no}"})
+    assert res.status_code == 200, res.text
+    counts = res.json()["data"]["counts"]
+    assert counts[file_no] == 2
+    assert counts[other] == 0  # 无题编号也在结果里，便于前端展示「尚无题」
+
+    # 软删后不计入
+    rows = (await client.get("/api/v1/hr/question-bank", params={"file_no": file_no})).json()["data"]
+    await client.delete(f"/api/v1/hr/question-bank/{rows[0]['id']}")
+    counts_after = (await client.get(
+        "/api/v1/hr/question-bank/counts", params={"file_nos": file_no},
+    )).json()["data"]["counts"]
+    assert counts_after[file_no] == 1
+
+    # 空参数 → 空结果
+    empty = await client.get("/api/v1/hr/question-bank/counts")
+    assert empty.status_code == 200
+    assert empty.json()["data"]["counts"] == {}

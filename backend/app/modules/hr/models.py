@@ -509,6 +509,9 @@ class DepartureRecord(BaseModel):
     )
 
     # ─── 离职证明签署 ───
+    cert_issued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="解除劳动关系证明开具时间（离职办理流程回写）"
+    )
     cert_sign_token: Mapped[str | None] = mapped_column(
         String(64), nullable=True, unique=True, comment="签署链接 token"
     )
@@ -525,6 +528,34 @@ class DepartureRecord(BaseModel):
         String(64), nullable=True, comment="签署人确认姓名"
     )
 
+    # ─── 离职合同台账（劳动合同管理 P3）───
+    # 合同信息（历次起止/签订次数/最后期限/终止方式/终止日期）按工号从 labor_contracts
+    # 实时聚合、不落快照；这里只存必须人工维护的项。
+    ORIGINAL_UNRECOVERED = "unrecovered"
+    ORIGINAL_RECOVERED = "recovered"
+    ORIGINAL_WAIVED = "waived"
+    ORIGINAL_STATUS_LABELS = {
+        ORIGINAL_UNRECOVERED: "未回收",
+        ORIGINAL_RECOVERED: "已回收",
+        ORIGINAL_WAIVED: "无需回收",
+    }
+    contract_termination_type: Mapped[str | None] = mapped_column(
+        String(24), nullable=True,
+        comment="合同终止方式人工更正值；空=按合同到期日与离职类型自动判定",
+    )
+    contract_approval_ref: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="审批依据（审批实例/流程单号，人工补录）"
+    )
+    separation_process_no: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        comment="离职流程单号（人工补录；有离职办结单时以办结单编号为准）",
+    )
+    contract_original_status: Mapped[str] = mapped_column(
+        String(16), nullable=False,
+        default=ORIGINAL_UNRECOVERED, server_default=ORIGINAL_UNRECOVERED,
+        comment="合同原件回收状态: unrecovered 未回收 / recovered 已回收 / waived 无需回收",
+    )
+
 
 class TrainingLedger(BaseModel):
     __tablename__ = "training_ledgers"
@@ -533,6 +564,10 @@ class TrainingLedger(BaseModel):
         Index("ix_training_ledgers_training_date", "training_date"),
         {"schema": "hr"},
     )
+
+    # 入职培训记录表导出写入的来源，以此判定入职培训已完成
+    # （prejob 是岗前培训计划导出时写入，培训尚未开展，不算完成）
+    SOURCE_PREJOB_EXPORT = "prejob_export"
 
     employee_number: Mapped[str] = mapped_column(
         String(32), nullable=False, comment="工号"
@@ -1203,7 +1238,7 @@ class TransferRecord(BaseModel):
     )
 
     employee_id: Mapped[UUID] = mapped_column(nullable=False, comment="员工ID")
-    transfer_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default="调动", comment="调动/晋升/降职/转岗")
+    transfer_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default="调动", comment="类型: 晋升/转岗/产假复岗（档案页异动记录维护）")
     from_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="原部门")
     to_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="新部门")
     from_position: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="原岗位")
@@ -1657,10 +1692,12 @@ class SopTrainingRecord(BaseModel):
 
     year: Mapped[str] = mapped_column(String(4), nullable=False, comment="登记年份，如 2026")
     training_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="培训日期，如 01.05")
-    file_name: Mapped[str] = mapped_column(String(512), nullable=False, comment="文件名称")
-    file_no: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="文件编号（SOP编号，(CA)前缀=草案）")
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False, comment="文件名称（合并登记时为「；」连接的展示串）")
+    file_no: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="文件编号（SOP编号，(CA)前缀=草案；合并登记时为「；」连接）")
+    files: Mapped[str | None] = mapped_column(Text, nullable=True, comment="登记的培训文件列表 JSON [{file_name, file_no}]；空=单文件（看 file_name/file_no）")
     effective_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="生效日期，草案填——")
     method: Mapped[str | None] = mapped_column(String(4), nullable=True, comment="培训方式：R（按完成时间）/ T（按课时）")
+    assessment_method: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="考核方式：阅读并理解/问答/笔试（空=按培训方式取默认）")
     complete_time: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="R：培训完成时间；T：培训课时（日期+时段）")
     trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（集中培训时填写）")
     trainees: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="培训对象，默认「X部门全体员工及相关部门培训师」")
@@ -1692,21 +1729,68 @@ class SopTrainingEntry(BaseModel):
     department: Mapped[str] = mapped_column(
         String(128), nullable=False, comment="培训部门"
     )
-    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（转培训时自动带出当前培训师）")
+    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（生成材料时自动带出当前培训师）")
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="待转训", server_default="待转训", comment="待转训/已转训"
+        String(16), nullable=False, default="待生成", server_default="待生成", comment="待生成/已生成"
     )
     complete_time: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="该部门培训完成时间/课时")
     classification: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="自定义分类（对应部门员工标签）"
+        String(256), nullable=True, comment="自定义分类，多选按「；」连接（对应创建人员工标签）"
     )
     personnel: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="分类人员，JSON 数组：[{\"employee_number\":\"\",\"name\":\"\"}]"
     )
-    transferred_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="转培训操作人")
-    transferred_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="转培训时间"
+    generated_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="生成材料操作人")
+    generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="生成材料时间"
     )
+
+
+# ─── 培训导出模板（用户自维护） ───
+
+
+class TrainingExportTemplateVersion(BaseModel):
+    """培训导出模板的自定义版本：换传即升版本（旧行保留可回滚），无当前版时回退仓库默认模板。
+
+    当前版唯一：部分唯一索引 (template_key) WHERE is_current AND NOT is_deleted；
+    上传人/时间取 BaseModel 的 created_by/created_at。文件存对象存储
+    （storage_key 用英文安全字符），template_key 对应
+    training_template_registry.TEMPLATES 中的注册项。
+    """
+
+    __tablename__ = "training_export_templates"
+    __table_args__ = (
+        Index("ix_training_tpl_key", "template_key"),
+        Index(
+            "uq_training_tpl_current",
+            "template_key",
+            unique=True,
+            postgresql_where=text("is_current = true AND is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    template_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="模板注册键（training_template_registry）"
+    )
+    version_no: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="版本号（1 起算）"
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+        comment="是否当前使用版本（false=历史版或已被恢复默认）",
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, comment="对象存储 key")
+    file_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, comment="展示/下载文件名（用户上传时的文件名）"
+    )
+    content_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        server_default="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        comment="MIME 类型（docx 的 MIME 串 71 字符，列宽放宽到 100）",
+    )
+    size: Mapped[int] = mapped_column(Integer, nullable=False, comment="文件大小（字节）")
+    remark: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="备注")
 
 
 # ─── HR 内部多部门数据范围 ───

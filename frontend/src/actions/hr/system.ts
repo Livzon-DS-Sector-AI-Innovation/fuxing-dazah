@@ -65,7 +65,10 @@ export async function updateSystemSettings(data: Record<string, unknown>): Promi
 }
 
 /** 发送测试提醒（会真实发飞书卡片）：返回可送达 / 无法解析 / 发送失败三类结果 */
-export async function sendReminderTest(payload: { kind: 'probation' | 'contract'; receivers: string[] }): Promise<{
+export async function sendReminderTest(payload: {
+  kind: 'probation' | 'contract' | 'offboarding_lead' | 'offboarding_clearance_due'
+  receivers: string[]
+}): Promise<{
   code: number
   message: string
   data: { sent: number; failed: { receiver: string; error: string }[]; unresolved: string[] }

@@ -2,8 +2,8 @@
 
 登记表（对齐 010版 Excel 模板）：每年一张，每行一个培训文件，按年归档、颜色标注、可导出。
 提交登记时按「培训涉及部门」自动生成各部二级表记录，并飞书卡片通知各部门培训管理员。
-二级表：转培训自动带出部门当前培训师；培训管理员选择自定义分类人员；
-支持多条 SOP 同场一起转训、合并生成一套培训材料。
+二级表：培训管理员选择自定义分类人员后生成培训材料（生成即完成，自动带出部门当前培训师）；
+支持多条 SOP 同场合并生成一套培训材料。
 """
 import json
 import logging
@@ -13,7 +13,7 @@ from io import BytesIO
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,7 +72,8 @@ async def _lookup_level1_trainer(session: AsyncSession, department: str) -> str 
         select(HrTrainer).where(
             HrTrainer.is_deleted == False,  # noqa: E712
             HrTrainer.department == department,
-            HrTrainer.is_level1.in_(["是", "1", "true", "True"]),
+            # 「一级培训师」是页面新增/Excel 归一化后的取值；是/1/true 兼容历史存量值
+            HrTrainer.is_level1.in_(["一级培训师", "是", "1", "true", "True"]),
         ).order_by(HrTrainer.created_at.asc())
     )).scalars().first()
     return trainer.name if trainer else None
@@ -152,7 +153,7 @@ async def _notify_training_admins(
 
 
 async def _sync_entries(session: AsyncSession, record) -> None:
-    """按登记记录的培训涉及部门同步二级表：新增缺失部门，移除已取消且未转训的部门。"""
+    """按登记记录的培训涉及部门同步二级表：新增缺失部门，移除已取消且未生成材料的部门。"""
     from app.modules.hr.models import SopTrainingEntry
     related = _json_loads(record.involved_departments)
     related = list(dict.fromkeys(str(d).strip() for d in related if str(d).strip()))
@@ -167,7 +168,7 @@ async def _sync_entries(session: AsyncSession, record) -> None:
         if dept not in existing_depts:
             session.add(SopTrainingEntry(record_id=str(record.id), department=dept))
     for e in existing_rows:
-        if e.department not in related and e.status != "已转训":
+        if e.department not in related and e.status != "已生成":
             e.is_deleted = True
 
 
@@ -187,11 +188,75 @@ def _record_dict(r) -> dict:
         "change_note": r.change_note,
         "color": r.color,
         "status": r.status,
+        "assessment_method": r.assessment_method,
+        "files": _record_files(r),
         "initiator_department": r.initiator_department,
         "created_by": r.created_by,
         "created_at": str(r.created_at),
         "updated_at": str(r.updated_at),
     }
+
+
+# ─── 考核方式 ───
+# 决定「生成一套材料」打包哪些文件：阅读并理解→通知+签到+评估；
+# 问答→通知+签到+问答实操记录+评估；笔试→通知+签到+试卷（题库有题才含）+评估
+SOP_ASSESSMENT_METHODS = ("阅读并理解", "问答", "笔试")
+# 考核方式未填时按培训方式取默认（R=自学 / T=面授）
+ASSESSMENT_DEFAULT_BY_METHOD = {"R": "阅读并理解", "T": "问答"}
+
+
+def _effective_assessment(stored: str | None, method: str | None) -> str:
+    """登记的考核方式优先；历史数据为空时按培训方式取默认。"""
+    val = (stored or "").strip()
+    if val:
+        return val
+    return ASSESSMENT_DEFAULT_BY_METHOD.get((method or "").strip(), "阅读并理解")
+
+
+def _method_label(method: str | None) -> str:
+    """R/T 转成 docx「培训方式」栏可读写法。"""
+    m = (method or "").strip()
+    return {"R": "自学", "T": "面授"}.get(m, m)
+
+
+# ─── 合并登记（一条记录含多份培训文件） ───
+
+
+def _normalize_files(raw) -> list[dict] | None:
+    """登记的 files 载荷清洗：剔除空行；返回 [{file_name, file_no}] 或 None。"""
+    if not isinstance(raw, list):
+        return None
+    files: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("file_name") or "").strip()
+        if not name:
+            continue
+        no = str(item.get("file_no") or "").strip() or None
+        files.append({"file_name": name, "file_no": no})
+    return files or None
+
+
+def _record_files(r) -> list[dict]:
+    """登记的文件列表：files JSON 优先，回落单文件列（历史数据）。"""
+    raw = _normalize_files(_json_loads(getattr(r, "files", None)))
+    if raw:
+        return raw
+    return [{"file_name": r.file_name, "file_no": r.file_no}]
+
+
+def _record_file_nos(r) -> list[str]:
+    """题库匹配用的文件编号列表（合并登记取全部）。"""
+    return [no for f in _record_files(r) if (no := f.get("file_no"))]
+
+
+def _joined_file_fields(files: list[dict]) -> tuple[str, str | None]:
+    """files → (file_name, file_no) 展示串（「；」连接），列表/导出/搜索沿用单列。"""
+    return (
+        "；".join(f["file_name"] for f in files),
+        "；".join(no for f in files if (no := f.get("file_no"))) or None,
+    )
 
 
 # ─── 登记表 ───
@@ -257,9 +322,14 @@ async def create_sop_record(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """登记培训文件，默认保存为草稿；点「提交/通知」后才生成二级表并通知各部门培训管理员。"""
+    """登记培训文件，默认保存为草稿；点「提交/通知」后才生成二级表并通知各部门培训管理员。
+
+    带 files（[{file_name, file_no}]）时为合并登记：一条记录含多份文件，
+    file_name/file_no 存「；」连接的展示串，结构化访问走 files。
+    """
     from app.modules.hr.models import SopTrainingRecord
-    if not payload.get("file_name"):
+    files = _normalize_files(payload.get("files"))
+    if not payload.get("file_name") and not files:
         raise HTTPException(400, "请填写文件名称")
     # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
     year_val = str(payload.get("year") or date.today().year).strip()
@@ -267,8 +337,16 @@ async def create_sop_record(
         raise HTTPException(400, "年份格式不正确（应为 4 位数字年份）")
     if payload.get("method") and len(str(payload["method"]).strip()) > 4:
         raise HTTPException(400, "培训方式应为 R / T")
+    assessment = str(payload.get("assessment_method") or "").strip() or None
+    if assessment and assessment not in SOP_ASSESSMENT_METHODS:
+        raise HTTPException(400, "考核方式应为 阅读并理解 / 问答 / 笔试")
     if payload.get("color") and len(str(payload["color"]).strip()) > 8:
         raise HTTPException(400, "标记颜色值过长")
+    if not files:
+        files = [{"file_name": str(payload["file_name"]).strip(), "file_no": payload.get("file_no")}]
+    file_name, file_no = _joined_file_fields(files)
+    if len(file_name) > 512:
+        raise HTTPException(400, "合并后的文件名称过长，请拆分登记")
     involved = list(dict.fromkeys(
         str(d).strip() for d in _json_loads(payload.get("involved_departments")) if str(d).strip()
     ))
@@ -276,10 +354,12 @@ async def create_sop_record(
     r = SopTrainingRecord(
         year=year_val,
         training_date=payload.get("training_date"),
-        file_name=payload["file_name"],
-        file_no=payload.get("file_no"),
+        file_name=file_name,
+        file_no=file_no,
+        files=json.dumps(files, ensure_ascii=False),
         effective_date=payload.get("effective_date"),
         method=payload.get("method"),
+        assessment_method=assessment,
         complete_time=payload.get("complete_time"),
         trainer=payload.get("trainer"),
         trainees=payload.get("trainees") or (f"「{initiator}」全体员工及相关部门培训师" if initiator else None),
@@ -350,6 +430,18 @@ async def update_sop_record(
         raise HTTPException(404, "记录不存在")
     if "file_name" in payload and not str(payload.get("file_name") or "").strip():
         raise HTTPException(400, "请填写文件名称")
+    # 合并登记：带 files 时重算展示串（file_name/file_no 存「；」连接）
+    if "files" in payload:
+        files = _normalize_files(payload.get("files"))
+        if files:
+            joined_name, joined_no = _joined_file_fields(files)
+            if len(joined_name) > 512:
+                raise HTTPException(400, "合并后的文件名称过长，请拆分登记")
+            payload["files"] = json.dumps(files, ensure_ascii=False)
+            payload["file_name"] = joined_name
+            payload["file_no"] = joined_no
+        else:
+            payload.pop("files")  # 空 files 不清历史数据
     if "color" in payload and not payload.get("color"):
         payload.pop("color")
     # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
@@ -360,14 +452,19 @@ async def update_sop_record(
         payload["year"] = year_val
     if payload.get("method") and len(str(payload["method"]).strip()) > 4:
         raise HTTPException(400, "培训方式应为 R / T")
+    if "assessment_method" in payload:
+        assessment = str(payload.get("assessment_method") or "").strip() or None
+        if assessment and assessment not in SOP_ASSESSMENT_METHODS:
+            raise HTTPException(400, "考核方式应为 阅读并理解 / 问答 / 笔试")
+        payload["assessment_method"] = assessment
     if payload.get("color") and len(str(payload["color"]).strip()) > 8:
         raise HTTPException(400, "标记颜色值过长")
-    for key in ("year", "training_date", "file_name", "file_no", "effective_date",
-                "method", "complete_time", "trainer", "trainees", "change_note",
-                "color", "initiator_department"):
+    for key in ("year", "training_date", "file_name", "file_no", "files", "effective_date",
+                "method", "assessment_method", "complete_time", "trainer", "trainees",
+                "change_note", "color", "initiator_department"):
         if key in payload:
             setattr(r, key, payload[key])
-    # status 由提交/转训流程控制，不允许客户端直接改写
+    # status 由提交/生成材料流程控制，不允许客户端直接改写
     added_departments: list[str] = []
     if "involved_departments" in payload:
         old_departments = set(_json_loads(r.involved_departments))
@@ -410,7 +507,7 @@ async def delete_sop_record(
         )
     )).scalars().all()
     for e in entries:
-        if e.status != "已转训":
+        if e.status != "已生成":
             e.is_deleted = True
     await session.commit()
     return success_response(message="已删除")
@@ -516,8 +613,8 @@ def _entry_dict(e, record_map: dict[str, object]) -> dict:
         "classification": e.classification,
         "personnel": personnel,
         "personnel_count": len(personnel),
-        "transferred_by": e.transferred_by,
-        "transferred_at": str(e.transferred_at) if e.transferred_at else None,
+        "generated_by": e.generated_by,
+        "generated_at": str(e.generated_at) if e.generated_at else None,
         "created_at": str(e.created_at),
         "updated_at": str(e.updated_at),
     }
@@ -527,7 +624,7 @@ def _entry_dict(e, record_map: dict[str, object]) -> dict:
 async def list_sop_entries(
     record_id: str | None = Query(None, description="登记记录筛选"),
     department: str | None = Query(None, description="部门筛选"),
-    status: str | None = Query(None, description="状态筛选：待转训/已转训"),
+    status: str | None = Query(None, description="状态筛选：待生成/已生成"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
@@ -567,8 +664,16 @@ async def update_sop_entry(
     if not e or e.is_deleted:
         raise HTTPException(404, "记录不存在")
     _ensure_entry_in_scope(hr_scope, e)
-    if "classification" in payload and len(str(payload.get("classification") or "")) > 64:
-        raise HTTPException(400, "分类名称过长（最多 64 字）")
+    # 分类可多选，前端以「；」连接存储；单个名称 ≤64 字，合计 ≤256 字
+    if "classification" in payload:
+        raw = str(payload.get("classification") or "")
+        parts = [p.strip() for p in raw.split("；") if p.strip()]
+        if any(len(p) > 64 for p in parts):
+            raise HTTPException(400, "单个分类名称过长（最多 64 字）")
+        joined = "；".join(dict.fromkeys(parts))
+        if len(joined) > 256:
+            raise HTTPException(400, "分类名称过长（多选合计最多 256 字）")
+        payload["classification"] = joined or None
     for key in ("classification", "trainer", "complete_time"):
         if key in payload:
             setattr(e, key, payload[key])
@@ -578,28 +683,30 @@ async def update_sop_entry(
     return success_response(message="已更新")
 
 
-async def _do_transfer(session: AsyncSession, e, operator: str) -> None:
-    """单条转培训：自动带出该部门当前培训师，并把涉及人员自动关联到该条分类标签。"""
-    if e.status == "已转训":
+async def _mark_generated(session: AsyncSession, e, operator: str) -> None:
+    """生成材料即完成：自动带出该部门当前培训师，并把涉及人员自动关联到该条分类标签。"""
+    if e.status == "已生成":
         return
     trainer = await _lookup_level1_trainer(session, e.department)
     e.trainer = trainer or e.trainer
-    e.status = "已转训"
-    e.transferred_by = operator
-    e.transferred_at = datetime.now(UTC)
+    e.status = "已生成"
+    e.generated_by = operator
+    e.generated_at = datetime.now(UTC)
     await _link_classification_tags(session, e, operator)
 
 
 async def _link_classification_tags(session: AsyncSession, e, operator: str) -> None:
-    """转训自动关联分类：二级表涉及人员的自定义分类写入员工标签（幂等）。
+    """生成材料自动关联分类：二级表涉及人员的自定义分类写入员工标签（幂等）。
 
+    分类可多选（「；」连接）：每位涉及人员写入全部所选分类的标签，
     之后「员工档案-分类」与「二级表按分类拉人」会自动包含这些人。
     """
     import json as _json
 
     from app.modules.hr.models import EmployeeTag
 
-    if not e.classification:
+    tags = [t.strip() for t in (e.classification or "").split("；") if t.strip()]
+    if not tags:
         return
     personnel = e.personnel or []
     if isinstance(personnel, str):
@@ -616,80 +723,30 @@ async def _link_classification_tags(session: AsyncSession, e, operator: str) -> 
     }
     if not numbers:
         return
-    # ON CONFLICT DO NOTHING：与活跃行部分唯一索引配合，并发转训/批量打标不 500
+    # ON CONFLICT DO NOTHING：与活跃行部分唯一索引配合，并发生成/批量打标不 500
     # （部分索引推断必须显式给出 index_where）
     from sqlalchemy.dialects.postgresql import insert as pg_insert
-    for num in numbers:
-        await session.execute(
-            pg_insert(EmployeeTag)
-            .values(employee_number=num, tag_name=e.classification, created_by=operator)
-            .on_conflict_do_nothing(
-                index_elements=["employee_number", "tag_name"],
-                index_where=text("is_deleted = false"),
-            ),
-        )
+    for tag in tags:
+        for num in numbers:
+            await session.execute(
+                pg_insert(EmployeeTag)
+                .values(employee_number=num, tag_name=tag, created_by=operator)
+                .on_conflict_do_nothing(
+                    index_elements=["employee_number", "tag_name"],
+                    index_where=text("is_deleted = false"),
+                ),
+            )
     await session.flush()
 
 
-@router.post("/sop-training-entries/{entry_id}/transfer", summary="转培训")
-async def transfer_sop_entry(
-    entry_id: UUID,
-    session: AsyncSession = Depends(get_db),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """转培训：自动带出该部门一级培训师为培训师，状态置为已转训。"""
-    from app.modules.hr.models import SopTrainingEntry
-    e = await session.get(SopTrainingEntry, entry_id)
-    if not e or e.is_deleted:
-        raise HTTPException(404, "记录不存在")
-    _ensure_entry_in_scope(hr_scope, e)
-    await _do_transfer(session, e, hr_scope.user.name or "")
-    await session.commit()
-    return success_response(data={"trainer": e.trainer}, message="已转培训")
-
-
-@router.post("/sop-training-entries/batch-transfer", summary="批量转培训（多条SOP一起转训）")
-async def batch_transfer_sop_entries(
-    payload: dict,
-    session: AsyncSession = Depends(get_db),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """勾选多条二级表记录一起转训，每条自动带出本部门当前培训师。"""
-    from app.modules.hr.models import SopTrainingEntry
-    ids = payload.get("ids") or []
-    if not ids:
-        raise HTTPException(400, "请选择要转训的记录")
-    try:
-        entry_ids = [UUID(i) for i in ids]
-    except (TypeError, ValueError):
-        raise HTTPException(400, "记录 ID 格式不正确")
-    rows = (await session.execute(
-        select(SopTrainingEntry).where(
-            SopTrainingEntry.is_deleted == False,  # noqa: E712
-            SopTrainingEntry.id.in_(entry_ids),
-        )
-    )).scalars().all()
-    transferred = 0
-    for e in rows:
-        if e.status == "已转训":
-            continue
-        _ensure_entry_in_scope(hr_scope, e)
-        await _do_transfer(session, e, hr_scope.user.name or "")
-        transferred += 1
-    await session.commit()
-    return success_response(data={"transferred": transferred}, message=f"已转培训 {transferred} 条")
-
-
-
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
-    """统计部门病假/产假人数（无则 0）；与员工查询口径一致：
-    部门匹配 department 或（未分类员工的 actual_department）。"""
+    """统计部门病假/产假人数（无则 0）；与员工查询口径一致：只认体现部门。"""
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.training_roster_profiles "
-                "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                "WHERE department = :dept "
                 "AND is_deleted = false AND status IN ('病假', '产假') GROUP BY status"
             ),
             {"dept": department},
@@ -702,6 +759,48 @@ async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[i
     except Exception:
         pass
     return sick, maternity
+
+
+def _evaluation_stats_kwargs(
+    stats: dict, expected: int, sick: int, maternity: int
+) -> dict:
+    """评估表统计预填：校验弹窗传来的统计并换算成 TrainingEvaluationInput kwargs。
+
+    口径（用户拍板）：不合格恒为 0（优秀+合格=参加考核）；事假=应到-实到-病产假（负则 0）；
+    参与率=实到/应到、合格率恒 100%。expected 为 0 时（名单为空）不预填，原样返回 {}。
+    """
+    def _int(key: str) -> int:
+        try:
+            return int(stats.get(key) or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"评估表统计的「{key}」不是有效数字")
+
+    actual = _int("actual_count")
+    exam = _int("exam_count")
+    excellent = _int("excellent_count")
+    qualified = _int("qualified_count")
+    if min(actual, exam, excellent, qualified) < 0:
+        raise HTTPException(400, "评估表统计不能为负数")
+    if excellent + qualified != exam:
+        raise HTTPException(400, "优秀人数 + 合格人数 必须等于 参加考核人数（不合格恒为 0）")
+    if expected <= 0:
+        return {}
+    if actual > expected:
+        raise HTTPException(400, f"实到人数（{actual}）不能超过应到人数（{expected}）")
+    if exam > actual:
+        raise HTTPException(400, f"参加考核人数（{exam}）不能超过实到人数（{actual}）")
+    personal_leave = max(expected - actual - sick - maternity, 0)
+    participation = f"{round(actual / expected * 100)}%" if expected else None
+    return {
+        "actual_count": actual,
+        "exam_count": exam,
+        "excellent_count": excellent,
+        "qualified_count": qualified,
+        "unqualified_count": 0,
+        "personal_leave": personal_leave,
+        "participation_rate": participation,
+        "pass_rate": "100%" if exam else None,
+    }
 
 
 async def _lookup_exam_questions(session, file_nos: list[str]) -> list[dict]:
@@ -745,51 +844,19 @@ def _generate_exam_docx(subject: str, questions: list[dict]) -> BytesIO:
     return buf
 
 
-def _generate_register_docx(
-    *, subject: str, training_date, department: str, trainer: str, method: str,
-    trainee_names: list[str], sick: int, maternity: int,
-) -> BytesIO:
-    """从零生成培训登记表 docx（信息表+人员名单）。"""
-    from docx import Document
-
-    doc = Document()
-    doc.add_heading("培训登记表", level=1)
-    table = doc.add_table(rows=8, cols=2)
-    table.style = "Table Grid"
-    info = [
-        ("培训主题", subject),
-        ("培训日期", str(training_date or "")),
-        ("培训部门", department),
-        ("培训师", trainer or ""),
-        ("培训方式", method or ""),
-        ("应到人数", f"{len(trainee_names)} 人"),
-        ("病假/产假", f"病假 {sick} 人、产假 {maternity} 人"),
-        ("实到人数", "____ 人"),
-    ]
-    for i, (k, v) in enumerate(info):
-        table.rows[i].cells[0].text = k
-        table.rows[i].cells[1].text = v
-    doc.add_heading("受训人员名单", level=2)
-    if trainee_names:
-        for name in trainee_names:
-            doc.add_paragraph(name, style="List Number")
-    else:
-        doc.add_paragraph("（无）")
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-
 
 
 @router.post("/sop-training-records/{record_id}/materials", summary="统筹总表一键生成全套培训材料")
 async def generate_record_materials(
     record_id: UUID,
+    payload: dict | None = Body(default=None),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """按登记表涉及部门生成全套材料 zip：每部门 培训通知+签到表+试卷（有题则含）+培训登记表。"""
+    """按登记表涉及部门生成全套材料 zip：通知+签到表+评估，考核记录按考核方式加（问答→问答实操记录表，笔试→试卷，题库有题才含）。
+
+    培训对象统一写「发起部门 全体成员及相关一级培训师」。
+    """
     from app.modules.hr.models import SopTrainingRecord
 
     record = (
@@ -833,11 +900,11 @@ async def generate_record_materials(
     if not initiator:
         raise HTTPException(400, "该记录未配置发起部门（主办部门）")
 
-    # ── 人员口径：主办部门名单内人员 + 各涉及部门的一级培训师（去重）──
+    # ── 人员口径：主办部门名单内人员（只认体现部门）+ 各涉及部门的一级培训师（去重）──
     emp_rows = (await session.execute(
         text(
             "SELECT name, status FROM hr.training_roster_profiles "
-            "WHERE (department = :dept OR actual_department = :dept) "
+            "WHERE department = :dept "
             "AND is_deleted = false AND status NOT IN ('离职', '待审批', '病假', '产假') "
             "ORDER BY name"
         ),
@@ -860,7 +927,17 @@ async def generate_record_materials(
     names = list(name_depts.keys())
     sick, maternity = await _query_leave_counts(session, initiator)
 
-    questions = await _lookup_exam_questions(session, [record.file_no] if record.file_no else [])
+    questions = await _lookup_exam_questions(session, _record_file_nos(record))
+    assessment = _effective_assessment(record.assessment_method, record.method)
+    # 培训对象口径：总表材料 = 发起部门全体成员 + 相关一级培训师（病产假附注按主办部门统计，保留）
+    trainee_group = "全体成员及相关一级培训师"
+    # 模板字节一次取齐（DB 自定义版优先，无则回退仓库默认模板）
+    from app.modules.hr.training_template_store import load_training_template_bytes
+
+    tpl_notification, _ = await load_training_template_bytes(session, "training_notification")
+    tpl_signin, _ = await load_training_template_bytes(session, "training_signin_sheet")
+    tpl_evaluation, _ = await load_training_template_bytes(session, "training_evaluation")
+    tpl_qa, _ = await load_training_template_bytes(session, "qa_record")
     buf = BytesIO()
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -869,25 +946,39 @@ async def generate_record_materials(
                 trainer=lead_trainer, content=record.change_note or "",
                 trainee_names=names, issuer_department=initiator,
                 issue_date=today, sick_count=sick, maternity_count=maternity,
-                training_method=record.method or "",
-            ))
+                training_method=_method_label(record.method),
+                assessment_method=assessment,
+                trainee_group=trainee_group,
+            ), template_bytes=tpl_notification)
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=initiator, training_subject=subject,
                 topic=record.change_note or subject, instructor=lead_trainer,
                 employee_names=names, employee_departments=name_depts,
                 sick_count=sick, maternity_count=maternity,
-            ))
+                assessment_method=assessment,
+                trainee_group=trainee_group,
+            ), template_bytes=tpl_signin)
             zf.writestr("培训通知.docx", notif_buf.getvalue())
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
-            if questions:
+            # 考核记录按考核方式：问答→问答实操记录表（题库按文件编号出题，无题留空白行手写）
+            if assessment == "问答":
+                from app.modules.hr.qa_record_generator import generate_qa_record
+
+                zf.writestr(
+                    "问答实操记录表.docx",
+                    generate_qa_record(
+                        training_content=subject, training_date=today,
+                        training_method=_method_label(record.method),
+                        training_department=initiator,
+                        questions=questions, trainee_names=names,
+                        trainer_name=lead_trainer or "",
+                        trainee_group=trainee_group,
+                        template_bytes=tpl_qa,
+                    ).getvalue(),
+                )
+            elif assessment == "笔试" and questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
-            zf.writestr("培训登记表.docx", _generate_register_docx(
-                subject=subject, training_date=record.training_date or today,
-                department=initiator, trainer=lead_trainer or "",
-                method=record.method or "", trainee_names=names,
-                sick=sick, maternity=maternity,
-            ).getvalue())
-            # 第四份文件：培训效果评估表（7.11 模板）
+            # 培训效果评估表（7.11 模板）
             from app.modules.hr.evaluation_document_generator import (
                 TrainingEvaluationInput,
                 generate_training_evaluation,
@@ -898,10 +989,19 @@ async def generate_record_materials(
                 generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=initiator,
                     trainer=lead_trainer or None,
-                    training_method=record.method or None,
+                    training_method=_method_label(record.method) or None,
+                    assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
-                )).getvalue(),
+                    # 病产假与通知/签到表同口径（主办部门在职名单状态统计）
+                    sick_leave=sick, maternity_leave=maternity,
+                    # 弹窗预填的评估表统计（可选）：校验与比率换算见 _evaluation_stats_kwargs
+                    **_evaluation_stats_kwargs(
+                        (payload or {}).get("evaluation_stats") or {},
+                        expected=len(names), sick=sick, maternity=maternity,
+                    ),
+                    trainee_group=trainee_group,
+                ), template_bytes=tpl_evaluation).getvalue(),
             )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
@@ -912,6 +1012,105 @@ async def generate_record_materials(
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
     )
+@router.get("/sop-training-records/{record_id}/materials-preview", summary="全套材料·评估表统计基数预览")
+async def preview_record_materials(
+    record_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """弹窗预填用：返回单条材料导出时的应到人数（主办部门名单∪涉及部门一级培训师）与病产假数。
+
+    口径与 materials 接口的人员查询一致（两处同步改）。
+    """
+    from app.modules.hr.models import SopTrainingRecord
+
+    record = (
+        await session.execute(
+            select(SopTrainingRecord).where(
+                SopTrainingRecord.id == record_id,
+                SopTrainingRecord.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).scalar_one_or_none()
+    if not record:
+        raise HTTPException(404, "登记记录不存在")
+    departments = _json_loads(record.involved_departments) or []
+    initiator = (record.initiator_department or "").strip() or (str(departments[0]).strip() if departments else "")
+    if initiator:
+        if not hr_scope.is_unrestricted:
+            if not hr_scope.scoped_departments or initiator not in hr_scope.scoped_departments:
+                raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+    name_set: set[str] = set()
+    sick = maternity = 0
+    if initiator:
+        emp_rows = (await session.execute(
+            text(
+                "SELECT name FROM hr.training_roster_profiles "
+                "WHERE department = :dept "
+                "AND is_deleted = false AND status NOT IN ('离职', '待审批', '病假', '产假') "
+                "ORDER BY name"
+            ),
+            {"dept": initiator},
+        )).fetchall()
+        trainer_map: dict[str, str] = {}
+        for dept in departments:
+            dept = str(dept).strip()
+            level1 = await _lookup_level1_trainer(session, dept)
+            if level1:
+                trainer_map.setdefault(level1, dept)
+        name_set = {r[0] for r in emp_rows} | set(trainer_map)
+        sick, maternity = await _query_leave_counts(session, initiator)
+    return success_response(data={
+        "expected_count": len(name_set),
+        "sick_leave": sick,
+        "maternity_leave": maternity,
+    })
+
+
+@router.post("/sop-training-entries/materials-preview", summary="一套材料·评估表统计基数预览")
+async def preview_batch_materials(
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """弹窗预填用：返回勾选条目一套材料的应到人数（分类人员并集）与部门病产假数。
+
+    未选分类人员时 expected_count 返回 0（导出接口会拦，弹窗先提示）。
+    """
+    from app.modules.hr.models import SopTrainingEntry
+
+    ids = payload.get("ids") or []
+    if not ids:
+        raise HTTPException(400, "请选择记录")
+    try:
+        entry_ids = [UUID(i) for i in ids]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "记录 ID 格式不正确")
+    rows = (await session.execute(
+        select(SopTrainingEntry).where(
+            SopTrainingEntry.is_deleted == False,  # noqa: E712
+            SopTrainingEntry.id.in_(entry_ids),
+        )
+    )).scalars().all()
+    if not rows:
+        raise HTTPException(404, "记录不存在")
+    for row in rows:
+        _ensure_entry_in_scope(hr_scope, row)
+    names: list[str] = []
+    for e in rows:
+        for p in _json_loads(e.personnel) or []:
+            nm = str(p.get("name", "")).strip()
+            if nm and nm not in names:
+                names.append(nm)
+    dept = str(rows[0].department or "").strip()
+    sick, maternity = await _query_leave_counts(session, dept) if dept else (0, 0)
+    return success_response(data={
+        "expected_count": len(names),
+        "sick_leave": sick,
+        "maternity_leave": maternity,
+    })
+
+
 @router.post("/sop-training-entries/batch-materials", summary="多条SOP生成一套培训材料")
 async def batch_generate_materials(
     payload: dict,
@@ -920,8 +1119,13 @@ async def batch_generate_materials(
 ):
     """勾选二级表记录（1..n 条）生成**一套**培训材料。
 
+    生成即完成：成功生成后条目状态置「已生成」，自动带出本部门一级培训师并关联分类标签
+    （重复生成幂等，状态不回退）。
     人员 = 各选中条目「分类人员」的并集（条目未选分类人员时直接 400 提示先选人）；
-    选中多条时培训内容并列体现多个文件名称，共用同一套通知/签到表/试卷/登记表。
+    选中多条时培训内容并列体现多个文件名称，共用同一套通知/签到表/考核记录/评估表
+    （考核记录按登记的考核方式：问答→问答实操记录表、笔试→试卷（有题才含）、阅读并理解→无）。
+    培训对象：默认「xx部门 全体成员」；条目按标签选人时写「xx部门 标签名」（如「xx部门 班组长」），
+    此时省略全部门口径的病产假附注。
     """
     from app.modules.hr.models import SopTrainingEntry
     ids = payload.get("ids") or []
@@ -954,8 +1158,10 @@ async def batch_generate_materials(
         fname = (rec.file_name if rec else None) or e.file_name or "SOP培训"
         if fname not in file_names:
             file_names.append(fname)
-        if rec and rec.file_no and rec.file_no not in file_nos:
-            file_nos.append(rec.file_no)
+        if rec:
+            for no in _record_file_nos(rec):
+                if no and no not in file_nos:
+                    file_nos.append(no)
         personnel = _json_loads(e.personnel)
         if not personnel:
             raise HTTPException(400, f"「{fname}」尚未选择分类人员，请先在该条目选择分类人员后再生成材料")
@@ -980,13 +1186,31 @@ async def batch_generate_materials(
     from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 
     today = date.today()
-    # 培训方式在登记记录上（二级表无该列），取第一条有值的记录
+    # 培训方式/考核方式在登记记录上（二级表无该列），取第一条有值的记录
     method_val = ""
     for e in rows:
         rec = record_map.get(e.record_id or "")
         if rec and rec.method:
             method_val = rec.method
             break
+    assessment_val = ""
+    for e in rows:
+        rec = record_map.get(e.record_id or "")
+        if rec and rec.assessment_method:
+            assessment_val = rec.assessment_method
+            break
+    assessment = _effective_assessment(assessment_val, method_val)
+    # 培训对象口径：二级表材料默认「该部门 全体成员」；条目按标签选人时写「xx部门 标签名」
+    # （多条不同标签按「、」连接），如「xx部门 班组长」。标签选人已排除病产假，
+    # 全部门口径的「（病假x人、产假y人除外）」附注不适用，随之省略。
+    # 分类可多选（「；」连接），拆开参与去重
+    groups = list(dict.fromkeys(
+        part.strip()
+        for e in rows
+        for part in (e.classification or "").split("；")
+        if part.strip()
+    ))
+    trainee_group = "、".join(groups) or None
     # 该部门培训师
     trainer = next((e.trainer for e in rows if e.trainer), None) or await _lookup_level1_trainer(session, dept)
     # 分类人员并集（过滤病假/产假/离职/待审批）
@@ -1004,6 +1228,13 @@ async def batch_generate_materials(
         names = [nm for _, nm in keep]
     sick, maternity = await _query_leave_counts(session, dept)
 
+    # 模板字节一次取齐（DB 自定义版优先，无则回退仓库默认模板）
+    from app.modules.hr.training_template_store import load_training_template_bytes
+
+    tpl_notification, _ = await load_training_template_bytes(session, "training_notification")
+    tpl_signin, _ = await load_training_template_bytes(session, "training_signin_sheet")
+    tpl_evaluation, _ = await load_training_template_bytes(session, "training_evaluation")
+    tpl_qa, _ = await load_training_template_bytes(session, "qa_record")
     buf = BytesIO()
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1012,25 +1243,42 @@ async def batch_generate_materials(
                 trainer=trainer or "", content=content, trainee_names=names,
                 issuer_department=dept, issue_date=today,
                 sick_count=sick, maternity_count=maternity,
-            ))
+                training_method=_method_label(method_val),
+                assessment_method=assessment,
+                trainee_group=trainee_group,
+                omit_leave_note=bool(groups),
+            ), template_bytes=tpl_notification)
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=dept, training_subject=subject,
                 topic=content, instructor=trainer or "",
                 employee_names=names, employee_departments={n: dept for n in names},
                 sick_count=sick, maternity_count=maternity,
-            ))
+                assessment_method=assessment,
+                trainee_group=trainee_group,
+                omit_leave_note=bool(groups),
+            ), template_bytes=tpl_signin)
             zf.writestr("培训通知.docx", notif_buf.getvalue())
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
-            # 试卷：按 SOP 编号匹配题库，有题才打包
+            # 考核记录按考核方式：问答→问答实操记录表（按 SOP 编号匹配题库，无题留空白行手写）；笔试→试卷（有题才含）
             questions = await _lookup_exam_questions(session, file_nos)
-            if questions:
+            if assessment == "问答":
+                from app.modules.hr.qa_record_generator import generate_qa_record
+
+                zf.writestr(
+                    "问答实操记录表.docx",
+                    generate_qa_record(
+                        training_content=subject, training_date=today,
+                        training_method=_method_label(method_val),
+                        training_department=dept,
+                        questions=questions, trainee_names=names,
+                        trainer_name=trainer or "",
+                        trainee_group=trainee_group,
+                        template_bytes=tpl_qa,
+                    ).getvalue(),
+                )
+            elif assessment == "笔试" and questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
-            zf.writestr("培训登记表.docx", _generate_register_docx(
-                subject=subject, training_date=today, department=dept,
-                trainer=trainer or "", method=method_val,
-                trainee_names=names, sick=sick, maternity=maternity,
-            ).getvalue())
-            # 第四份文件：培训效果评估表（7.11 模板）
+            # 培训效果评估表（7.11 模板）
             from app.modules.hr.evaluation_document_generator import (
                 TrainingEvaluationInput,
                 generate_training_evaluation,
@@ -1041,13 +1289,27 @@ async def batch_generate_materials(
                 generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=dept,
                     trainer=trainer or None,
-                    training_method=(method_val or None),
+                    training_method=(_method_label(method_val) or None),
+                    assessment_method=assessment,
                     trainee_names=names,
                     expected_count=len(names),
-                )).getvalue(),
+                    # 病产假与通知/签到表同口径（部门在职名单状态统计）
+                    sick_leave=sick, maternity_leave=maternity,
+                    # 弹窗预填的评估表统计（可选）：校验与比率换算见 _evaluation_stats_kwargs
+                    **_evaluation_stats_kwargs(
+                        payload.get("evaluation_stats") or {},
+                        expected=len(names), sick=sick, maternity=maternity,
+                    ),
+                    trainee_group=trainee_group,
+                ), template_bytes=tpl_evaluation).getvalue(),
             )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
+    # 生成即完成：带出培训师、关联分类标签、状态置已生成（模板缺失 400 时不落状态）
+    operator = hr_scope.user.name or ""
+    for e in rows:
+        await _mark_generated(session, e, operator)
+    await session.commit()
     buf.seek(0)
     filename = f"SOP培训材料_{today.isoformat()}.zip"
     return StreamingResponse(
@@ -1059,24 +1321,26 @@ async def batch_generate_materials(
 
 @router.get("/sop-training-entries/classifications", summary="部门自定义分类选项")
 async def sop_entry_classifications(
-    department: str = Query(..., description="部门"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """二级表分类选项 = 当前用户在员工档案里的分类（清单 + 打过的标签）。
 
-    员工档案「分类管理」建的清单即使尚未给本部门员工打标签（0 人）也展示；
+    员工档案「分类管理」建的清单即使尚未打标签（0 人）也展示；
     直接在员工行上打的标签（如「分类1/分类2」）同样出现——都是本人创建的
     分类，按创建人过滤，看不到别人的分类/测试数据。
-    人数按本部门实际标签统计。
+    人数按标签全量统计（分类人员跨部门联动，不按二级表记录的部门过滤）；
+    受限用户只统计授权部门内的人员。
     """
-    # 数据范围：受限用户只能查授权部门（员工标签/分类属于员工 PII）
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
+    # 数据范围：受限用户只能看授权部门内的人员（员工标签/分类属于员工 PII）
+    dept_filter = ""
+    tag_params: dict = {"creator": creator}
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
-        if department not in hr_scope.scoped_departments:
-            raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+        dept_filter = "AND p.department = ANY(:scoped)"
+        tag_params["scoped"] = sorted(hr_scope.scoped_departments)
     # ① 本人的分类清单（员工档案「分类管理」）
     catalog = (await session.execute(
         text(
@@ -1085,20 +1349,20 @@ async def sop_entry_classifications(
         ),
         {"creator": creator},
     )).fetchall()
-    # ② 本人在该部门打过的标签计数（直接打标签没建清单的分类也在这里）
+    # ② 本人打过的标签计数（直接打标签没建清单的分类也在这里）
     # 人员口径 = 培训人员名单（脱敏独立数据集），不再读员工总表
     tag_rows = (await session.execute(
-        text("""
+        text(f"""
             SELECT t.tag_name, count(DISTINCT t.employee_number)
             FROM hr.employee_tags t
             JOIN hr.training_roster_profiles p ON p.employee_number = t.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
               AND t.created_by = :creator
-              AND (p.department = :dept OR p.actual_department = :dept)
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
+              {dept_filter}
             GROUP BY t.tag_name
         """),
-        {"dept": department, "creator": creator},
+        tag_params,
     )).fetchall()
     counts = {r[0]: r[1] for r in tag_rows}
     result: list[dict] = []
@@ -1119,33 +1383,40 @@ async def sop_entry_classifications(
 
 @router.get("/sop-training-entries/personnel", summary="分类人员查询")
 async def sop_entry_personnel(
-    department: str = Query(..., description="部门"),
-    classification: str = Query(..., description="自定义分类"),
+    classification: list[str] = Query(..., description="自定义分类（可多选，取并集）"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """按部门 + 自定义分类拉取人员（标签可多打，人员可重复分类）。"""
+    """按自定义分类拉取人员（可传多个分类取并集；标签可多打，人员可重复分类）。
+
+    分类人员跨部门联动：只认本人打的标签，不按二级表记录的部门过滤；
+    受限用户只返回授权部门内的人员。排除离职/待审批/病假/产假。
+    """
     # 数据范围：受限用户只能查授权部门（员工姓名/工号/岗位/状态属于 PII）
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
+    dept_filter = ""
+    params: dict = {"tags": [c for c in classification if c.strip()], "creator": creator}
+    if not params["tags"]:
+        raise HTTPException(400, "请至少选择一个分类")
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
-        if department not in hr_scope.scoped_departments:
-            raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
+        dept_filter = "AND p.department = ANY(:scoped)"
+        params["scoped"] = sorted(hr_scope.scoped_departments)
     # 人员口径 = 培训人员名单（脱敏独立数据集，状态由培训管理独立维护）；
     # 与分类选项一致，只看本人打的标签，避免同名分类串到别人的测试数据
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
     rows = (await session.execute(
-        text("""
-            SELECT p.employee_number, p.name, p.position, p.status
+        text(f"""
+            SELECT DISTINCT p.employee_number, p.name, p.position, p.status
             FROM hr.training_roster_profiles p
             JOIN hr.employee_tags t ON t.employee_number = p.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
-              AND t.tag_name = :tag AND t.created_by = :creator
-              AND (p.department = :dept OR p.actual_department = :dept)
+              AND t.tag_name = ANY(:tags) AND t.created_by = :creator
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
+              {dept_filter}
             ORDER BY p.employee_number
         """),
-        {"dept": department, "tag": classification, "creator": creator},
+        params,
     )).fetchall()
     return success_response(data=[
         {"employee_number": r[0], "name": r[1], "position": r[2], "status": r[3]}
@@ -1157,7 +1428,7 @@ async def sop_entry_personnel(
 async def export_sop_entries(
     record_id: str | None = Query(None, description="登记记录筛选"),
     department: str | None = Query(None, description="部门筛选"),
-    status: str | None = Query(None, description="状态筛选：待转训/已转训"),
+    status: str | None = Query(None, description="状态筛选：待生成/已生成"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
@@ -1191,7 +1462,7 @@ async def export_sop_entries(
     wb = Workbook()
     ws = wb.active
     ws.title = "SOP培训清单"
-    headers = ["部门", "文件名称", "文件编号", "培训方式", "培训师", "状态", "完成时间/课时", "自定义分类", "分类人员", "转培训人", "转培训时间"]
+    headers = ["部门", "文件名称", "文件编号", "培训方式", "培训师", "状态", "完成时间/课时", "自定义分类", "分类人员", "生成人", "生成时间"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -1205,8 +1476,8 @@ async def export_sop_entries(
             rec.file_no if rec else "",
             rec.method if rec else "",
             e.trainer or "", e.status, e.complete_time or "",
-            e.classification or "", names, e.transferred_by or "",
-            str(e.transferred_at)[:19] if e.transferred_at else "",
+            e.classification or "", names, e.generated_by or "",
+            str(e.generated_at)[:19] if e.generated_at else "",
         ])
     for col, width in zip("ABCDEFGHIJK", (18, 44, 20, 10, 14, 10, 20, 16, 40, 12, 20)):
         ws.column_dimensions[col].width = width

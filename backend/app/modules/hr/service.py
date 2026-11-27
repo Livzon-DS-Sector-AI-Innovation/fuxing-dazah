@@ -55,6 +55,7 @@ from app.modules.hr.repository import (
     OffboardingRecordRepository,
     OnboardingRecordRepository,
     PerformanceEvaluationRepository,
+    PositionTrainingRepository,
     TrainingLedgerPageRepository,
     TrainingLedgerRepository,
 )
@@ -397,15 +398,10 @@ class EmployeeService:
 
     async def upload_trainers(self, file_bytes: bytes, allowed_departments: set[str] | None = None) -> dict:
         """上传内训师 Excel，按姓名+部门 upsert。allowed_departments 非空时仅导入该范围内的部门。"""
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-
         from app.modules.hr.models import HrTrainer
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
+        rows = await asyncio.to_thread(read_first_sheet_rows, file_bytes)
         if not rows:
             raise ValueError("文件为空")
         header = [str(c).strip() if c else "" for c in rows[0]]
@@ -439,6 +435,11 @@ class EmployeeService:
                                 # 非空但无法解析：跳过该列，不能清空已有日期
                                 continue
                             v = parsed
+                        if fn == "is_level1":
+                            # 取值归一化：与页面新增口径一致（是/否），SOP 兜底与列表筛选依赖此口径
+                            v = "一级培训师" if v in ("是", "1", "true", "True") else (
+                                "-" if v in ("否", "0", "false", "False") else v
+                            )
                         data[fn] = v
                     if "name" not in data or "department" not in data:
                         outcome = "error_missing"
@@ -474,17 +475,23 @@ class EmployeeService:
 
     async def upload_sop_catalog(
         self, file_bytes: bytes, allowed_departments: set[str] | None = None,
+        filename: str = "",
     ) -> dict:
-        """上传 SOP 目录 Excel，按 SOP 编号 + 部门 upsert。"""
-        from io import BytesIO
+        """上传 SOP 目录：Excel(.xlsx) 或 GMP 文件目录 Word(.docx)，按 SOP 编号 + 部门 upsert。
 
-        from openpyxl import load_workbook
+        入平台数据统一 .docx/.xlsx，旧版 .doc/.xls 在入口就被拒（另有明确提示）；
+        .docx 分流按文件扩展名判断，部门推导还要用文件名。
+        """
+        if filename.lower().endswith(".docx"):
+            from app.modules.hr.sop_catalog_doc_parser import parse_catalog_document
 
-        from app.modules.hr.models import PositionTraining, SopCatalog
+            entries = await asyncio.to_thread(parse_catalog_document, file_bytes, filename)
+            items = [{**e, "row_label": f"第{i}条"} for i, e in enumerate(entries, 1)]
+            return await self._import_catalog_rows(items, allowed_departments)
 
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
+
+        rows = await asyncio.to_thread(read_first_sheet_rows, file_bytes)
         if not rows: raise ValueError("文件为空")
         header = [str(c).strip() if c else "" for c in rows[0]]
         col_map = {}
@@ -495,25 +502,37 @@ class EmployeeService:
                         "职位": "position_name", "岗位名称": "position_name", "培训内容": "file_name"}
         for idx, h in enumerate(header):
             if h in col_name_map: col_map[idx] = col_name_map[h]
-
-        created, updated, errors = 0, 0, []
+        items = []
         for row_idx, row in enumerate(rows[1:], start=2):
             if all(c is None for c in row):
                 continue
+            data = {}
+            for ci, fn in col_map.items():
+                v = row[ci] if ci < len(row) else None
+                if v is None or (isinstance(v, str) and v.strip() == ""):
+                    continue
+                if isinstance(v, str):
+                    v = v.strip()
+                data[fn] = v
+            items.append({**data, "row_label": f"第{row_idx}行"})
+        return await self._import_catalog_rows(items, allowed_departments)
+
+    async def _import_catalog_rows(
+        self, items: list[dict], allowed_departments: set[str] | None,
+    ) -> dict:
+        """逐条 upsert SOP 目录（Excel 行与 Word 目录解析条目共用）。"""
+        from app.modules.hr.models import PositionTraining, SopCatalog
+
+        created, updated, errors = 0, 0, []
+        for item in items:
+            label = item["row_label"]
+            data = {k: v for k, v in item.items() if k != "row_label"}
             row_created = row_updated = 0
             try:
                 # SQLAlchemy 原生 SAVEPOINT：flush 失败只回滚本行，不毒化整个导入
                 async with self.repo.session.begin_nested():
-                    data = {}
-                    for ci, fn in col_map.items():
-                        v = row[ci] if ci < len(row) else None
-                        if v is None or (isinstance(v, str) and v.strip() == ""):
-                            continue
-                        if isinstance(v, str):
-                            v = v.strip()
-                        data[fn] = v
-                    if "file_name" not in data:
-                        errors.append(f"第{row_idx}行: 缺少文件名称")
+                    if not data.get("file_name"):
+                        errors.append(f"{label}: 缺少文件名称")
                         continue
                     # 行级数据范围：受限用户只导入授权部门
                     if (
@@ -527,7 +546,7 @@ class EmployeeService:
                     raw_names = str(data["file_name"])
                     split_names = [n.strip() for n in raw_names.replace("，", ",").split(",") if n.strip()]
                     # 没有培训类别时，用拆分后的值作为类别
-                    has_category = "category" in data
+                    has_category = bool(data.get("category"))
 
                     for name in split_names:
                         row_data = {**data, "file_name": name}
@@ -581,11 +600,15 @@ class EmployeeService:
                                 ))
                     await self.repo.session.flush()
             except Exception as e:
-                errors.append(f"第{row_idx}行: {e}")
+                errors.append(f"{label}: {e}")
                 continue
             created += row_created
             updated += row_updated
         return {"created": created, "updated": updated, "errors": errors}
+
+    async def list_training_positions(self, department: str) -> list[dict[str, Any]]:
+        """部门下配置过培训内容的岗位及培训大类（入职培训页选择培训岗位用）。"""
+        return await PositionTrainingRepository(self.repo.session).list_by_department(department)
 
     async def _sync_departments_from_employees(self) -> int:
         """从员工表同步部门：激活已删除的 + 新增不存在的。"""
@@ -794,9 +817,9 @@ class EmployeeService:
     async def upload_annual_plan(
         self, file_bytes: bytes, *, allowed_departments: set[str] | None = None,
     ) -> dict:
-        """从 Excel 批量导入年度培训计划，按年度+部门自动分类。
+        """从 Excel（.xlsx 或旧版 .xls）批量导入年度培训计划，按年度+部门自动分类。
 
-        支持两种 Excel 格式：
+        支持两种 Excel 布局：
         1. 系统导出格式：标题行 → 部门行 → 表头行 → 数据行
         2. 自定义格式：第一行直接为表头，需包含「年度」「部门」列
 
@@ -804,15 +827,10 @@ class EmployeeService:
         「厂级」）的数据行，越权行计入 errors 跳过。
         每行使用独立 SAVEPOINT，单行失败不影响其他行。
         """
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-
         from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
+        from app.modules.hr.xlsx_utils import read_first_sheet_rows
 
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
+        rows = await asyncio.to_thread(read_first_sheet_rows, file_bytes)
         if not rows:
             raise ValueError("文件为空")
 
@@ -1194,6 +1212,26 @@ class OnboardingRecordService:
     async def ledger_sources(self, employee_numbers: list[str]) -> dict[str, str]:
         """台账来源补充：系统内入职流程记录（审批/飞书同步/招聘入职）。"""
         return await self.repo.ledger_sources(employee_numbers)
+
+    async def list_training_candidates(
+        self,
+        *,
+        hr_scope: "HrAccessContext",
+        keyword: str | None = None,
+        year: int | None = None,
+        include_completed: bool = False,
+    ) -> tuple[list[tuple[Employee, bool]], dict[str, list[dict[str, Any]]]]:
+        """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。
+
+        转岗/晋升等职位变动后需重新培训：异动过的员工只有重新完成入职培训
+        （培训日期不早于最近一次异动生效日期）才算完成，否则重新出现在待培训名单。
+        """
+        return await self.repo.list_training_candidates(
+            hr_scope=hr_scope,
+            keyword=keyword,
+            year=year,
+            include_completed=include_completed,
+        )
 
     async def list_hire_years(self, departments: set[str] | None = None) -> list[int]:
         return await self.repo.list_hire_years(departments=departments)

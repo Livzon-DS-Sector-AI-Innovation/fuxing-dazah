@@ -74,6 +74,12 @@ const TD_LABEL = {
   padding: '8px',
 } as React.CSSProperties
 
+// 出席名单口径：按部门取人只认体现部门，由名单接口统一保证；这里再剔除
+// 离职/待审批/病假/产假（与 SOP 培训文档的状态口径一致）。
+const NOT_ATTENDEE_STATUSES = new Set(['离职', '待审批', '病假', '产假'])
+const pickTrainees = <T extends { status: string }>(rows: T[] | undefined | null) =>
+  (rows || []).filter((e) => !NOT_ATTENDEE_STATUSES.has(e.status))
+
 /** Check whether an employee already has a dedicated training-ledger menu page (static + DB). */
 async function getExistingLedgerNumbers(): Promise<Set<string>> {
   const numbers = new Set<string>()
@@ -109,6 +115,8 @@ export default function TrainingNotificationClient() {
   const watchedNames = Form.useWatch('employee_names', form) as string[] | undefined
   const watchedTrainingMethod = Form.useWatch('training_method', form)
   const isDualMode = watchedTrainingMethod === '面授+自学'
+  // 自学没有固定培训时间：不显示时间选择器，表单里残留的时间也不参与导出和课时
+  const isSelfStudy = watchedTrainingMethod === '自学'
   // 双模式下面授日期（预览/台账/导出统一取此值；单模式走 time_slots）
   const watchedFaceDate = Form.useWatch('face_date', form) as any
   const watchedFaceTime = Form.useWatch('face_time', form) as any
@@ -202,7 +210,7 @@ export default function TrainingNotificationClient() {
       const deptName = decodeURIComponent(dept)
       setTrainerDept(deptName)
       fetchAllTrainingRoster({ department: deptName }).then(res => {
-        const emps = (res.data || []).map((e: any) => ({
+        const emps = pickTrainees(res.data).map((e: any) => ({
           value: e.name, label: `${e.name} - ${e.department || deptName} (${e.employee_number})`,
           employee_number: e.employee_number,
         }))
@@ -250,8 +258,8 @@ export default function TrainingNotificationClient() {
     for (const dept of depts) {
       try {
         const res = await fetchAllTrainingRoster({ department: dept })
-        // 病假/产假员工自动过滤，不进入出席名单
-        const activeList = (res.data || []).filter((e: any) => e.status !== '病假' && e.status !== '产假')
+        // 部门口径由名单接口保证（只认体现部门），这里剔除不可出席状态
+        const activeList = pickTrainees(res.data)
         allFull.push(...activeList)
         for (const e of activeList) {
           if (e.name && e.employee_number) numberMap[e.name] = e.employee_number
@@ -290,16 +298,17 @@ export default function TrainingNotificationClient() {
         face_to_face_time_start: values.face_time?.[0] ? dayjs(values.face_time[0]).format('HH:mm') : '',
         face_to_face_time_end: values.face_time?.[1] ? dayjs(values.face_time[1]).format('HH:mm') : '',
         self_study_date: values.self_date ? values.self_date.format('YYYY-MM-DD') : undefined,
-        self_study_time_start: values.self_time?.[0] ? dayjs(values.self_time[0]).format('HH:mm') : '',
-        self_study_time_end: values.self_time?.[1] ? dayjs(values.self_time[1]).format('HH:mm') : '',
+        // 自学只记日期，不记时间
+        self_study_time_start: '',
+        self_study_time_end: '',
       }
     }
     const slots = (values.time_slots || [])
       .filter((s: any) => s?.date)
       .map((s: any) => ({
         date: s.date.format('YYYY-MM-DD'),
-        start: s.time?.[0] ? dayjs(s.time[0]).format('HH:mm') : '',
-        end: s.time?.[1] ? dayjs(s.time[1]).format('HH:mm') : '',
+        start: !isSelfStudy && s.time?.[0] ? dayjs(s.time[0]).format('HH:mm') : '',
+        end: !isSelfStudy && s.time?.[1] ? dayjs(s.time[1]).format('HH:mm') : '',
       }))
     return { time_slots: slots }
   }
@@ -486,9 +495,12 @@ export default function TrainingNotificationClient() {
             : department
 
           let durationHours: number | undefined = undefined
+          // 自学没有固定培训时间，不记课时；双模式只按面授时段计
           const slotRanges: any[] = isDualMode
             ? (values.face_time ? [values.face_time] : [])
-            : (values.time_slots || []).map((s: any) => s?.time).filter(Boolean)
+            : isSelfStudy
+              ? []
+              : (values.time_slots || []).map((s: any) => s?.time).filter(Boolean)
           if (slotRanges.length > 0) {
             let totalMin = 0
             slotRanges.forEach((t: any) => {
@@ -654,6 +666,11 @@ export default function TrainingNotificationClient() {
   const trainerValue = trainerWatch || ''
 
   const traineeDepts: string[] = Form.useWatch('trainee_departments', form) || []
+  // 受训部门补「厂级」选项：厂级培训取全厂名单（后端名单/品种/请假人数接口对「厂级」不下发部门过滤）
+  const traineeDeptOptions = [
+    ...departments.filter((d) => d.value !== '厂级'),
+    { value: '厂级', label: '厂级' },
+  ]
   const formValues = form.getFieldsValue()
   const timeSlotsValue: Array<{ date: any; time: any }> = Form.useWatch('time_slots', form) || []
   const locationValue = formValues?.location || ''
@@ -675,7 +692,7 @@ export default function TrainingNotificationClient() {
     if (!timeSlotsValue || timeSlotsValue.length === 0) return '____年__月__日'
     const parts = timeSlotsValue.map((s: any) => {
       const d = s?.date
-      const t = s?.time
+      const t = isSelfStudy ? undefined : s?.time
       if (!d) return ''
       const datePart = d.format('YYYY年MM月DD日')
       if (t && t.length === 2) {
@@ -700,35 +717,29 @@ export default function TrainingNotificationClient() {
     : []
 
   const hasBasicInfo = !!deptValue && !!firstSlotDate && !!subjectValue
-  // Compute duration hours from time_slots（双模式取面授时段）
-  const evalHours = (() => {
-    const ranges: any[] = isDualMode
-      ? (watchedFaceTime ? [watchedFaceTime] : [])
+  // 计入课时的时段：双模式取面授时段，单模式取 time_slots；自学没有固定培训时间，不记课时
+  const hourRanges: any[] = isDualMode
+    ? (watchedFaceTime ? [watchedFaceTime] : [])
+    : isSelfStudy
+      ? []
       : (timeSlotsValue || []).map((s: any) => s?.time).filter(Boolean)
-    if (ranges.length === 0) return ''
+  const evalHourCount = (() => {
     let totalMin = 0
-    ranges.forEach((t: any) => {
+    hourRanges.forEach((t: any) => {
       if (t && t.length === 2) {
         const diff = dayjs(t[1]).diff(dayjs(t[0]), 'minute')
         if (diff > 0) totalMin += diff
       }
     })
-    if (totalMin === 0) return ''
-    const h = Math.round(totalMin / 30) / 2
-    return h === Math.floor(h) ? `${h}小时` : `${h}小时`
+    return totalMin > 0 ? Math.round(totalMin / 30) / 2 : 0
   })()
-  const evalDurationHours = (() => {
-    if (!timeSlotsValue || timeSlotsValue.length === 0) return 0
-    let totalMin = 0
-    timeSlotsValue.forEach((s: any) => {
-      const t = s?.time
-      if (t && t.length === 2) {
-        const diff = dayjs(t[1]).diff(dayjs(t[0]), 'minute')
-        if (diff > 0) totalMin += diff
-      }
-    })
-    return Math.round(totalMin / 30) / 2
-  })()
+  // 自学不记课时，与导出的通知一致显示横杠
+  const evalHours = isSelfStudy
+    ? '—'
+    : evalHourCount > 0
+      ? `${evalHourCount}小时`
+      : ''
+  const evalDurationHours = evalHourCount
 
   return (
     <div className="space-y-6">
@@ -750,7 +761,7 @@ export default function TrainingNotificationClient() {
                   // 自动加载该部门员工作为受训人员
                   try {
                     const res = await fetchAllTrainingRoster({ department: dept })
-                    const emps = (res.data || []).map((e: any) => ({
+                    const emps = pickTrainees(res.data).map((e: any) => ({
                       value: e.name, label: `${e.name} - ${e.department || dept} (${e.employee_number})`,
                       employee_number: e.employee_number,
                     }))
@@ -808,16 +819,8 @@ export default function TrainingNotificationClient() {
                   >
                     <DatePicker placeholder="选择自学日期" style={{ width: 160 }} />
                   </Form.Item>
-                  <Form.Item
-                    name="self_time"
-                    label="自学时间"
-                    rules={[{ required: true, message: '请选择自学时间' }]}
-                    style={{ marginBottom: 0 }}
-                  >
-                    <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
-                  </Form.Item>
                 </Space>
-                <p className="text-xs text-gray-400">面授+自学模式：面授与自学分别记录日期时间，课时按面授时间计算</p>
+                <p className="text-xs text-gray-400">面授+自学模式：面授选择日期时间，自学只选日期，课时按面授时间计算</p>
               </div>
             ) : (
               <Form.List name="time_slots" initialValue={[{ date: null, time: [dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')] }]}>
@@ -833,14 +836,17 @@ export default function TrainingNotificationClient() {
                         >
                           <DatePicker placeholder="选择日期" style={{ width: 160 }} />
                         </Form.Item>
-                        <Form.Item
-                          name={[name, 'time']}
-                          label={fields.length > 1 ? `时段${index + 1}时间` : '培训时间'}
-                          rules={[{ required: true, message: '请选择时间' }]}
-                          style={{ marginBottom: 0 }}
-                        >
-                          <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
-                        </Form.Item>
+                        {/* 自学没有固定培训时间，不显示时间选择器 */}
+                        {!isSelfStudy && (
+                          <Form.Item
+                            name={[name, 'time']}
+                            label={fields.length > 1 ? `时段${index + 1}时间` : '培训时间'}
+                            rules={[{ required: true, message: '请选择时间' }]}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
+                          </Form.Item>
+                        )}
                         {fields.length > 1 && (
                           <Tooltip title="删除该时段">
                             <Button
@@ -960,7 +966,7 @@ export default function TrainingNotificationClient() {
             <Select
               mode="multiple"
               placeholder="选择受训部门（可多选）"
-              options={departments}
+              options={traineeDeptOptions}
               className="w-full"
               onChange={(value: string[]) => loadEmployees(value)}
             />
@@ -1002,7 +1008,6 @@ export default function TrainingNotificationClient() {
           >
             <Select
               mode="multiple"
-              maxTagCount="responsive"
               placeholder="选择应出席受训人员"
               options={employees}
               className="w-full"

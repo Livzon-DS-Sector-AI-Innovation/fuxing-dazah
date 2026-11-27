@@ -6,6 +6,12 @@ from app.modules.environment import router as environment_router
 from app.modules.equipment import router as equipment_router
 from app.modules.hr import ai_exam_router
 from app.modules.hr import router as hr_router
+from app.modules.hr.labor_contract.routes import (
+    sign_router as labor_contract_sign_router,
+)
+from app.modules.hr.offboarding.sign_routes import (
+    sign_router as departure_cert_sign_router,
+)
 from app.modules.meter import router as meter_router
 from app.modules.procurement import router as procurement_router
 from app.modules.production import router as production_router
@@ -51,6 +57,10 @@ api_router.include_router(
     tags=["行政管理"],
 )
 api_router.include_router(hr_router, prefix="/hr", tags=["人事管理"])
+# 劳动合同公开签字（免登）：token 即凭证，不能挂在带 require_hr_basic 门禁的 hr_router 下
+api_router.include_router(labor_contract_sign_router, prefix="/hr", tags=["HR-劳动合同"])
+# 离职证明公开签字（免登）：token 即凭证，员工离职办结后无系统账号
+api_router.include_router(departure_cert_sign_router, prefix="/hr", tags=["HR-离职管理"])
 api_router.include_router(ai_exam_router, prefix="/hr", tags=["AI 出题"])
 api_router.include_router(research_router, prefix="/research", tags=["研发管理"])
 api_router.include_router(

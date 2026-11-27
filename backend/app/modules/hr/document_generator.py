@@ -2,25 +2,13 @@
 
 from datetime import date
 from io import BytesIO
-from pathlib import Path
 from typing import Any
 
 from dateutil.relativedelta import relativedelta
 from docx import Document
 
 from app.modules.hr.models import Employee
-
-
-def _resolve_template(filename: str) -> Path:
-    candidates = [
-        Path(f"assets/hr/{filename}"),
-        Path(f"../assets/hr/{filename}"),
-        Path(__file__).resolve().parent.parent.parent.parent / "assets/hr" / filename,
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    raise FileNotFoundError(f"模板文件未找到: {filename}")
+from app.modules.hr.template_utils import find_hr_template_bytes
 
 
 def _replace_all(doc, placeholders: dict[str, str]) -> None:
@@ -45,9 +33,11 @@ def _calc_probation_date(hire_date: date) -> str:
 def generate_onboarding_training_record(
     employee: Employee,
     training_items: list[dict[str, Any]] | None = None,
+    template_bytes: bytes | None = None,
 ) -> BytesIO:
     """新员工培训记录 — 使用新模板（含年龄、转正日期等占位符）。"""
-    doc = Document(str(_resolve_template("新员工培训记录-模板.docx")))
+    raw = template_bytes or find_hr_template_bytes("training_record")
+    doc = Document(BytesIO(raw))
 
     hire_d = employee.hire_date
     hire_str = str(hire_d) if hire_d else ""
@@ -64,7 +54,9 @@ def generate_onboarding_training_record(
         "{入职日期}": hire_str,
     })
 
-    buf = BytesIO(); doc.save(buf); buf.seek(0)
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
     return buf
 
 
@@ -81,7 +73,7 @@ async def _get_position_training(employee) -> tuple[list[str], list[str]]:
         r = await s.execute(select(PositionTraining).where(
             PositionTraining.department == employee.department,
             PositionTraining.position_name == employee.position,
-            PositionTraining.is_deleted == False,
+            PositionTraining.is_deleted == False,  # noqa: E712
         ))
         for pt in r.scalars().all():
             label = f"{pt.training_category}" + (f" （{pt.training_method}）" if pt.training_method else "")
@@ -93,8 +85,13 @@ async def _get_position_training(employee) -> tuple[list[str], list[str]]:
 
 async def generate_onboarding_certificate(employee: Employee) -> BytesIO:
     """上岗证 — 培训内容从岗位培训表自动填充。"""
-    doc = Document(str(_resolve_template("上岗证模板.docx")))
+    from app.core.database import async_session_factory
+    from app.modules.hr.training_template_store import load_training_template_bytes
+
     contents, trainer_list = await _get_position_training(employee)
+    async with async_session_factory() as session:
+        data, _source = await load_training_template_bytes(session, "work_permit")
+    doc = Document(BytesIO(data))
 
     _replace_all(doc, {
         "{姓名}": employee.name or "",
@@ -105,5 +102,7 @@ async def generate_onboarding_certificate(employee: Employee) -> BytesIO:
         "{培训师}": "、".join(trainer_list) if trainer_list else "",
     })
 
-    buf = BytesIO(); doc.save(buf); buf.seek(0)
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
     return buf

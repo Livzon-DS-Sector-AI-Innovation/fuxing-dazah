@@ -2,31 +2,29 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, App, Button, Checkbox, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
+  Alert, App, Button, DatePicker, Form, Input, Modal, Select, Space, Table, Tabs, Tag,
 } from 'antd'
-import { DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, TagsOutlined } from '@ant-design/icons'
+import { DownloadOutlined, EditOutlined, ReloadOutlined, TagsOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import {
   fetchPositions,
   createEmployeeClassification,
-  deleteEmployeeClassification,
-  fetchClassificationMembers,
   fetchDepartmentsAction,
   fetchEmployeeClassifications,
-  fetchEmployeeTagsByEmployee,
   fetchTrainingRoster,
   exportTrainingRoster,
-  removeClassificationMembers,
   saveEmployeeTag,
   updateTrainingRosterEntry,
 } from '@/actions/hr'
 import type { TrainingRosterRow } from '@/actions/hr/employeeSync'
 import { usePermission } from '@/hooks/usePermission'
 import { useUnsavedConfirm } from '@/hooks/hr'
-import { downloadBase64File, EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
-import type { Department } from '@/types/hr'
+import { downloadBase64File, EMPLOYEE_STATUS_TAG_COLORS, classificationChipColors, ORPHAN_TAG_CHIP_COLOR } from '@/lib/hr'
+import type { Department, EmployeeClassification } from '@/types/hr'
 import PageHeader from './PageHeader'
+import RosterTagCell from './training-roster/RosterTagCell'
+import ClassificationManagerDrawer from './training-roster/ClassificationManagerDrawer'
 
 /** 固定选项（口径与员工档案表单一致） */
 const STATUS_OPTIONS = ['在职', '离职', '试用期', '待审批', '病假', '产假', '产假复岗']
@@ -147,97 +145,75 @@ export default function TrainingRosterClient() {
   const { hasPermission } = usePermission()
   const canManage = hasPermission('hr:training:manage')
 
-  // ── 人员分类（培训专用，挂在名单上） ──
-  const [classModalOpen, setClassModalOpen] = useState(false)
-  const [classList, setClassList] = useState<{ id: string; name: string; count: number }[]>([])
-  const [classOptions, setClassOptions] = useState<{ label: string; value: string }[]>([])
-  const [newClassName, setNewClassName] = useState('')
-  const [classSaving, setClassSaving] = useState(false)
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [members, setMembers] = useState<{ name: string; employee_number: string; department: string; position: string }[]>([])
-  const [membersLoading, setMembersLoading] = useState(false)
-  const [selectedMembers, setSelectedMembers] = useState<Set<string>>(new Set())
-  const [removing, setRemoving] = useState(false)
+  // ── 人员分类（培训专用，挂在名单上；按创建人隔离） ──
+  // 标签本身随名单行下发（row.tags），这里只维护分类清单：它决定胶囊配色与可勾选项
+  const [classifications, setClassifications] = useState<EmployeeClassification[]>([])
+  const [classDrawerOpen, setClassDrawerOpen] = useState(false)
 
   const loadClassifications = useCallback(async () => {
     try {
       const r = await fetchEmployeeClassifications()
-      setClassList(r.data || [])
-      setClassOptions((r.data || []).map(c => ({ label: `${c.name}（${c.count}人）`, value: c.name })))
-    } catch { setClassList([]) }
-  }, [])
+      setClassifications(r.data || [])
+    } catch (err) {
+      setClassifications([])
+      message.error(err instanceof Error ? err.message : '获取分类清单失败')
+    }
+  }, [message])
 
-  const openClassModal = () => {
-    setNewClassName('')
-    setClassModalOpen(true)
+  const chipColors = useMemo(
+    () => classificationChipColors(classifications.map((c) => c.name)),
+    [classifications],
+  )
+  const colorOf = useCallback(
+    (name: string) => chipColors[name] ?? ORPHAN_TAG_CHIP_COLOR,
+    [chipColors],
+  )
+
+  /** 某人的分类变化：先乐观更新，再逐项保存；没保存成功的那几项还原，成功的保留 */
+  const handleTagsChange = useCallback(async (employeeNumber: string, nextTags: string[]) => {
+    const prev = rows.find((r) => r.employee_number === employeeNumber)?.tags ?? []
+    const added = nextTags.filter((t) => !prev.includes(t))
+    const removed = prev.filter((t) => !nextTags.includes(t))
+    if (!added.length && !removed.length) return
+
+    const apply = (tags: string[]) => {
+      setRows((rs) => rs.map((r) => (r.employee_number === employeeNumber ? { ...r, tags } : r)))
+    }
+    apply(nextTags)
+    const results = await Promise.allSettled([
+      ...added.map((tag_name) =>
+        saveEmployeeTag({ employee_number: employeeNumber, tag_name, action: 'add' })),
+      ...removed.map((tag_name) =>
+        saveEmployeeTag({ employee_number: employeeNumber, tag_name, action: 'remove' })),
+    ])
+    let final = prev
+    let failed = 0
+    results.forEach((res, i) => {
+      if (res.status !== 'fulfilled') {
+        failed += 1
+        return
+      }
+      if (i < added.length) final = [...final, added[i]]
+      else final = final.filter((t) => t !== removed[i - added.length])
+    })
+    if (failed) {
+      apply(final)
+      message.error(`${failed} 项分类保存失败，已还原`)
+    }
     void loadClassifications()
-  }
+  }, [loadClassifications, message, rows])
 
-  const handleAddClassification = async () => {
-    const name = newClassName.trim()
-    if (!name) return
-    setClassSaving(true)
+  /** 勾选面板里就地新建分类：成功返回 true，调用方随即把它勾给当前人员 */
+  const handleCreateClassification = useCallback(async (name: string): Promise<boolean> => {
     try {
       await createEmployeeClassification(name)
-      setNewClassName('')
-      message.success('分类已新增')
-      void loadClassifications()
-    } catch (err) { message.error(err instanceof Error ? err.message : '新增失败') }
-    finally { setClassSaving(false) }
-  }
-
-  const handleDeleteClassification = async (id: string, name: string) => {
-    try {
-      await deleteEmployeeClassification(id)
-      message.success(`分类「${name}」已删除`)
-      if (expandedId === id) setExpandedId(null)
-      void loadClassifications()
-    } catch (err) { message.error(err instanceof Error ? err.message : '删除失败') }
-  }
-
-  const fetchMembers = async (id: string) => {
-    setMembersLoading(true)
-    try {
-      const r = await fetchClassificationMembers(id)
-      setMembers(r.data || [])
+      await loadClassifications()
+      return true
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '获取人员失败')
-      setMembers([])
-    } finally { setMembersLoading(false) }
-  }
-
-  const toggleMembers = async (id: string) => {
-    if (expandedId === id) {
-      setExpandedId(null)
-      setSelectedMembers(new Set())
-      return
+      message.error(err instanceof Error ? err.message : '新增失败')
+      return false
     }
-    setExpandedId(id)
-    setSelectedMembers(new Set())
-    await fetchMembers(id)
-  }
-
-  const toggleMemberSelected = (no: string) => {
-    setSelectedMembers(prev => {
-      const next = new Set(prev)
-      if (next.has(no)) next.delete(no)
-      else next.add(no)
-      return next
-    })
-  }
-
-  const handleRemoveSelectedMembers = async () => {
-    if (!expandedId) return
-    setRemoving(true)
-    try {
-      await removeClassificationMembers(expandedId, Array.from(selectedMembers))
-      message.success(`已移除 ${selectedMembers.size} 人`)
-      setSelectedMembers(new Set())
-      await fetchMembers(expandedId)
-      void loadClassifications()
-    } catch (err) { message.error(err instanceof Error ? err.message : '移除失败') }
-    finally { setRemoving(false) }
-  }
+  }, [loadClassifications, message])
 
   const activeDepartment = useMemo(
     () => (activeTab === 'all' || activeTab === 'uncategorized'
@@ -280,6 +256,16 @@ export default function TrainingRosterClient() {
       .catch(() => { if (!cancelled) setPositions([]) })
     return () => { cancelled = true }
   }, [load])
+
+  // 分类清单决定胶囊配色与可勾选项：进页面拉一次（分类列仅管理权限可见）
+  useEffect(() => {
+    if (!canManage) return
+    let cancelled = false
+    fetchEmployeeClassifications()
+      .then((r) => { if (!cancelled) setClassifications(r.data || []) })
+      .catch(() => { if (!cancelled) setClassifications([]) })
+    return () => { cancelled = true }
+  }, [canManage])
 
   const handleSearch = useCallback((value: string) => {
     setKeyword(value)
@@ -390,9 +376,17 @@ export default function TrainingRosterClient() {
       { title: '工号', dataIndex: 'employee_number', key: 'employee_number', width: 100, fixed: 'left' },
       { title: '姓名', dataIndex: 'name', key: 'name', width: 90, fixed: 'left' },
       ...(canManage ? [{
-        title: '分类标签', key: 'tags', width: 150,
+        title: '分类', key: 'tags', width: 168,
         render: (_: unknown, r: TrainingRosterRow) => (
-          <TagCell employeeNumber={r.employee_number} employeeName={r.name} options={classOptions} onChanged={loadClassifications} />
+          <RosterTagCell
+            employeeNumber={r.employee_number}
+            employeeName={r.name}
+            tags={r.tags ?? []}
+            classifications={classifications}
+            colorOf={colorOf}
+            onTagsChange={handleTagsChange}
+            onCreateClassification={handleCreateClassification}
+          />
         ),
       }] : []),
       { title: '体现部门', dataIndex: 'department', key: 'department', width: 130 },
@@ -436,7 +430,7 @@ export default function TrainingRosterClient() {
       })
     }
     return base
-  }, [canManage, openEdit, classOptions, loadClassifications])
+  }, [canManage, openEdit, classifications, colorOf, handleTagsChange, handleCreateClassification])
 
   const visibleDepartments = scopedDepartments
     ? departments.filter(d => scopedDepartments.includes(d.name))
@@ -444,8 +438,17 @@ export default function TrainingRosterClient() {
   const tabItems = [
     { key: 'all', label: '全部' },
     ...visibleDepartments.map(d => ({ key: d.id, label: d.name })),
-    ...(scopedDepartments ? [] : [{ key: 'uncategorized', label: '未分类' }]),
+    // 部门表里已有「未分类」时不再追加同名兜底页签（此前会出现两个「未分类」，查询结果相同）
+    ...(scopedDepartments || visibleDepartments.some(d => d.name === '未分类')
+      ? []
+      : [{ key: 'uncategorized', label: '未分类' }]),
   ]
+
+  /** 分类管理抽屉里的写操作：改名/删除/增减人员都会改变名单上的标签，清单和当前页一起刷新 */
+  const handleClassificationChanged = useCallback(async () => {
+    await loadClassifications()
+    void load(page, pageSize, keyword, tabDepartment)
+  }, [loadClassifications, load, page, pageSize, keyword, tabDepartment])
 
   return (
     <div className="space-y-4">
@@ -461,7 +464,7 @@ export default function TrainingRosterClient() {
               onSearch={handleSearch}
             />
             {canManage && (
-              <Button icon={<TagsOutlined />} onClick={openClassModal}>分类管理</Button>
+              <Button icon={<TagsOutlined />} onClick={() => setClassDrawerOpen(true)}>分类管理</Button>
             )}
             <Button
               icon={<DownloadOutlined />}
@@ -562,160 +565,13 @@ export default function TrainingRosterClient() {
         )}
       </Modal>
 
-      <Modal title="分类管理" open={classModalOpen} onCancel={() => setClassModalOpen(false)} footer={null} width={480}>
-        <div className="space-y-3 mt-2">
-          <Space.Compact style={{ width: '100%' }}>
-            <Input value={newClassName} onChange={(e) => setNewClassName(e.target.value)}
-              onPressEnter={handleAddClassification} placeholder="新分类名称" />
-            <Button type="primary" icon={<PlusOutlined />} loading={classSaving}
-              onClick={handleAddClassification}>新增分类</Button>
-          </Space.Compact>
-          {classList.length === 0 ? (
-            <p className="text-[var(--color-stone)] text-[13px]">还没有分类，先新增一个，再在名单里用下拉选择分类</p>
-          ) : (
-            <div className="space-y-2">
-              {classList.map((c) => (
-                <div key={c.id}>
-                  <div className="flex justify-between items-center rounded-[var(--rounded-sm)] bg-[var(--color-surface)] px-3 py-2 cursor-pointer"
-                    onClick={() => { void toggleMembers(c.id) }}>
-                    <span>{c.name}<span className="text-[var(--color-stone)] text-[12px] ml-2">{c.count}人</span></span>
-                    <Space size={4}>
-                      <Button type="link" size="small" onClick={(e) => { e.stopPropagation(); void toggleMembers(c.id) }}>
-                        {expandedId === c.id ? '收起' : '查看人员'}
-                      </Button>
-                      <Popconfirm title={`删除分类「${c.name}」？该分类下所有人员会解除分类`} onConfirm={() => { void handleDeleteClassification(c.id, c.name) }}>
-                        <Tooltip title="删除分类">
-                          <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除分类"
-                            onClick={(e) => e.stopPropagation()} />
-                        </Tooltip>
-                      </Popconfirm>
-                    </Space>
-                  </div>
-                  {expandedId === c.id && (
-                    <div className="mt-1 rounded-[var(--rounded-sm)] border border-[var(--color-hairline)] p-2 space-y-1">
-                      {membersLoading ? (
-                        <p className="text-[var(--color-stone)] text-[13px]">加载中...</p>
-                      ) : members.length === 0 ? (
-                        <p className="text-[var(--color-stone)] text-[13px]">该分类下暂无人员</p>
-                      ) : (
-                        <>
-                          <div className="flex justify-between items-center pb-1 border-b border-[var(--color-hairline)]">
-                            <Checkbox
-                              checked={selectedMembers.size > 0 && selectedMembers.size === members.length}
-                              indeterminate={selectedMembers.size > 0 && selectedMembers.size < members.length}
-                              onChange={(e) => setSelectedMembers(e.target.checked ? new Set(members.map(m => m.employee_number)) : new Set())}>
-                              全选
-                            </Checkbox>
-                            <Button type="link" size="small" danger loading={removing}
-                              disabled={selectedMembers.size === 0}
-                              onClick={() => { void handleRemoveSelectedMembers() }}>
-                              移除所选（{selectedMembers.size}）
-                            </Button>
-                          </div>
-                          {members.map((m) => (
-                            <div key={m.employee_number} className="text-[13px] flex gap-2 items-center">
-                              <Checkbox checked={selectedMembers.has(m.employee_number)}
-                                onChange={() => toggleMemberSelected(m.employee_number)} />
-                              <span className="font-medium">{m.name}</span>
-                              <span className="text-[var(--color-stone)]">{m.employee_number}</span>
-                              <span className="text-[var(--color-steel)]">{m.department}{m.position ? ` / ${m.position}` : ''}</span>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </Modal>
-    </div>
-  )
-}
-
-// ─── 内联分类下拉单元格 ───
-
-function TagCell({ employeeNumber, disabled, options, onChanged }: {
-  employeeNumber: string
-  employeeName: string
-  disabled?: boolean
-  options: { label: string; value: string }[]
-  onChanged?: () => void
-}) {
-  const { message } = App.useApp()
-  const [tags, setTags] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
-  const [editing, setEditing] = useState(false)
-
-  useEffect(() => {
-    fetchEmployeeTagsByEmployee(employeeNumber).then(r => {
-      setTags((r.data || []).map(t => t.tag_name))
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [employeeNumber])
-
-  // 分类清单 + 人员已有分类（并集）作为下拉选项
-  const mergedOptions = [...options]
-  for (const t of tags) {
-    if (!mergedOptions.some(o => o.value === t)) {
-      mergedOptions.push({ label: t, value: t })
-    }
-  }
-
-  const handleChange = async (vals: string[]) => {
-    const prev = tags
-    setTags(vals)
-    const added = vals.filter(t => !prev.includes(t))
-    const removed = prev.filter(t => !vals.includes(t))
-    try {
-      for (const t of added) {
-        await saveEmployeeTag({ employee_number: employeeNumber, tag_name: t, action: 'add' })
-      }
-      for (const t of removed) {
-        await saveEmployeeTag({ employee_number: employeeNumber, tag_name: t, action: 'remove' })
-      }
-      onChanged?.()
-    } catch (e) {
-      // 失败回滚乐观更新并提示，避免界面与实际数据分叉
-      setTags(prev)
-      message.error(e instanceof Error ? e.message : '标签保存失败，已还原')
-    }
-  }
-
-  return (
-    <div onClick={e => e.stopPropagation()} style={{ minWidth: 120 }}>
-      {editing ? (
-        <Select
-          mode="multiple"
-          size="small"
-          autoFocus
-          style={{ width: '100%' }}
-          placeholder="选择分类"
-          value={tags}
-          options={mergedOptions}
-          onChange={handleChange}
-          loading={loading}
-          disabled={disabled}
-          maxTagCount={2}
-          onBlur={() => setEditing(false)}
-          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-        />
-      ) : (
-        <div
-          className="flex flex-wrap gap-0.5 cursor-pointer min-h-[22px] items-center"
-          onClick={() => { if (!disabled) setEditing(true) }}
-        >
-          {tags.length === 0 ? (
-            <span className="text-gray-300 text-xs">+选择分类</span>
-          ) : (
-            <>
-              {tags.slice(0, 3).map(t => <Tag key={t} color="blue" style={{ margin: 0 }}>{t}</Tag>)}
-              {tags.length > 3 && <span className="text-[11px] text-[var(--color-stone)]">+{tags.length - 3}</span>}
-            </>
-          )}
-        </div>
-      )}
+      <ClassificationManagerDrawer
+        open={classDrawerOpen}
+        classifications={classifications}
+        colorOf={colorOf}
+        onClose={() => setClassDrawerOpen(false)}
+        onChanged={handleClassificationChanged}
+      />
     </div>
   )
 }

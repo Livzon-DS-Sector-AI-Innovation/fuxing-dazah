@@ -48,6 +48,12 @@ class HrExtension(ModuleExtension):
         from app.modules.hr.interview_score_service import (
             register_feishu_callbacks as register_iv_score_callbacks,
         )
+        from app.modules.hr.labor_contract.scheduled import (
+            register_labor_contract_tasks,
+        )
+        from app.modules.hr.offboarding.scheduled import (
+            register_offboarding_tasks,
+        )
         from app.modules.hr.probation_service import (
             register_feishu_callbacks as register_probation_callbacks,
         )
@@ -70,6 +76,11 @@ class HrExtension(ModuleExtension):
         # 人事提醒任务聚合注册（转正 09:00 / 合同到期 09:10；接收人未配置时仅日志，
         # 配置存 hr.system_settings）。转正提醒任务也由它登记，此处不要再单独注册——重名会抛错。
         register_reminder_tasks(host.scheduler)
+        # 劳动合同续签流程（公告期扫描 09:05 / 飞书审批结果轮询 15min；
+        # 新流程启用后旧合同到期提醒自动退出，开关在 hr_contract.* 配置）
+        register_labor_contract_tasks(host.scheduler)
+        # 离职管理（飞书审批结果轮询 15min，办结自动推进状态机）
+        register_offboarding_tasks(host.scheduler)
 
         host.add_background_loop("hr:probation_config_warmup", _warm_probation_config)
 

@@ -10,7 +10,7 @@ import dayjs from 'dayjs'
 import PageHeader from '@/components/hr/PageHeader'
 
 import {
-  fetchSopDepartments, fetchTrainers, createTrainer, updateTrainer, deleteTrainer,
+  fetchTrainingDepartmentOptions, fetchTrainers, createTrainer, updateTrainer, deleteTrainer,
   uploadTrainers, clearTrainers,
   fetchDeptTrainingPersonnel, createDeptTrainingPersonnel, updateDeptTrainingPersonnel,
   deleteDeptTrainingPersonnel, uploadDeptTrainingPersonnel,
@@ -34,7 +34,7 @@ function TrainersTab() {
   const [form] = Form.useForm()
 
   useEffect(() => {
-    fetchSopDepartments()
+    fetchTrainingDepartmentOptions()
       .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
       .catch(() => {})
   }, [])
@@ -112,7 +112,7 @@ function TrainersTab() {
         actions={
           <Space>
             <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增内训师</Button>
-            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            <Upload accept=".xlsx" showUploadList={false} customRequest={async ({ file }) => {
               const fd = new FormData(); fd.append('file', file as File)
               try {
                 const d = await uploadTrainers(fd)
@@ -223,7 +223,7 @@ function DeptPersonnelTab() {
   const [form] = Form.useForm()
 
   useEffect(() => {
-    fetchSopDepartments()
+    fetchTrainingDepartmentOptions()
       .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
       .catch(() => {})
   }, [])
@@ -285,7 +285,7 @@ function DeptPersonnelTab() {
         actions={
           <Space>
             <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增</Button>
-            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            <Upload accept=".xlsx" showUploadList={false} customRequest={async ({ file }) => {
               const fd = new FormData(); fd.append('file', file as File)
               try {
                 const d = await uploadDeptTrainingPersonnel(fd)

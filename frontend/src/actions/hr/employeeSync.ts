@@ -71,6 +71,8 @@ export interface TrainingRosterRow {
   safety_training_score?: string | null
   culture_training_date?: string | null
   gmp_training_date?: string | null
+  /** 人员分类标签名（随名单行下发；不含已移除的） */
+  tags?: string[]
 }
 
 export async function fetchTrainingRoster(params?: {

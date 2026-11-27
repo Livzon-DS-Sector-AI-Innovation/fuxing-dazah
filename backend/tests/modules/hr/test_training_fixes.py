@@ -42,6 +42,113 @@ class TestDocumentGenerators:
         doc = Document(BytesIO(buf.getvalue()))
         assert "2026年11月05日" in doc.paragraphs[1].text
 
+    def test_notification_self_study_without_time_keeps_date_and_dashes_hours(self):
+        """自学没有固定培训时间：日期照写（不带时间）、课时写横杠。"""
+        from io import BytesIO
+
+        from docx import Document
+
+        from app.modules.hr.notification_document_generator import (
+            TrainingNotificationInput,
+            generate_training_notification,
+        )
+
+        buf = generate_training_notification(TrainingNotificationInput(
+            department="甲级", training_date=date(2026, 12, 15), subject="测试培训",
+            training_method="自学", assessment_method="问答",
+            time_slots=[{"date": "2026-12-15", "start": "", "end": ""}],
+        ))
+        table = Document(BytesIO(buf.getvalue())).tables[0]
+        assert table.rows[1].cells[1].text == "2026-12-15"
+        assert table.rows[1].cells[3].text == "—"
+        assert table.rows[2].cells[1].text == "自学"
+
+    def test_notification_dual_mode_self_study_records_date_only(self):
+        """面授+自学：面授写日期时间，自学只写日期，课时按面授算。"""
+        from io import BytesIO
+
+        from docx import Document
+
+        from app.modules.hr.notification_document_generator import (
+            TrainingNotificationInput,
+            generate_training_notification,
+        )
+
+        buf = generate_training_notification(TrainingNotificationInput(
+            department="甲级", training_date=date(2026, 12, 15), subject="测试培训",
+            training_method="面授+自学",
+            face_date=date(2026, 12, 15),
+            face_to_face_time_start="08:00", face_to_face_time_end="12:00",
+            self_study_date=date(2026, 12, 16),
+            self_study_time_start="", self_study_time_end="",
+        ))
+        table = Document(BytesIO(buf.getvalue())).tables[0]
+        assert table.rows[1].cells[1].text == "面授：2026年12月15日 08:00—12:00；自学：2026年12月16日"
+        assert table.rows[1].cells[3].text == "4小时"
+
+    def test_notification_blank_fields_are_dashed(self):
+        """没填的项（授课人/培训地点等）导出时写横杠，不留空白格。"""
+        from io import BytesIO
+
+        from docx import Document
+
+        from app.modules.hr.notification_document_generator import (
+            TrainingNotificationInput,
+            generate_training_notification,
+        )
+
+        buf = generate_training_notification(TrainingNotificationInput(
+            department="甲级", training_date=date(2026, 12, 15), subject="测试培训",
+            trainer="  ", location=None,
+            time_slots=[{"date": "2026-12-15", "start": "08:00", "end": "12:00"}],
+        ))
+        table = Document(BytesIO(buf.getvalue())).tables[0]
+        assert table.rows[1].cells[1].text == "2026-12-15 08:00—12:00"
+        assert table.rows[1].cells[3].text == "4小时"
+        assert table.rows[2].cells[1].text == "—"
+        assert table.rows[2].cells[3].text == "—"
+        assert table.rows[4].cells[1].text == "—"
+        assert table.rows[5].cells[1].text == "—"
+
+    def test_notification_without_any_time_falls_back_to_training_date(self):
+        """不带时段的调用方（SOP 培训文档打包）仍回落到培训日期，空项同样写横杠。"""
+        from io import BytesIO
+
+        from docx import Document
+
+        from app.modules.hr.notification_document_generator import (
+            TrainingNotificationInput,
+            generate_training_notification,
+        )
+
+        buf = generate_training_notification(TrainingNotificationInput(
+            department="甲级", training_date=date(2026, 11, 11), subject="测试培训",
+        ))
+        table = Document(BytesIO(buf.getvalue())).tables[0]
+        assert table.rows[1].cells[1].text == "2026-11-11"
+        assert table.rows[1].cells[3].text == "—"
+        assert table.rows[2].cells[1].text == "—"
+
+    def test_signin_slot_without_time_keeps_date(self):
+        """签到表与通知同口径：没时间的时段只写日期，课时/空项写横杠。"""
+        from io import BytesIO
+
+        from docx import Document
+
+        from app.modules.hr.schemas import TrainingSignInSheetInput
+        from app.modules.hr.signin_document_generator import (
+            generate_training_sign_in_sheet,
+        )
+
+        buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
+            training_date=date(2026, 12, 15), department="甲级", topic="测试",
+            training_method="自学", time_slots=[{"date": "2026-12-15", "start": "", "end": ""}],
+        ))
+        table = Document(BytesIO(buf.getvalue())).tables[0]
+        assert table.rows[3].cells[1].text == "2026-12-15"
+        assert table.rows[2].cells[1].text == "—"
+        assert table.rows[2].cells[3].text == "—"
+
     def test_registration_empty_records_removes_loop_markers(self):
         from io import BytesIO
 
@@ -497,23 +604,53 @@ class TestLedgerCreateScope:
 
 class TestLeaveCountScope:
     @pytest.mark.asyncio
-    async def test_uncategorized_actual_department_counted(self, db_session):
+    async def test_only_display_department_counted(self, db_session):
+        """部门口径只认体现部门：实际部门在本部门、体现部门在别处的人不算进来。"""
         from app.modules.hr.api import _query_leave_counts
         from app.modules.hr.models import TrainingRosterProfile
 
+        dept, other = f"请假口径部{uuid4().hex[:6]}", f"请假他部{uuid4().hex[:6]}"
         db_session.add_all([
             TrainingRosterProfile(
-                employee_number="5001", name="病假甲", department="甲部门",
+                employee_number="5001", name="病假甲", department=dept,
                 position="操作工", status="病假",
             ),
             TrainingRosterProfile(
-                employee_number="5002", name="产假甲", department="未分类",
-                actual_department="甲部门", position="操作工", status="产假",
+                employee_number="5002", name="产假甲", department=other,
+                actual_department=dept, position="操作工", status="产假",
             ),
         ])
         await db_session.flush()
-        sick, maternity = await _query_leave_counts(db_session, "甲部门")
-        assert (sick, maternity) == (1, 1)
+        # 产假甲算在其体现部门名下，不算在实际部门
+        assert await _query_leave_counts(db_session, dept) == (1, 0)
+        assert await _query_leave_counts(db_session, other) == (0, 1)
+
+    @pytest.mark.asyncio
+    async def test_factory_level_counts_whole_factory(self, db_session):
+        """「厂级」病假/产假人数按全厂真实体现部门统计；「未分类」不是体现部门、不算。
+
+        测试库连开发库（读有真实名单），先取基线再断言增量。
+        """
+        from app.modules.hr.api import _query_leave_counts
+        from app.modules.hr.models import TrainingRosterProfile
+
+        base_sick, base_maternity = await _query_leave_counts(db_session, "厂级")
+        db_session.add_all([
+            TrainingRosterProfile(
+                employee_number=f"50{uuid4().hex[:4]}", name="厂病假甲", department=f"请假厂部{uuid4().hex[:6]}",
+                position="操作工", status="病假",
+            ),
+            TrainingRosterProfile(
+                employee_number=f"50{uuid4().hex[:4]}", name="厂产假乙", department=f"请假他部{uuid4().hex[:6]}",
+                position="操作工", status="产假",
+            ),
+            TrainingRosterProfile(
+                employee_number=f"50{uuid4().hex[:4]}", name="厂病假未分类", department="未分类",
+                position="操作工", status="病假",
+            ),
+        ])
+        await db_session.flush()
+        assert await _query_leave_counts(db_session, "厂级") == (base_sick + 1, base_maternity + 1)
 
 
 class TestScoreParsing:

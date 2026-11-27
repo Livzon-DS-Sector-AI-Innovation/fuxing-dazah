@@ -2,14 +2,59 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { App, Button, Table, Space, Popconfirm, Input, Modal, Tag, Descriptions } from 'antd'
+import {
+  App, Button, Checkbox, Table, Space, Popconfirm, Input, Modal, Tag, Descriptions, Tooltip,
+} from 'antd'
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, UserOutlined } from '@ant-design/icons'
-import { Department, Employee } from '@/types/hr'
+import { Department, Employee, type ManagerAccountStatus } from '@/types/hr'
 import { fetchDepartmentsAction, fetchEmployeesAction, deleteDepartment } from '@/actions/hr'
 import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
 import { useDebouncedCallback } from '@/hooks/hr'
 import DepartmentForm from './DepartmentForm'
 import PageHeader from './PageHeader'
+
+/** 账号未就绪的三种原因：标签文案 + 给 HR 的处理说明 */
+const MANAGER_ISSUE_META: Record<
+  Exclude<ManagerAccountStatus, 'ok'>,
+  { color: string; text: string; tip: string }
+> = {
+  no_account: {
+    color: 'orange',
+    text: '未登录过系统',
+    tip: '系统按姓名匹配他的登录账号来发提醒和审批。此人还没登录过本系统，收不到；请他用飞书扫码登录一次。',
+  },
+  ambiguous: {
+    color: 'red',
+    text: '同名多账号',
+    tip: '系统里有多个同名账号，无法确定发给谁，提醒和审批都不会发。请改为其他人，或联系管理员处理同名账号。',
+  },
+  left: {
+    color: 'red',
+    text: '已离职',
+    tip: '此人已不在职，提醒和审批仍会继续发给他。请更换。',
+  },
+}
+
+/** 负责人 / 分管领导单元格：姓名 + 未就绪原因标签（就绪的不加标记，避免满屏标签） */
+function ManagerCell({ name, status }: { name?: string | null; status?: ManagerAccountStatus | '' | null }) {
+  if (!name) return <span className="text-gray-400">-</span>
+  const issue = status && status !== 'ok' ? MANAGER_ISSUE_META[status] : undefined
+  return (
+    <Space size={4} wrap>
+      <span>{name}</span>
+      {issue && (
+        <Tooltip title={issue.tip}>
+          <Tag color={issue.color} style={{ marginInlineEnd: 0 }}>{issue.text}</Tag>
+        </Tooltip>
+      )}
+    </Space>
+  )
+}
+
+/** 部门负责人需要处理：没填，或账号未就绪（分管领导只影响转正审批，不进这个筛选） */
+function needsManagerAttention(d: Department): boolean {
+  return !d.department_manager_name || d.manager_account_status !== 'ok'
+}
 
 interface DepartmentClientProps {
   initialDepartments: Department[]
@@ -54,34 +99,34 @@ export default function DepartmentClient({
 
   const doFetch = fetchAction || fetchDepartmentsAction
 
-  const loadData = useCallback(async () => {
-    // 请求序号守卫：慢响应回来时若已有更新的查询，丢弃旧结果，避免覆盖新结果
+  /** 拉当前页；请求序号守卫：慢响应回来时若已有更新的查询，返回 null 让调用方丢弃 */
+  const fetchPage = useCallback(async () => {
     const seq = ++loadSeq.current
+    const res = await doFetch({
+      keyword: searchKeyword || undefined,
+      page,
+      page_size: pageSize })
+    return seq === loadSeq.current ? res : null
+  }, [searchKeyword, page, pageSize, doFetch])
+
+  // 事件驱动的刷新（新增 / 编辑 / 删除后）：可以直接进 loading
+  const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await doFetch({
-        keyword: searchKeyword || undefined,
-        page,
-        page_size: pageSize })
-      if (seq !== loadSeq.current) return
+      const res = await fetchPage()
+      if (!res) return
       setDepartments(res.data)
       setTotal(res.meta?.total || 0)
-    } catch (err: any) {
-      if (seq === loadSeq.current) message.error(err.message || '加载数据失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '加载数据失败')
     } finally {
-      if (seq === loadSeq.current) setLoading(false)
+      setLoading(false)
     }
-  }, [searchKeyword, page, pageSize, doFetch, message])
+  }, [fetchPage, message])
 
   const handlePageChange = (newPage: number, newPageSize: number) => {
     setPage(newPage)
     setPageSize(newPageSize)
-  }
-
-  const handleRefresh = () => {
-    setExpandedKeys(new Set())
-    setEmployeesByDept({})
-    loadData()
   }
 
   const handleEdit = (department: Department) => {
@@ -103,8 +148,8 @@ export default function DepartmentClient({
       await deleteDepartment(id)
       message.success('删除成功')
       loadData()
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '删除失败')
     }
   }
 
@@ -148,9 +193,31 @@ export default function DepartmentClient({
     setExpandedKeys(next)
   }
 
+  // 筛选 / 翻页变化时重新加载：请求写在 effect 内部，setState 都在 await 之后
   useEffect(() => {
-    loadData()
-  }, [searchKeyword, page, pageSize])
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetchPage()
+        if (!cancelled && res) {
+          setDepartments(res.data)
+          setTotal(res.meta?.total || 0)
+        }
+      } catch (err) {
+        if (!cancelled) message.error(err instanceof Error ? err.message : '加载数据失败')
+      }
+    })()
+    return () => { cancelled = true }
+    // message 刻意不进依赖：App.useApp() 的实例进 effect 依赖会引发重复触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchPage])
+
+  // 「只看负责人需要处理的」：在当前页数据里筛选（部门总量不大，翻页时逐页看）
+  const [onlyAttention, setOnlyAttention] = useState(false)
+  const managerReady = departments.filter((d) => d.department_manager_name && d.manager_account_status === 'ok').length
+  const managerUnset = departments.filter((d) => !d.department_manager_name).length
+  const managerUnready = departments.length - managerReady - managerUnset
+  const shownRows = onlyAttention ? departments.filter(needsManagerAttention) : departments
 
   const employeeColumns = [
     { title: '工号', dataIndex: 'employee_number', width: 110 },
@@ -193,14 +260,20 @@ export default function DepartmentClient({
       title: '部门负责人',
       dataIndex: 'department_manager_name',
       key: 'department_manager_name',
-      width: 110,
-      render: (v: string | null) => v || '-' },
+      width: 190,
+      render: (v: string | null, record: Department) => (
+        <ManagerCell name={v} status={record.manager_account_status} />
+      ),
+    },
     {
       title: '分管领导',
       dataIndex: 'supervising_leader_name',
       key: 'supervising_leader_name',
-      width: 110,
-      render: (v: string | null) => v || '-' },
+      width: 190,
+      render: (v: string | null, record: Department) => (
+        <ManagerCell name={v} status={record.leader_account_status} />
+      ),
+    },
     {
       title: '描述',
       dataIndex: 'description',
@@ -210,7 +283,7 @@ export default function DepartmentClient({
       title: '操作',
       key: 'action',
       width: 160,
-      render: (_: any, record: Department) => (
+      render: (_: unknown, record: Department) => (
         <Space size="small">
           <Button
             type="text"
@@ -248,7 +321,7 @@ export default function DepartmentClient({
     <div className="space-y-4">
       <PageHeader
         title="部门管理"
-        description="维护组织架构；部门负责人与分管领导是转正评估第二、三级审批人"
+        description="维护组织架构；部门负责人接收劳动合同到期续签审批提醒，与分管领导同为转正评估第二、三级审批人（均需登录过系统）。收不到提醒的会在姓名旁标出原因"
         actions={
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
             新增部门
@@ -267,11 +340,26 @@ export default function DepartmentClient({
           style={{ width: 260 }}
           allowClear
         />
+        <Checkbox
+          checked={onlyAttention}
+          onChange={(e) => { setOnlyAttention(e.target.checked); if (e.target.checked) setPage(1) }}
+        >
+          只看负责人需要处理的（未填或账号未就绪）
+        </Checkbox>
       </div>
+
+      {departments.length > 0 && (
+        <div className="text-[13px] text-gray-500">
+          本页部门负责人：已就绪 {managerReady} · 未填 {managerUnset}
+          {managerUnready > 0 && (
+            <span className="text-orange-600"> · 账号未就绪 {managerUnready}（把鼠标放到标签上可看处理办法）</span>
+          )}
+        </div>
+      )}
 
       <Table
         columns={columns}
-        dataSource={departments}
+        dataSource={shownRows}
         rowKey="id"
         loading={loading}
         expandable={{
@@ -304,7 +392,8 @@ export default function DepartmentClient({
           pageSize,
           total,
           showSizeChanger: true,
-          showTotal: (t) => `共 ${t} 条`,
+          // 筛选只作用于当前页数据，分页总数仍是全部部门
+          showTotal: (t) => (onlyAttention ? `共 ${t} 条（筛选仅作用于当前页）` : `共 ${t} 条`),
           onChange: handlePageChange }}
       />
 

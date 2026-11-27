@@ -6,17 +6,17 @@ from io import BytesIO
 
 from docx import Document
 
-from app.modules.hr.template_utils import find_hr_template
-
-TEMPLATE = find_hr_template("roster_template.docx")
+from app.modules.hr.template_utils import find_hr_template_bytes
 
 
-def generate_roster_sync(employees: list[tuple], department: str | None = None) -> BytesIO:
+def generate_roster_sync(
+    employees: list[tuple],
+    department: str | None = None,
+    template_bytes: bytes | None = None,
+) -> BytesIO:
     """同步生成花名册。employees: list of (name, department, gender, education, hire_date, status)"""
-    if not TEMPLATE.exists():
-        raise FileNotFoundError(f"模板未找到: {TEMPLATE}")
-
-    doc = Document(str(TEMPLATE))
+    raw = template_bytes or find_hr_template_bytes("roster")
+    doc = Document(BytesIO(raw))
 
     # 修正页眉：保持 run 结构，仅加下划线
     for section in doc.sections:

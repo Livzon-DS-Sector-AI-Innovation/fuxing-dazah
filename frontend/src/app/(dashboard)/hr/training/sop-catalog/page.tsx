@@ -60,11 +60,11 @@ export default function SopCatalogPage() {
 
   useEffect(() => { loadAll() }, [selectedDept])
 
-  // 按岗位分组
+  // 按岗位分组；Word 目录解析的行没有岗位、只有部门（大分类冒号推导），归到部门分组下
   const grouped = useMemo(() => {
     const groups: Record<string, PositionGroup> = {}
     for (const item of allData) {
-      const posName = item.position_name || '未分类'
+      const posName = item.position_name || item.department || '未分类'
       if (!groups[posName]) {
         groups[posName] = { name: posName, categories: {} }
       }
@@ -97,7 +97,7 @@ export default function SopCatalogPage() {
         title="SOP目录"
         actions={
           <Space>
-            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            <Upload accept=".xlsx,.docx" showUploadList={false} customRequest={async ({ file }) => {
               const fd = new FormData(); fd.append('file', file as File)
               try {
                 const d = await uploadSopCatalog(fd)
@@ -107,7 +107,9 @@ export default function SopCatalogPage() {
                 message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll()
               } catch (err) { message.error((err as Error)?.message || '上传失败') }
             }}>
-              <Button icon={<UploadOutlined />}>上传SOP</Button>
+              <Tooltip title="支持 Excel(.xlsx) 或 GMP 文件目录 Word(.docx)，自动解析大分类与SOP编号；旧版 .doc/.xls 请先用 Office 另存">
+                <Button icon={<UploadOutlined />}>上传SOP</Button>
+              </Tooltip>
             </Upload>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新建职位SOP</Button>
           </Space>
