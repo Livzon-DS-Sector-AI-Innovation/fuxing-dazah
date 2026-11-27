@@ -157,6 +157,20 @@ class CoaStandard(BaseModel):
     raw_extract: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True, comment="导入来源 docx 的原始提取结果（重放/复核用）"
     )
+    template_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="COA docx 模板文件存储键（QA 文件存储）"
+    )
+    template_filename: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="模板原始文件名"
+    )
+    template_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="模板文件摘要；标注与文件一致性守卫"
+    )
+    template_binding: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="人工确认后的模板标注（字段→数据位、格式规则、固定文字格）；未确认为空",
+    )
     remark: Mapped[str | None] = mapped_column(
         String(500), nullable=True, comment="备注"
     )
@@ -428,7 +442,8 @@ class CoaStandardField(BaseModel):
 class CoaReportValue(BaseModel):
     """COA 结果值：报告 × 项目。数值走 value_num，文字判定/半定量走 value_text。
 
-    保存为硬删+批量重插（矩阵单元格非审计对象）；软删列仅备用。
+    保存为硬删+批量重插；值行自身不记历史，谁在何时把哪个值从什么改成
+    什么走操作日志（service/coa/report_log 逐格前后快照）。
     """
 
     __tablename__ = "coa_report_values"
@@ -459,4 +474,54 @@ class CoaReportValue(BaseModel):
     )
     remark: Mapped[str | None] = mapped_column(
         String(500), nullable=True, comment="备注"
+    )
+
+
+class CoaRenderRecord(BaseModel):
+    """COA 生成留档：每生成（下载）一次一行，保存系统原件与当时写进去的值。
+
+    只增不改不删——报告事后被编辑或作废，这里都不动：一份 docx 是不是
+    系统出的、出的时候数据是什么，全靠这张表。跨对象只保存逻辑引用
+    （报告软删后留档必须还在）。
+    """
+
+    __tablename__ = "coa_render_records"
+    __table_args__ = (
+        Index("ix_qa_coa_render_sha256", "file_sha256"),
+        Index("ix_qa_coa_render_report", "report_id", "created_at"),
+        Index("ix_qa_coa_render_batch", "batch_no"),
+        {"schema": "qa"},
+    )
+
+    report_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_reports.id（报告作废后仍保留）"
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_products.id"
+    )
+    standard_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_standards.id"
+    )
+    standard_code: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="生成时的模板编号（快照）"
+    )
+    batch_no: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="生成时的批号（快照；验真按它找留档）"
+    )
+    filename: Mapped[str] = mapped_column(
+        String(255), nullable=False, comment="交给用户的文件名"
+    )
+    file_key: Mapped[str] = mapped_column(
+        String(255), nullable=False, comment="原件存储键（QA 文件存储）"
+    )
+    file_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="原件摘要；与送出的字节一一对应"
+    )
+    template_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="所用模板的摘要"
+    )
+    values_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="当时写进模板的内容：字段 → 登记值 → 各数据位的写入文字",
     )

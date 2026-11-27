@@ -60,6 +60,7 @@ import { QaMarkdownPreview } from './QaMarkdownPreview'
 import { usePermission } from '@/hooks/usePermission'
 import {
   fetchAprProducts,
+  fetchCoaProducts,
   fetchQaOperationLogs,
   fetchQaAiAnalysis,
   fetchQaMasterObjectProposals,
@@ -101,6 +102,7 @@ import {
 } from '@/actions/qa'
 import type {
   AprProduct,
+  CoaProduct,
   QaOperationLog,
   QaOperationLogCell,
   QaAiAnalysisRun,
@@ -399,7 +401,7 @@ function PageIntro({ view }: { view: QaView }) {
       ? 'QA 自有的稳定业务身份；可在登记时关联生产、设备及飞书组织数据。'
       : view === 'documents'
         ? '仅登记外部正式流程已经批准的文件；本模块不替代审批或电子签名。'
-        : '谁在何时改了什么、变更前后的值；当前覆盖 PQR 数据录入。'
+        : '谁在何时改了什么、变更前后的值；当前覆盖 PQR 数据录入与 COA 出具登记。'
   return <PageHeading title={title} subtitle={subtitle} />
 }
 
@@ -2997,14 +2999,33 @@ function QaAiAnalysisModal({ open, version, onClose, onConfirmed }: { open: bool
 }
 
 // ─────────────────────────────────────────────────────────────
-// 操作日志（PQR 数据变更）
+// 操作日志（PQR 数据变更、COA 出具登记）
 // ─────────────────────────────────────────────────────────────
 
-/** 动作显示名：当前来源（PQR）的动作词表；未知动作回退原码。 */
+/** 来源选项与后端 service.OPERATION_LOG_SOURCES 注册表同口径；新域接入时同步加项。 */
+const OPERATION_LOG_SOURCES = [
+  { value: 'qa.apr_batch', label: 'PQR 数据录入' },
+  { value: 'qa.coa_report', label: 'COA 出具登记' },
+]
+
+/** 动作显示名：各来源的动作词表；未知动作回退原码。 */
 const OPERATION_ACTION_META: Partial<Record<string, { label: string; color: string }>> = {
   values_saved: { label: '保存', color: 'blue' },
   values_imported: { label: '导入', color: 'purple' },
   batch_deleted: { label: '删除批次', color: 'red' },
+  report_created: { label: '登记', color: 'blue' },
+  report_updated: { label: '编辑', color: 'purple' },
+  report_voided: { label: '作废', color: 'red' },
+  report_rendered: { label: '生成 COA', color: 'green' },
+}
+
+/** 删除/作废类动作：old_value 是 { 值数量: N } 汇总，没有逐格明细。 */
+function isRemovalAction(action: string): boolean {
+  return action === 'batch_deleted' || action === 'report_voided'
+}
+
+function isCoaLog(log: QaOperationLog): boolean {
+  return log.resource_type === 'qa.coa_report'
 }
 
 function formatOperationCell(cell: QaOperationLogCell | null | undefined): string {
@@ -3016,11 +3037,19 @@ function formatOperationCell(cell: QaOperationLogCell | null | undefined): strin
   return parts.length > 0 ? parts.join('；') : '（空）'
 }
 
-/** 删除批次汇总的 old_value 形状：{ 值数量: N }，与逐格快照不同构。 */
+/** 删除/作废汇总的 old_value 形状：{ 值数量: N }，与逐格快照不同构。 */
 function deletedValueCount(log: QaOperationLog): number {
   const raw = log.old_value as Record<string, unknown> | null | undefined
   const count = raw?.值数量
   return typeof count === 'number' ? count : 0
+}
+
+/** COA 登记里值的原文可能带备注（如「复测」），逐格展示时拼在值后面。 */
+function formatOperationLocation(log: QaOperationLog): string {
+  const extra = log.extra
+  return isCoaLog(log)
+    ? `${extra.product_name || '—'} · 模板 ${extra.standard_code || '—'} · 批号 ${extra.batch_no || '—'}`
+    : `${extra.product_name || '—'} ${extra.year ?? ''} 年 批号 ${extra.batch_no || '—'} / ${extra.section_name || '—'}`
 }
 
 function QaAudit() {
@@ -3031,21 +3060,28 @@ function QaAudit() {
   const [productId, setProductId] = useState<string | undefined>()
   const [year, setYear] = useState<number | undefined>()
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
-  const [products, setProducts] = useState<AprProduct[]>([])
+  const [aprProducts, setAprProducts] = useState<AprProduct[]>([])
+  const [coaProducts, setCoaProducts] = useState<CoaProduct[]>([])
   const [page, setPage] = useState(1)
   const [rows, setRows] = useState<QaOperationLog[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<QaOperationLog | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // 年度是 PQR 独有的定位维度；COA 登记没有年度，「段」的位置放模板编号
+  const isCoaSource = resourceType === 'qa.coa_report'
 
   // 产品筛选项一次加载，失败不打扰（筛选用批号/名称仍可从行内读出）。
+  // PQR 和 COA 的产品各是各的表：按来源换清单，两边互不影响。
   useEffect(() => {
     if (!canRead) return
     let cancelled = false
     fetchAprProducts()
-      .then((data) => { if (!cancelled) setProducts(data) })
+      .then((data) => { if (!cancelled) setAprProducts(data) })
       .catch(() => { /* 下拉为空时用户仍可按时间/年度筛 */ })
+    fetchCoaProducts()
+      .then((data) => { if (!cancelled) setCoaProducts(data) })
+      .catch(() => { /* 下拉为空时用户仍可按时间/批号筛 */ })
     return () => { cancelled = true }
   }, [canRead])
 
@@ -3083,11 +3119,18 @@ function QaAudit() {
     { title: '来源', key: 'source', width: 120, render: (_, row) => row.source_label || row.resource_type || '—' },
     { title: '操作', dataIndex: 'action', key: 'action', width: 100, render: (value: string) => <Tag color={OPERATION_ACTION_META[value]?.color}>{OPERATION_ACTION_META[value]?.label ?? value}</Tag> },
     { title: '产品', key: 'product', width: 170, render: (_, row) => row.extra.product_name || '—' },
-    { title: '年度/批号', key: 'batch', width: 140, render: (_, row) => `${row.extra.year ?? '—'} / ${row.extra.batch_no || '—'}` },
-    { title: '段', key: 'section', width: 140, render: (_, row) => row.extra.section_name || '—', ellipsis: true },
+    // PQR 有年度与段；COA 登记没有年度，「段」的位置放模板编号
+    {
+      title: '年度 / 批号', key: 'batch', width: 160,
+      render: (_, row) =>
+        row.extra.year != null ? `${row.extra.year} / ${row.extra.batch_no || '—'}` : (row.extra.batch_no || '—'),
+    },
+    { title: '段 / 模板', key: 'section', width: 150, render: (_, row) => row.extra.section_name || row.extra.standard_code || '—', ellipsis: true },
     {
       title: '变更数', key: 'changed', width: 90, align: 'right',
-      render: (_, row) => row.action === 'batch_deleted' ? `${deletedValueCount(row)} 条值` : (row.extra.changed ?? Object.keys(row.new_value || {}).length),
+      // 生成 COA 不改数据，没有「变更数」可言
+      render: (_, row) =>
+        isRemovalAction(row.action) ? `${deletedValueCount(row)} 条值` : row.action === 'report_rendered' ? '—' : (row.extra.changed ?? Object.keys(row.new_value || {}).length),
     },
     { title: '详情', key: 'detail', width: 80, render: (_, row) => <Button type="link" size="small" onClick={() => setDetail(row)}>查看</Button> },
   ]
@@ -3100,10 +3143,37 @@ function QaAudit() {
     <>
       <Card variant="borderless">
         <Space wrap style={{ marginBottom: 16 }}>
-          {/* 来源选项与后端 service.OPERATION_LOG_SOURCES 注册表同口径；新域接入时同步加项 */}
-          <Select allowClear value={resourceType} onChange={(value) => { setResourceType(value); setPage(1) }} placeholder="来源" style={{ width: 150 }} options={[{ value: 'qa.apr_batch', label: 'PQR 数据录入' }]} />
-          <Select allowClear value={productId} onChange={(value) => { setProductId(value); setPage(1) }} placeholder="产品（PQR）" style={{ width: 200 }} showSearch optionFilterProp="label" options={products.map((p) => ({ value: p.id, label: p.name }))} />
-          <Select allowClear value={year} onChange={(value) => { setYear(value); setPage(1) }} placeholder="年度" style={{ width: 110 }} options={Array.from({ length: 8 }, (_, i) => new Date().getFullYear() - i).map((y) => ({ value: y, label: String(y) }))} />
+          <Select
+            allowClear
+            value={resourceType}
+            onChange={(value) => {
+              setResourceType(value)
+              setPage(1)
+              // 换来源后，原来选的产品不属于新来源的表、年度只对 PQR 有意义
+              setProductId(undefined)
+              if (value === 'qa.coa_report') setYear(undefined)
+            }}
+            placeholder="来源"
+            style={{ width: 160 }}
+            options={OPERATION_LOG_SOURCES}
+          />
+          <Select
+            allowClear
+            value={productId}
+            onChange={(value) => { setProductId(value); setPage(1) }}
+            placeholder={isCoaSource ? '产品（COA）' : '产品（PQR）'}
+            style={{ width: 200 }}
+            showSearch
+            optionFilterProp="label"
+            options={
+              isCoaSource
+                ? coaProducts.map((p) => ({ value: p.id, label: `${p.code} ${p.name}` }))
+                : aprProducts.map((p) => ({ value: p.id, label: p.name }))
+            }
+          />
+          {!isCoaSource && (
+            <Select allowClear value={year} onChange={(value) => { setYear(value); setPage(1) }} placeholder="年度" style={{ width: 110 }} options={Array.from({ length: 8 }, (_, i) => new Date().getFullYear() - i).map((y) => ({ value: y, label: String(y) }))} />
+          )}
           <DatePicker.RangePicker value={range} onChange={(value) => { setRange(value as [Dayjs | null, Dayjs | null] | null); setPage(1) }} placeholder={['开始日期', '结束日期']} />
           <Button type="primary" icon={<SearchOutlined />} onClick={() => { setPage(1); setReloadKey((value) => value + 1) }}>筛选</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { void load() }}>刷新</Button>
@@ -3116,17 +3186,21 @@ function QaAudit() {
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="时间">{formatDate(detail.created_at)}</Descriptions.Item>
             <Descriptions.Item label="操作人">{detail.actor_name || detail.actor_id || '—'}</Descriptions.Item>
-            <Descriptions.Item label="操作">{OPERATION_ACTION_META[detail.action]?.label ?? detail.action}{detail.extra.source === 'import' ? `（${detail.extra.mode === 'merge' ? '合并' : '整批替换'}）` : ''}</Descriptions.Item>
-            <Descriptions.Item label="定位">{`${detail.extra.product_name || '—'} ${detail.extra.year ?? ''} 年 批号 ${detail.extra.batch_no || '—'} / ${detail.extra.section_name || '—'}`}</Descriptions.Item>
+            <Descriptions.Item label="操作">{OPERATION_ACTION_META[detail.action]?.label ?? detail.action}{detail.extra.source === 'import' ? (isCoaLog(detail) ? '（docx 导入）' : `（${detail.extra.mode === 'merge' ? '合并' : '整批替换'}）`) : ''}</Descriptions.Item>
+            <Descriptions.Item label="定位">{formatOperationLocation(detail)}</Descriptions.Item>
           </Descriptions>
-          {detail.action === 'batch_deleted' ? (
+          {isRemovalAction(detail.action) ? (
             <>
-              <Divider plain>删除汇总</Divider>
-              <Typography.Text type="secondary">该批次及其 {deletedValueCount(detail)} 条录入值已被删除（值级联硬删，无逐格明细）。</Typography.Text>
+              <Divider plain>{detail.action === 'report_voided' ? '作废汇总' : '删除汇总'}</Divider>
+              <Typography.Text type="secondary">
+                {detail.action === 'report_voided'
+                  ? `批号 ${detail.extra.batch_no || '—'} 的登记已作废，其 ${deletedValueCount(detail)} 条检测结果不再生效；此前生成的留档和操作日志照常保留。`
+                  : `该批次及其 ${deletedValueCount(detail)} 条录入值已被删除（值级联硬删，无逐格明细）。`}
+              </Typography.Text>
             </>
           ) : (
             <>
-              <Divider plain>逐格变更</Divider>
+              <Divider plain>{detail.action === 'report_rendered' ? '生成详情' : detail.action === 'report_created' ? '录入内容' : '逐格变更'}</Divider>
               <Table
                 rowKey={(key: string) => key}
                 size="small"

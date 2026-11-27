@@ -23,6 +23,7 @@ from app.core.exceptions import AppException, NotFoundException
 from app.modules.qa.models import CoaReport, CoaSourceType, CoaStandardItem
 from app.modules.qa.repository import coa as repo
 from app.modules.qa.schemas.coa import CoaReportCreate, CoaReportUpdate, CoaValueIn
+from app.modules.qa.service.coa import template_bind
 from app.modules.qa.service.coa.ai_parse import (
     COA_AI_PROMPT_VERSION_VALUES,
     parse_docx_ai,
@@ -39,11 +40,21 @@ from app.modules.qa.service.coa.common import (
     product_dict,
     report_column_key_of,
     report_dict,
+    resolve_standard_fields,
     standard_dict,
     value_dict,
 )
 from app.modules.qa.service.coa.docx_parse import item_code, parse_date_text
-from app.modules.qa.service.coa.standards import resolve_standard_fields
+from app.modules.qa.service.coa.report_log import (
+    COA_LOG_ACTION_CREATED,
+    COA_LOG_ACTION_UPDATED,
+    COA_LOG_ACTION_VOIDED,
+    Cell,
+    diff_cells,
+    item_log_labels,
+    record_report_log,
+    report_cells,
+)
 
 
 def _parse_to_raw(parse: Any) -> dict[str, Any]:
@@ -372,6 +383,40 @@ def _zero_missing_column_targets(
             col_updates[column] = None
 
 
+async def _snapshot_cells(
+    db: AsyncSession,
+    report: CoaReport,
+    *,
+    product_name: str | None,
+    values: list[dict[str, Any]] | None = None,
+) -> dict[str, Cell]:
+    """报告当前内容的逐格快照；values 缺省取库里现值。
+
+    改动前要先取一次——值是硬删重插，改完就查不到旧值了。
+    """
+    fields, _custom = await resolve_standard_fields(db, report.standard_id)
+    item_labels = item_log_labels(await repo.list_items(db, report.standard_id))
+    return report_cells(
+        report,
+        batch_info=compose_batch_info(report, fields, product_name=product_name),
+        fields=fields,
+        values=values
+        if values is not None
+        else await repo.list_values_by_report(db, report.id),
+        item_labels=item_labels,
+    )
+
+
+async def _log_names(db: AsyncSession, report: CoaReport) -> tuple[str | None, str | None]:
+    """操作日志定位用的产品名与模板编号。"""
+    product = await repo.get_product(db, report.product_id)
+    standard = await repo.get_standard(db, report.standard_id)
+    return (
+        product.name if product else None,
+        standard.code if standard else None,
+    )
+
+
 async def get_report_detail(db: AsyncSession, report_id: uuid.UUID) -> dict[str, Any]:
     row = await get_report_or_404(db, report_id)
     values = await repo.list_values_by_report(db, row.id)
@@ -439,6 +484,17 @@ async def create_report(
             await repo.replace_report_values(db, report.id, rows)
     except IntegrityError as exc:
         raise AppException(status_code=409, message="批号冲突，请刷新后重试") from exc
+    # 登记那一刻录了什么：全部初值进操作日志（之后改值才有得比）
+    await record_report_log(
+        db,
+        action=COA_LOG_ACTION_CREATED,
+        report=report,
+        user=user,
+        product_name=product.name,
+        standard_code=standard.code,
+        new_cells=await _snapshot_cells(db, report, product_name=product.name, values=rows),
+        source=report.source,
+    )
     return await get_report_detail(db, report.id)
 
 
@@ -449,6 +505,8 @@ async def update_report(
     user: Any,
 ) -> dict[str, Any]:
     report = await get_report_or_404(db, report_id)
+    product_name, standard_code = await _log_names(db, report)
+    old_cells = await _snapshot_cells(db, report, product_name=product_name)
     updates = payload.model_dump(exclude_unset=True)
     # model_dump 会把 values 子模型降级为 dict，而校验按 CoaValueIn 属性访问 → 取原模型
     new_values = payload.values
@@ -485,6 +543,7 @@ async def update_report(
             setattr(report, key, value)
         report.batch_data = jsonb or None
     report.updated_by = _actor_id(user)
+    rows: list[dict[str, Any]] = []
     try:
         async with db.begin_nested():
             await db.flush()
@@ -493,17 +552,45 @@ async def update_report(
                 await repo.replace_report_values(db, report.id, rows)
     except IntegrityError as exc:
         raise AppException(status_code=409, message="批号冲突，请刷新后重试") from exc
+    # 逐格 diff 进操作日志；内容没变（只点了保存）不记
+    new_cells = await _snapshot_cells(
+        db, report, product_name=product_name, values=rows if new_values is not None else None
+    )
+    old_diff, new_diff = diff_cells(old_cells, new_cells)
+    if old_diff or new_diff:
+        await record_report_log(
+            db,
+            action=COA_LOG_ACTION_UPDATED,
+            report=report,
+            user=user,
+            product_name=product_name,
+            standard_code=standard_code,
+            old_cells=old_diff,
+            new_cells=new_diff,
+            changed=len(new_diff),
+        )
     return await get_report_detail(db, report_id)
 
 
 async def delete_report(db: AsyncSession, report_id: uuid.UUID, user: Any) -> None:
-    """作废 = 报告软删 + 值硬删（值矩阵单元格非审计对象）。"""
+    """作废 = 报告软删 + 值硬删；生成留档不动（系统出过的文件要一直查得到）。"""
     report = await get_report_or_404(db, report_id)
+    value_count = len(await repo.list_values_by_report(db, report.id))
+    product_name, standard_code = await _log_names(db, report)
     async with db.begin_nested():
         await repo.delete_report_values(db, report.id)
         report.is_deleted = True
         report.updated_by = _actor_id(user)
         await db.flush()
+    await record_report_log(
+        db,
+        action=COA_LOG_ACTION_VOIDED,
+        report=report,
+        user=user,
+        product_name=product_name,
+        standard_code=standard_code,
+        old_cells={"值数量": value_count},
+    )
 
 
 # ─────────────────────── 矩阵透视 ───────────────────────
@@ -567,6 +654,8 @@ async def matrix(
         fields_by_std[s.id], _custom = await resolve_standard_fields(db, s.id)
 
     std_by_id = {s.id: s for s in standards}
+    # 标注确认后字段配置变了的标准：模板状态显示「需重新核对」，出具页据此禁用生成
+    drifts = await template_bind.drift_by_standard(db, standards)
     rows = [
         report_dict(
             r,
@@ -590,6 +679,7 @@ async def matrix(
                 s,
                 item_count=len(items_by_std.get(s.id, [])),
                 items=[item_dict(i) for i in items_by_std.get(s.id, [])],
+                template_drift=drifts.get(s.id),
             )
             | {"batch_fields": fields_by_std.get(s.id, [])}
             for s in standards

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -101,10 +102,21 @@ def normalize(text: str) -> str:
     return unicodedata.normalize("NFKC", text)
 
 
+# 匹配键落 coa_standard_items.code（64 列）。中英拼接的名字很容易超过：
+# 英文复合名动辄七八十个字符，越界写库直接 500。超长时截前 56 字符并带全文摘要 8 位——
+# 仍然确定，且只在结尾不同的两个长名字不会撞成同一个键；不超过 64 的结果与从前完全一致。
+_CODE_MAX_LENGTH = 64
+_CODE_HEAD_LENGTH = 56
+
+
 def item_code(name_cn: str, name_en: str | None = None) -> str:
-    """项目稳定标识：中英拼接归一化，去空白与标点，小写。"""
+    """项目稳定标识：中英拼接归一化，去空白与标点，小写；超过列长时截断并带摘要后缀。"""
     joined = normalize(f"{name_cn}{name_en or ''}")
-    return re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", joined.lower())
+    code = re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", joined.lower())
+    if len(code) <= _CODE_MAX_LENGTH:
+        return code
+    digest = hashlib.blake2b(code.encode("utf-8"), digest_size=4).hexdigest()
+    return f"{code[:_CODE_HEAD_LENGTH]}{digest}"
 
 
 def split_bilingual(text: str | None) -> tuple[str, str | None]:

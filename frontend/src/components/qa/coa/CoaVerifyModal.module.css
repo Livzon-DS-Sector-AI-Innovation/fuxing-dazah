@@ -1,0 +1,276 @@
+/* COA 验证弹窗：上传区 → 结论 → 对不上的位置 → 生成留档。单列紧凑排布。 */
+
+.lead {
+  margin: 0 0 12px;
+  color: var(--color-slate);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* antd Dragger 自带的内边距是给整页上传用的：没选文件时居中展示，
+   选完收成一行，把高度让给下面的结论 */
+.drop.drop :global(.ant-upload.ant-upload-btn) {
+  padding: 18px 16px;
+}
+
+.dropCompact.dropCompact :global(.ant-upload.ant-upload-btn) {
+  padding: 8px 12px;
+}
+
+.dropInner {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
+.dropIcon {
+  margin: 0;
+  color: var(--color-primary);
+  font-size: 30px;
+  line-height: 1;
+}
+
+.dropText {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.dropHint {
+  margin: 0;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fileBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 0;
+  text-align: left;
+}
+
+.fileIcon {
+  flex: none;
+  color: var(--color-primary);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.fileName {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.fileHint {
+  flex: none;
+  color: var(--color-steel);
+  font-size: 12px;
+}
+
+.pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  color: var(--color-slate);
+  font-size: 13px;
+}
+
+/* 结论块：底色和描边用语义色，一眼分清三种结果 */
+.verdict {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 14px 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+}
+
+.verdict[data-tone='success'] {
+  background: var(--color-tint-mint);
+  border-color: var(--color-success);
+}
+
+.verdict[data-tone='warning'] {
+  background: var(--color-tint-peach);
+  border-color: var(--color-warning);
+}
+
+.verdict[data-tone='error'] {
+  background: var(--color-tint-rose);
+  border-color: var(--color-error);
+}
+
+.verdictHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.verdictIcon {
+  flex: none;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.verdict[data-tone='success'] .verdictIcon {
+  color: var(--color-success);
+}
+
+.verdict[data-tone='warning'] .verdictIcon {
+  color: var(--color-warning);
+}
+
+.verdict[data-tone='error'] .verdictIcon {
+  color: var(--color-error);
+}
+
+.verdictTitle {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  color: var(--color-ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.verdictText {
+  margin: 0;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.verdictMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  margin: 0;
+  color: var(--color-slate);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.verdictMeta dt,
+.verdictMeta dd {
+  margin: 0;
+}
+
+.verdictMeta dt::after {
+  content: '：';
+}
+
+.verdictMeta dd {
+  color: var(--color-ink);
+  font-weight: 500;
+}
+
+.older {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 2px;
+  color: var(--color-slate);
+  font-size: 12px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  margin: 0;
+  color: var(--color-slate);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.hash {
+  color: var(--color-steel);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.section {
+  margin: 16px 0 0;
+}
+
+.sectionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 8px;
+}
+
+.sectionTitle {
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sectionMeta {
+  color: var(--color-slate);
+  font-size: 12px;
+}
+
+.sectionBad {
+  color: var(--color-error);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.recordSearch {
+  flex: 0 1 200px;
+  min-inline-size: 140px;
+  margin-inline-start: auto;
+}
+
+.differences {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.emptyValue {
+  color: var(--color-stone);
+}
+
+.changedValue {
+  color: var(--color-error);
+  font-weight: 600;
+}
+
+.problem {
+  color: var(--color-error);
+}
+
+.fine {
+  color: var(--color-stone);
+}
+
+/* 留档清单：批号一行认出来，模板和人名退成第二行小字 */
+.recordPrimary {
+  color: var(--color-ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.recordSecondary {
+  margin: 2px 0 0;
+  color: var(--color-slate);
+  font-size: 12px;
+}

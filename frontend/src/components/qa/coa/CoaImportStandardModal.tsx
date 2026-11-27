@@ -2,7 +2,7 @@
 
 import { useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Drawer, Form, Input, Radio, Upload } from 'antd'
+import { App, Button, Checkbox, Drawer, Form, Input, Radio, Upload } from 'antd'
 import {
   CheckCircleFilled,
   FileWordOutlined,
@@ -17,13 +17,20 @@ import {
   createCoaStandard,
   replaceCoaProductFields,
 } from '@/actions/qa'
-import { fetchCoaProductFields, importCoaStandardPreview } from '@/lib/api/qa'
+import { fetchCoaProductFields, fetchCoaStandards, importCoaStandardPreview } from '@/lib/api/qa'
 import type {
   CoaItemInput,
   CoaProduct,
   CoaProductFieldInput,
+  CoaStandard,
   CoaStandardImportPreview,
 } from '@/types/qa'
+import {
+  focusFirstError,
+  standardCodeRule,
+  STANDARD_CODE_VALIDATE_TRIGGER,
+  takenCodeMessage,
+} from './coaStandardCode'
 import {
   CoaItemsEditTable,
   rowsToItemPayload,
@@ -43,6 +50,16 @@ import styles from './CoaImportStandardModal.module.css'
 
 export interface DraftPanelHandle {
   save: () => void
+}
+
+/** 导入落库后的去向：新建的标准（和顺手新建的产品）、这份 docx，以及要不要接着去标注。 */
+export interface CoaImportedStandard {
+  standard: CoaStandard
+  /** 导入时新建的产品；选的是已有产品时为 null */
+  product: CoaProduct | null
+  file: File
+  /** 勾了「保存后用这份 docx 标注模板」 */
+  annotate: boolean
 }
 
 /** 草稿表单面板：useForm 随本组件挂载即连接（解析完成才渲染，避免悬空实例）。 */
@@ -67,10 +84,24 @@ function DraftPanel({
 }) {
   const { message } = App.useApp()
   const [form] = Form.useForm()
-  // 产品去向：已有产品 id，或 'new'（用解析建议建品）
-  const [productTarget, setProductTarget] = useState<string | null>(
-    preview.product ? preview.product.id : preview.product_draft.code ? 'new' : null
-  )
+  // 产品去向存在表单里（已有产品 id，或 'new' 用解析建议建品）：
+  // 模板编号只在产品内唯一，编号字段依赖它，换产品时表单会自己重查
+  const productTarget = Form.useWatch('productTarget', form)
+  const product = products.find((p) => p.id === productTarget)
+  const standardsQuery = useQuery({
+    queryKey: ['qa', 'coa', 'standards', product?.id],
+    queryFn: () => fetchCoaStandards(product!.id),
+    enabled: !!product,
+  })
+  const uniqueness = {
+    productCode: product?.code,
+    fix: '换个编号或改选产品',
+  }
+  // 编号栏被动过就交给常规校验（失焦/提交）。没动过时先把撞号的事实摆出来：
+  // AI 建议的编号常常就是已有标准的编号，不该等填完几十项、点了保存才知道
+  const [codeEdited, setCodeEdited] = useState(false)
+  const code = Form.useWatch('code', form)
+  const takenHint = codeEdited ? undefined : takenCodeMessage(code, standardsQuery.data, uniqueness)
   // 解析结果可编辑：行集本地态，保存时整体提交（增删改/排序都在预览里完成）
   const [rows, setRows] = useState<CoaItemRow[]>(() =>
     preview.standard_draft.items.map(toItemRow)
@@ -93,13 +124,12 @@ function DraftPanel({
   }
 
   const handleSave = async () => {
-    // 校验失败时 antd 已在字段上标红，这里只中断，不再向外抛 rejection
-    const values = await form.validateFields().catch(() => null)
+    // 校验失败时 antd 已在字段上标红，这里把焦点送过去并中断，不再向外抛 rejection
+    const values = await form.validateFields().catch(() => {
+      focusFirstError(form)
+      return null
+    })
     if (!values) return
-    if (!productTarget) {
-      message.warning('请选择归属产品')
-      return
-    }
     const problem = validateItemRows(rows)
     if (problem) {
       message.warning(problem)
@@ -111,7 +141,7 @@ function DraftPanel({
       return
     }
     await onSave({
-      productTarget,
+      productTarget: values.productTarget,
       code: values.code,
       name: values.name,
       customer: values.customer ?? '',
@@ -132,45 +162,57 @@ function DraftPanel({
             <p className={styles.sectionHint}>保存后仍可在标准编辑器中继续调整项目</p>
           </div>
         </header>
-        <Radio.Group
-          className={styles.productGroup}
-          value={productTarget ?? undefined}
-          onChange={(e) => setProductTarget(e.target.value)}
-        >
-          {products.map((product) => (
-            <Radio.Button key={product.id} value={product.id}>
-              {product.code} {product.name}
-            </Radio.Button>
-          ))}
-          {preview.product_draft.code && (
-            <Radio.Button value="new">
-              <PlusOutlined /> 新建 {preview.product_draft.code} {preview.product_draft.name}
-            </Radio.Button>
-          )}
-        </Radio.Group>
         <Form
           form={form}
           layout="vertical"
-          className={styles.form}
+          className={styles.formBody}
           initialValues={{
+            // 已有产品 / 用解析建议建品 / 都没有（要人选）
+            productTarget: preview.product?.id ?? (preview.product_draft.code ? 'new' : undefined),
             code: preview.standard_draft.code ?? '',
             name: preview.standard_draft.name,
             customer: preview.standard_draft.customer ?? '',
           }}
         >
           <Form.Item
-            name="code"
-            label="模板编号"
-            rules={[{ required: true, message: '请填写模板编号（报告编号中缀）' }]}
+            name="productTarget"
+            className={styles.productItem}
+            rules={[{ required: true, message: '请选择归属产品' }]}
           >
-            <Input placeholder="如 3205" />
+            <Radio.Group className={styles.productGroup}>
+              {products.map((option) => (
+                <Radio.Button key={option.id} value={option.id}>
+                  {option.code} {option.name}
+                </Radio.Button>
+              ))}
+              {preview.product_draft.code && (
+                <Radio.Button value="new">
+                  <PlusOutlined /> 新建 {preview.product_draft.code} {preview.product_draft.name}
+                </Radio.Button>
+              )}
+            </Radio.Group>
           </Form.Item>
-          <Form.Item name="name" label="标准名称" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="customer" label="客户">
-            <Input placeholder="可选" />
-          </Form.Item>
+          <div className={styles.form}>
+            <Form.Item
+              name="code"
+              label="模板编号"
+              dependencies={['productTarget']}
+              validateTrigger={STANDARD_CODE_VALIDATE_TRIGGER}
+              help={takenHint}
+              rules={[
+                { required: true, message: '请填写模板编号（报告编号中缀）' },
+                standardCodeRule(standardsQuery.data, uniqueness),
+              ]}
+            >
+              <Input placeholder="如 3205" onChange={() => setCodeEdited(true)} />
+            </Form.Item>
+            <Form.Item name="name" label="标准名称" rules={[{ required: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="customer" label="客户">
+              <Input placeholder="可选" />
+            </Form.Item>
+          </div>
         </Form>
       </section>
 
@@ -319,7 +361,7 @@ export function CoaImportStandardModal({
 }: {
   onClose: () => void
   products: CoaProduct[]
-  onSaved: () => void
+  onSaved: (imported: CoaImportedStandard) => void
 }) {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
@@ -327,6 +369,8 @@ export function CoaImportStandardModal({
   const [preview, setPreview] = useState<CoaStandardImportPreview | null>(null)
   const [parsing, setParsing] = useState(false)
   const [saving, setSaving] = useState(false)
+  // 保存后要不要直接进模板标注：默认接着标（导入模板多半是为了生成 COA），不想标就取消勾选
+  const [annotateAfter, setAnnotateAfter] = useState(true)
   // 重新选文件时整块草稿重挂载（表单 initialValues / 行集都按新解析结果重置）
   const [previewSeq, setPreviewSeq] = useState(0)
   const draftRef = useRef<DraftPanelHandle>(null)
@@ -354,10 +398,12 @@ export function CoaImportStandardModal({
     items: CoaItemInput[]
     fields: CoaProductFieldInput[]
   }) => {
-    if (!preview) return
+    // 解析结果存在时文件一定已经选了（file 是它的来源）
+    if (!preview || !file) return
     setSaving(true)
     try {
       let productId: string
+      let product: CoaProduct | null = null
       let batchFields: CoaProductFieldInput[] | null = null
       if (input.productTarget === 'new') {
         const draft = preview.product_draft
@@ -371,6 +417,7 @@ export function CoaImportStandardModal({
           return
         }
         productId = created.data.id
+        product = created.data
         // 新产品的第一份字段集=产品默认（草稿直接落默认，标准不再带覆盖）
         const fieldsResult = await replaceCoaProductFields(productId, input.fields)
         if (!fieldsResult.success) {
@@ -391,13 +438,19 @@ export function CoaImportStandardModal({
         batch_fields: batchFields,
         raw_extract: preview.raw_extract,
       })
-      if (!result.success) {
+      if (!result.success || !result.data) {
         message.error(actionError(result))
         return
       }
-      message.success(`标准已创建（${input.items.length} 个项目）`)
+      message.success(
+        annotateAfter
+          ? `标准已创建（${input.items.length} 个项目）`
+          : `标准已创建（${input.items.length} 个项目）。要生成 COA 时点「模板标注」，这份 docx 还留着`,
+        annotateAfter ? undefined : 6
+      )
       void queryClient.invalidateQueries({ queryKey: ['qa', 'coa'] })
-      onSaved()
+      // 这份 docx 接着作为标准的 COA 模板：页面落到新建的标准上，勾了就去标注
+      onSaved({ standard: result.data, product, file, annotate: annotateAfter })
       onClose()
     } finally {
       setSaving(false)
@@ -410,7 +463,7 @@ export function CoaImportStandardModal({
         <div>
           <div className={styles.modalTitle}>导入 docx 生成客户标准</div>
           <div className={styles.modalSubtitle}>
-            从历史 COA 报告提取检测项目，确认后保存为标准
+            从 COA 模板提取检测项目，确认后保存为标准；这份 docx 可以直接留作模板，不用再上传一次
           </div>
         </div>
       }
@@ -427,6 +480,16 @@ export function CoaImportStandardModal({
       }}
       footer={
         <div className={styles.footer}>
+          {preview && (
+            <Checkbox
+              className={styles.footerOption}
+              checked={annotateAfter}
+              disabled={saving}
+              onChange={(e) => setAnnotateAfter(e.target.checked)}
+            >
+              保存后用这份 docx 标注模板
+            </Checkbox>
+          )}
           <Button onClick={onClose}>取消</Button>
           {preview && (
             <Button

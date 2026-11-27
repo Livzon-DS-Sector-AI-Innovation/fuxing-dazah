@@ -14,10 +14,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.qa.service.apr.common import APR_LOG_ACTIONS
+from app.modules.qa.service.coa.report_log import COA_LOG_ACTIONS
 
-# 当前唯一来源：PQR 数据变更。新域接入 = 写入方 + 这里加一行。
+# 来源域：PQR 数据变更、COA 出具登记（登记/编辑/作废/生成）。新域接入 = 写入方 + 这里加一行。
 OPERATION_LOG_SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
     "qa.apr_batch": ("PQR 数据录入", APR_LOG_ACTIONS),
+    "qa.coa_report": ("COA 出具登记", COA_LOG_ACTIONS),
 }
 
 

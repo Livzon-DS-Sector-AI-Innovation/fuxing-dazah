@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import {
   App,
   Button,
@@ -10,6 +10,7 @@ import {
   Form,
   Input,
   Modal,
+  Popover,
   Select,
   Spin,
   Table,
@@ -24,11 +25,14 @@ import {
   ExclamationCircleFilled,
   FileAddOutlined,
   FileTextOutlined,
+  FileWordOutlined,
   InboxOutlined,
   LeftOutlined,
   LoadingOutlined,
   PlusOutlined,
   RightOutlined,
+  SafetyCertificateOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { actionError } from '@/components/qa/deviation/shared'
@@ -59,9 +63,33 @@ import {
   toResultDraft,
 } from './CoaResultInput'
 import type { CoaResultDraft } from './CoaResultInput'
-import { confirmAsync, DANGER_OK_PROPS } from './CoaShared'
+import { confirmAsync, DANGER_OK_PROPS, TemplateStatusTag } from './CoaShared'
+import {
+  CoaLimitList,
+  CoaLimitMark,
+  CoaLimitPill,
+  CoaLimitTally,
+  prefersReducedMotion,
+  useJumpNextHit,
+  useSettledInput,
+} from './CoaLimitFlag'
+import type { CoaLimitListRow } from './CoaLimitFlag'
+import {
+  collectLimitHits,
+  limitCaption,
+  limitCountsText,
+  limitHitDetail,
+  limitHitLabel,
+  limitTallyText,
+  specLimitOf,
+  tallyLimitHits,
+} from './coaSpecLimit'
+import type { CoaItemLimitHit } from './coaSpecLimit'
+import { CoaRenderModal } from './CoaRenderModal'
+import { CoaVerifyModal } from './CoaVerifyModal'
 import { reportColumnKeyOf, stripBuiltinFields } from './CoaBatchFieldsEditor'
 import type { CoaReportColumn } from './CoaBatchFieldsEditor'
+import limitStyles from './CoaLimitFlag.module.css'
 import styles from './CoaIssuancePage.module.css'
 
 /** 模板单选下拉的展示名。 */
@@ -69,9 +97,34 @@ function standardLabel(s: CoaStandard) {
   return `${s.code} ${s.name}${s.customer ? ` · ${s.customer}` : ''}`
 }
 
-/** 矩阵值：数值等宽居中；文字单行省略；空值弱化。 */
-function MatrixValue({ value }: { value?: { num: number | null; text: string | null } }) {
+/** 出具记录表里一格越界结果：哪份报告、哪个项目、怎么越的。 */
+interface CoaLimitCell {
+  /** `${报告 id}:${项目 id}`，同时是清单行键与单元格 DOM id 的来源 */
+  key: string
+  report: CoaReport
+  detail: CoaItemLimitHit
+}
+
+/** 清单定位用的单元格 DOM id。 */
+const limitCellDomId = (key: string) => `coa-limit-cell-${key}`
+
+/** 矩阵值：越界格套底色 + 左缘竖条；数值等宽居中；文字单行省略；空值弱化。 */
+function MatrixValue({
+  value,
+  cell,
+}: {
+  value?: { num: number | null; text: string | null }
+  /** 这一格的越界判定；没有就越界之外的原样显示 */
+  cell?: CoaLimitCell
+}) {
   if (!value) return <span className={styles.emptyCell}>—</span>
+  if (cell) {
+    return (
+      <CoaLimitPill hit={cell.detail.hit} title={limitHitDetail(cell.detail)}>
+        {value.num != null ? value.num : value.text}
+      </CoaLimitPill>
+    )
+  }
   if (value.num != null) return <span className={styles.numValue}>{value.num}</span>
   if (!value.text) return <span className={styles.emptyCell}>—</span>
   return (
@@ -116,10 +169,12 @@ const PANEL_FORM_LAYOUT = {
 } as const
 
 /** 检测结果录入单的列：序号 / 检测项目 / 标准要求 / 结果。手工登记与导入登记共用，
- *  两处录入单永远同构。 */
+ *  两处录入单永远同构。结果格顺带判越界：正在输入的那格先不判，离开或停手再判
+ *  （settling 来自 useSettledInput）。 */
 function resultSheetColumns(
   draftOf: (item: CoaStandardItem) => CoaResultDraft,
   onDraftChange: (item: CoaStandardItem, draft: CoaResultDraft) => void,
+  settling: { unsettledId: string | null; settle: () => void },
 ): ColumnsType<CoaStandardItem> {
   return [
     {
@@ -155,6 +210,10 @@ function resultSheetColumns(
           label={row.name_cn}
           draft={draftOf(row)}
           unit={row.unit ?? null}
+          limit={specLimitOf(row)}
+          specText={row.spec_text}
+          settled={row.id !== settling.unsettledId}
+          onBlur={settling.settle}
           onChange={(next) => onDraftChange(row, next)}
         />
       ),
@@ -220,6 +279,16 @@ function CoaReportFormModal({
     valueDraft[it.id] ?? emptyResultDraft(it.value_type)
   const filledCount = items.filter((it) => draftOf(it).raw.trim() !== '').length
 
+  // 越界项（读时派生）：正在输入的那格先不判，免得敲到一半闪一下超标
+  const settling = useSettledInput()
+  const jumpNextHit = useJumpNextHit()
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const limitHitsOf = (unsettledId: string | null) =>
+    collectLimitHits(items, (item) =>
+      item.id === unsettledId ? undefined : { num: draftOf(item).num, text: draftOf(item).raw },
+    )
+  const limitHits = limitHitsOf(settling.unsettledId)
+
   // 编辑态回填：头字段 + 动态批次字段（batch_info 键=字段键；date 转 dayjs）。
   // setFieldsValue 是 antd 命令式 API 而非 setState，放 effect 不触发渲染期更新
   useEffect(() => {
@@ -274,7 +343,11 @@ function CoaReportFormModal({
         message.error(actionError(result))
         return
       }
-      message.success(editing ? '报告已更新' : '出具登记完成')
+      // 越界只提醒不拦：存完了再点名有几项超出标准限度
+      const tally = limitTallyText(limitHitsOf(null))
+      const done = editing ? '报告已更新' : '出具登记完成'
+      if (tally) message.warning(`${done}，${tally}`)
+      else message.success(done)
       onSaved()
       onClose()
     } finally {
@@ -326,11 +399,16 @@ function CoaReportFormModal({
           <section className={styles.entrySheet}>
             <div className={styles.entryHead}>
               <h3 className={styles.entryTitle}>检测结果</h3>
-              <span className={styles.sheetMeta}>
-                已填 {filledCount} / {items.length}
+              <span className={styles.sheetMetaGroup}>
+                <span className={styles.sheetMeta}>
+                  已填 {filledCount} / {items.length}
+                </span>
+                {limitHits.length > 0 && (
+                  <CoaLimitTally hits={limitHits} onJump={() => jumpNextHit(sheetRef.current)} />
+                )}
               </span>
             </div>
-            <div className={styles.sheetScroll} data-coa-result-scope>
+            <div className={styles.sheetScroll} data-coa-result-scope ref={sheetRef}>
               <Table<CoaStandardItem>
                 rowKey="id"
                 size="small"
@@ -341,8 +419,13 @@ function CoaReportFormModal({
                 locale={{
                   emptyText: <div className={styles.inlineEmpty}>该模板还没有检测项目</div>,
                 }}
-                columns={resultSheetColumns(draftOf, (item, next) =>
-                  setDraftOverrides((prev) => ({ ...prev, [item.id]: next })),
+                columns={resultSheetColumns(
+                  draftOf,
+                  (item, next) => {
+                    settling.markUnsettled(item.id)
+                    setDraftOverrides((prev) => ({ ...prev, [item.id]: next }))
+                  },
+                  settling,
                 )}
               />
             </div>
@@ -425,6 +508,9 @@ interface CoaImportEntry {
   /** 登记成功后的批号与结果数（文件列表与完成态用）。 */
   registeredBatchNo?: string | null
   registeredValues?: number
+  /** 登记时的越界计数：overs=确定超出，possible=可能超限。 */
+  registeredOvers?: number
+  registeredPossible?: number
 }
 
 interface ParseJob {
@@ -432,6 +518,9 @@ interface ParseJob {
   file: File
   standardId: string | null
 }
+
+/** 录入单的输入停手状态（见 useSettledInput）。 */
+type Settling = ReturnType<typeof useSettledInput>
 
 const coaStandardDetailQuery = (standardId: string) => ({
   queryKey: ['qa', 'coa', 'standard-detail', standardId],
@@ -470,6 +559,22 @@ function importBatchValue(entry: CoaImportEntry, key: string): string {
 /** 这份文件登记前还缺的必填项（批号/流水号，识别或补填都算）。 */
 function importMissingHead(entry: CoaImportEntry): Array<'batch_no' | 'serial_no'> {
   return (['batch_no', 'serial_no'] as const).filter((key) => !importBatchValue(entry, key).trim())
+}
+
+/** 这份文件的越界结果：按模板项目的当前草稿现判。模板项目还没就绪时返回 null（不判）；
+ *  正在输入的那格（unsettledId）同样先不判。 */
+function importLimitHits(
+  entry: CoaImportEntry,
+  items: CoaStandardItem[] | undefined,
+  unsettledId: string | null = null,
+): CoaItemLimitHit[] | null {
+  if (!entry.preview || !items) return null
+  const valueDraft = { ...importMatchedBase(entry.preview), ...entry.valueEdits }
+  return collectLimitHits(items, (item) => {
+    const draft = valueDraft[item.id]
+    if (!draft?.raw.trim() || item.id === unsettledId) return undefined
+    return { num: draft.num, text: draft.raw }
+  })
 }
 
 /** 登记载荷。自定义批次字段 → batch_data（原文照传，日期由后端按字段口径确定性解析）；
@@ -518,11 +623,14 @@ function buildImportPayload(entry: CoaImportEntry, standardDetail: CoaStandard):
 function CoaImportFileReview({
   entry,
   standards,
+  settling,
   onPatch,
   onStandardChange,
 }: {
   entry: CoaImportEntry & { preview: CoaReportImportPreview }
   standards: CoaStandard[]
+  /** 输入停手状态由弹窗持有：文件列表的越界计数与审核区同一口径（输入中的那格先不判）。 */
+  settling: Settling
   onPatch: (patch: Partial<CoaImportEntry>) => void
   onStandardChange: (standardId: string) => void
 }) {
@@ -544,6 +652,11 @@ function CoaImportFileReview({
     valueDraft[it.id] ?? emptyResultDraft(it.value_type)
   const filledCount = items.filter((it) => draftOf(it).raw.trim() !== '').length
   const unmatchedCount = preview.unmatched_items.length
+
+  // 越界项：识别值预填后就判，行内改了跟着变；正在输入的那格先不判（settling 由弹窗传入）
+  const jumpNextHit = useJumpNextHit()
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const limitHits = importLimitHits(entry, items, settling.unsettledId) ?? []
 
   const product = preview.product
   const productDraft = preview.product_draft
@@ -599,14 +712,23 @@ function CoaImportFileReview({
                   返回检测结果
                 </Button>
               ) : (
-                <span className={styles.sheetMeta}>
-                  已填 {filledCount} / {items.length}
+                <span className={styles.sheetMetaGroup}>
+                  <span className={styles.sheetMeta}>
+                    已填 {filledCount} / {items.length}
+                  </span>
+                  {limitHits.length > 0 && (
+                    <CoaLimitTally
+                      hits={limitHits}
+                      onJump={() => jumpNextHit(sheetRef.current)}
+                    />
+                  )}
                 </span>
               )}
             </div>
             <div
               className={styles.sheetScroll}
               data-coa-result-scope={entry.view === 'results' ? '' : undefined}
+              ref={sheetRef}
             >
               {entry.view === 'unmatched' ? (
                 <Table
@@ -672,8 +794,13 @@ function CoaImportFileReview({
                       <div className={styles.inlineEmpty}>该模板还没有检测项目</div>
                     ),
                   }}
-                  columns={resultSheetColumns(draftOf, (item, next) =>
-                    onPatch({ valueEdits: { ...entry.valueEdits, [item.id]: next } }),
+                  columns={resultSheetColumns(
+                    draftOf,
+                    (item, next) => {
+                      settling.markUnsettled(item.id)
+                      onPatch({ valueEdits: { ...entry.valueEdits, [item.id]: next } })
+                    },
+                    settling,
                   )}
                 />
               )}
@@ -807,12 +934,14 @@ function CoaImportFileReview({
 function CoaImportSlide({
   entry,
   standards,
+  settling,
   onPatch,
   onStandardChange,
   onRetry,
 }: {
   entry: CoaImportEntry
   standards: CoaStandard[]
+  settling: Settling
   onPatch: (patch: Partial<CoaImportEntry>) => void
   onStandardChange: (standardId: string) => void
   onRetry: () => void
@@ -834,11 +963,25 @@ function CoaImportSlide({
     )
   }
   if (entry.status === 'registered') {
+    // 越界只提醒不拦：登记照常完成，完成态里把有几项超出标准限度再点一次名
+    const tally = limitCountsText({
+      overs: entry.registeredOvers ?? 0,
+      possible: entry.registeredPossible ?? 0,
+    })
     return (
       <div className={styles.stateBlock}>
         <CheckCircleFilled className={`${styles.stateIcon} ${styles.stateIconOk}`} />
         <b>已登记批号 {entry.registeredBatchNo}</b>
         <span>{entry.registeredValues ?? 0} 项检测结果已录入</span>
+        {tally && (
+          <span
+            className={`${limitStyles.mark} ${
+              entry.registeredOvers ? limitStyles.markOvers : limitStyles.markPossible
+            }`}
+          >
+            {tally}
+          </span>
+        )}
       </div>
     )
   }
@@ -847,6 +990,7 @@ function CoaImportSlide({
       <CoaImportFileReview
         entry={{ ...entry, preview: entry.preview }}
         standards={standards}
+        settling={settling}
         onPatch={onPatch}
         onStandardChange={onStandardChange}
       />
@@ -888,6 +1032,28 @@ function CoaImportReportModal({
   const waiting = useRef<ParseJob[]>([])
   const entrySeq = useRef(0)
   const pendingBatch = useRef<File[]>([])
+
+  // 输入停手状态放在弹窗层：审核区的标记和文件列表的越界计数共用同一口径，
+  // 输入中的那格两边都先不判
+  const settling = useSettledInput()
+
+  // 文件列表第二行要报「N 项超出标准限度」：取各份文件所用模板的项目
+  // （同一模板只取一次，和审核区共用详情接口的缓存）
+  const railStandardIds = [
+    ...new Set(
+      entries.flatMap((entry) =>
+        entry.status === 'ready' && entry.preview?.standard ? [entry.preview.standard.id] : [],
+      ),
+    ),
+  ]
+  const railDetails = useQueries({
+    queries: railStandardIds.map((id) => coaStandardDetailQuery(id)),
+  })
+  const railItemsByStandard: Record<string, CoaStandardItem[]> = Object.fromEntries(
+    railDetails.flatMap((result, index) =>
+      result.data ? [[railStandardIds[index], result.data.items ?? []] as const] : [],
+    ),
+  )
 
   const patchEntry = (id: string, patch: Partial<CoaImportEntry>) =>
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)))
@@ -942,6 +1108,7 @@ function CoaImportReportModal({
 
   const reset = () => {
     waiting.current.length = 0
+    settling.settle()
     setEntries([])
     setCurrentId(null)
     setLeaving(null)
@@ -1059,14 +1226,20 @@ function CoaImportReportModal({
         message.error(actionError(result))
         return
       }
+      const { overs, possible } = tallyLimitHits(importLimitHits(entry, detail.items) ?? [])
+      const batchNo = result.data?.batch_no ?? payload.batch_no
+      const count = payload.values?.length ?? 0
       patchEntry(entry.id, {
         status: 'registered',
-        registeredBatchNo: result.data?.batch_no ?? payload.batch_no,
-        registeredValues: payload.values?.length ?? 0,
+        registeredBatchNo: batchNo,
+        registeredValues: count,
+        registeredOvers: overs,
+        registeredPossible: possible,
       })
-      message.success(
-        `已登记批号 ${result.data?.batch_no ?? payload.batch_no}（${payload.values?.length ?? 0} 项结果）`
-      )
+      // 越界只提醒不拦：登记照常完成，提示里点名有几项超出标准限度
+      const tally = limitCountsText({ overs, possible })
+      if (tally) message.warning(`已登记批号 ${batchNo}（${count} 项结果），${tally}`)
+      else message.success(`已登记批号 ${batchNo}（${count} 项结果）`)
       onSaved()
       // 去向按「登记后的列表」算：这里拿到的是点击那一刻的闭包，用本地副本
       const nextList = entries.map((e) =>
@@ -1090,13 +1263,42 @@ function CoaImportReportModal({
     },
     { parsing: 0, ready: 0, failed: 0, registered: 0 } as Record<ImportEntryStatus, number>,
   )
-  // 文件列表第二行：这份文件现在卡在哪
+  // 文件列表第二行：这份文件现在卡在哪；有越界结果时改报越界计数，没卡住才报模板码
+  const railHitsOf = (e: CoaImportEntry): CoaItemLimitHit[] | null =>
+    e.status === 'ready' && e.preview?.standard
+      ? importLimitHits(
+          e,
+          railItemsByStandard[e.preview.standard.id],
+          e.id === currentId ? settling.unsettledId : null,
+        )
+      : null
+  /** 列表里报的越界计数：待审的按当前草稿现判，已登记的用登记时的计数。 */
+  const railTallyOf = (e: CoaImportEntry): { overs: number; possible: number } =>
+    e.status === 'registered'
+      ? { overs: e.registeredOvers ?? 0, possible: e.registeredPossible ?? 0 }
+      : tallyLimitHits(railHitsOf(e) ?? [])
   const railSub = (e: CoaImportEntry): string => {
     if (e.status === 'parsing') return e.preview ? '重新解析中…' : '解析中…'
     if (e.status === 'failed') return '解析失败'
-    if (e.status === 'registered') return `已登记 · 批号 ${e.registeredBatchNo ?? '—'}`
+    const tally = railTallyOf(e)
+    if (e.status === 'registered') {
+      // 这一栏窄：越界只报统称和项数，批号不冠「批号」二字，免得越界那段被截掉
+      const flagged = tally.overs + tally.possible
+      return `已登记 · ${e.registeredBatchNo ?? '—'}${
+        flagged ? ` · ${limitCaption(tally)} ${flagged}` : ''
+      }`
+    }
     if (!e.preview?.standard) return '未匹配客户标准'
-    return importMissingHead(e).length ? '待填批号 / 流水号' : e.preview.standard.code
+    if (importMissingHead(e).length) return '待填批号 / 流水号'
+    return limitCountsText(tally) || e.preview.standard.code
+  }
+  /** 第二行的越界着色：有确定超标的用红色，只有可能超限的用橙色。
+   *  还卡在批号/流水号时文字报的是待填，不着越界色（越界由图标带出）。 */
+  const railTone = (e: CoaImportEntry): string => {
+    if (e.status === 'ready' && importMissingHead(e).length) return ''
+    const { overs, possible } = railTallyOf(e)
+    if (overs + possible === 0) return ''
+    return overs > 0 ? styles.railOvers : styles.railPossible
   }
   const railIcon = (e: CoaImportEntry) => {
     if (e.status === 'parsing') return <LoadingOutlined className={styles.railIconSpin} />
@@ -1104,6 +1306,15 @@ function CoaImportReportModal({
       return <ExclamationCircleFilled className={styles.railIconError} />
     }
     if (e.status === 'registered') return <CheckCircleFilled className={styles.railIconOk} />
+    const { overs, possible } = railTallyOf(e)
+    // 待填批号/流水号 与 越界 同用警示图标：越界用红/橙区分，待填是琥珀
+    if (overs + possible > 0) {
+      return (
+        <ExclamationCircleFilled
+          className={overs > 0 ? styles.railIconOvers : styles.railIconWarn}
+        />
+      )
+    }
     if (!e.preview?.standard || importMissingHead(e).length) {
       return <ExclamationCircleFilled className={styles.railIconWarn} />
     }
@@ -1274,7 +1485,7 @@ function CoaImportReportModal({
                       <span className={styles.railName} title={e.file.name}>
                         {e.file.name}
                       </span>
-                      <span className={styles.railSub}>{railSub(e)}</span>
+                      <span className={`${styles.railSub} ${railTone(e)}`}>{railSub(e)}</span>
                     </span>
                     <span className={styles.railIcon}>{railIcon(e)}</span>
                   </button>
@@ -1297,6 +1508,7 @@ function CoaImportReportModal({
                 <CoaImportSlide
                   entry={leavingEntry}
                   standards={standards}
+                  settling={settling}
                   onPatch={(patch) => patchEntry(leavingEntry.id, patch)}
                   onStandardChange={(standardId) => changeStandard(leavingEntry.id, standardId)}
                   onRetry={() => retryEntry(leavingEntry.id)}
@@ -1322,6 +1534,7 @@ function CoaImportReportModal({
                 <CoaImportSlide
                   entry={current}
                   standards={standards}
+                  settling={settling}
                   onPatch={(patch) => patchEntry(current.id, patch)}
                   onStandardChange={(standardId) => changeStandard(current.id, standardId)}
                   onRetry={() => retryEntry(current.id)}
@@ -1333,6 +1546,16 @@ function CoaImportReportModal({
       )}
     </Modal>
   )
+}
+
+/** 这份报告在这一列上的越界格。合并列跨标准共用一列，但一份报告只属一个标准，
+ *  至多命中其中一个项目。 */
+function limitCellOf(record: CoaReport, itemIds: string[], limitByKey: Map<string, CoaLimitCell>) {
+  for (const id of itemIds) {
+    const cell = limitByKey.get(`${record.id}:${id}`)
+    if (cell) return cell
+  }
+  return undefined
 }
 
 export function CoaIssuancePage() {
@@ -1353,6 +1576,10 @@ export function CoaIssuancePage() {
   const [importOpen, setImportOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [editing, setEditing] = useState<CoaReport | null>(null)
+  // 正在生成 COA 的报告（预检/下载弹窗按它挂载）
+  const [rendering, setRendering] = useState<CoaReport | null>(null)
+  // 验证弹窗：一份 docx 是不是系统出的、生成后有没有被改
+  const [verifyOpen, setVerifyOpen] = useState(false)
 
   /** 把局部改动合并进当前查询串；空值即删除该参数。 */
   const syncUrl = (patch: Record<string, string | null>) => {
@@ -1405,6 +1632,52 @@ export function CoaIssuancePage() {
   const batchFields = matrixStandard?.batch_fields ?? []
   // 表格/弹窗渲染的自定义批次字段（内置 3 个走固定列/头表单）
   const customFields = stripBuiltinFields(batchFields)
+  // 标注确认后才能生成 COA：模板状态随标准返回（矩阵里的优先，列表里的兜底）。
+  // 确认之后字段配置变了（需重新核对）同样不能生成：先回客户标准重新确认标注
+  const templateStatus = matrixStandard?.template_status ?? activeStandard?.template_status
+  const templateBound = templateStatus === 'bound'
+  const templateStale = templateStatus === 'stale'
+
+  // 越界判定（读时派生、不落库）：每格按所属项目的限度现算，标准的上下限改了
+  // 历史数据的标记自动跟着变
+  const limitCells: CoaLimitCell[] = rows.flatMap((report) =>
+    collectLimitHits(items, (item) => report.value_map?.[item.id]).map((detail) => ({
+      key: `${report.id}:${detail.item.id}`,
+      report,
+      detail,
+    })),
+  )
+  const limitByKey = new Map(limitCells.map((cell) => [cell.key, cell]))
+  const limitReportIds = new Set(limitCells.map((cell) => cell.report.id))
+  const { overs, possible } = tallyLimitHits(limitCells.map((cell) => cell.detail))
+  // 数值型项目却没有可判的限度：提醒一下，免得以为「没标 = 都合格」
+  const noLimitCount = items.filter(
+    (item) => item.value_type === 'number' && !specLimitOf(item),
+  ).length
+
+  // 清单点一行 → 那一格短暂描边（行底色与悬停底色带 !important，改背景色闪不出来）
+  const [flashKey, setFlashKey] = useState<string | null>(null)
+  const [listOpen, setListOpen] = useState(false)
+  const flashTimer = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
+    },
+    [],
+  )
+  const jumpToLimitCell = (cell: CoaLimitCell) => {
+    document.getElementById(limitCellDomId(cell.key))?.scrollIntoView({
+      block: 'center',
+      inline: 'center',
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    })
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
+    setFlashKey(cell.key)
+    flashTimer.current = window.setTimeout(
+      () => setFlashKey((current) => (current === cell.key ? null : current)),
+      1600,
+    )
+  }
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['qa', 'coa'] })
@@ -1450,6 +1723,7 @@ export function CoaIssuancePage() {
   // 项目列：单模板下即模板项目原序；列头 tooltip=标准原文
   const itemColumns = (matrix?.columns ?? []).map((col) => {
     const specs = col.spec_texts.join('；')
+    const cellOf = (record: CoaReport) => limitCellOf(record, col.item_ids, limitByKey)
     const header = (
       <span className={styles.itemHeader}>
         <span className={styles.headerName}>{col.name_cn}</span>
@@ -1477,14 +1751,23 @@ export function CoaIssuancePage() {
       key: `v-${col.code}`,
       align: 'center' as const,
       onHeaderCell: () => ({ className: styles.itemCol }),
-      onCell: () => ({ className: styles.itemCol }),
-      render: (_v: unknown, record: CoaReport) => (
-        <MatrixValue
-          value={col.item_ids
-            .map((id) => record.value_map?.[id])
-            .find((val) => val !== undefined)}
-        />
-      ),
+      // 越界格挂上 DOM id（清单定位用）与描边动画；其余格只有列宽类
+      onCell: (record: CoaReport) => {
+        const cell = cellOf(record)
+        if (!cell) return { className: styles.itemCol }
+        return {
+          className: `${styles.itemCol}${
+            cell.key === flashKey ? ` ${limitStyles.cellFlash}` : ''
+          }`,
+          id: limitCellDomId(cell.key),
+        }
+      },
+      render: (_v: unknown, record: CoaReport) => {
+        const value = col.item_ids
+          .map((id) => record.value_map?.[id])
+          .find((val) => val !== undefined)
+        return <MatrixValue value={value} cell={cellOf(record)} />
+      },
     }
   })
 
@@ -1515,11 +1798,20 @@ export function CoaIssuancePage() {
         title="COA 出具登记"
         subtitle="选择产品与客户标准，登记或批量导入每批产品的检验报告，按模板逐项记录检测结果。"
         actions={
-          canIssue && activeStandard ? (
-            <Button type="primary" icon={<FileAddOutlined />} onClick={() => setImportOpen(true)}>
-              批量导入
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button
+              icon={<SafetyCertificateOutlined />}
+              onClick={() => setVerifyOpen(true)}
+              disabled={!activeStandard}
+            >
+              验证
             </Button>
-          ) : undefined
+            {canIssue && activeStandard ? (
+              <Button type="primary" icon={<FileAddOutlined />} onClick={() => setImportOpen(true)}>
+                批量导入
+              </Button>
+            ) : null}
+          </div>
         }
       />
 
@@ -1611,6 +1903,7 @@ export function CoaIssuancePage() {
                     {activeStandard.code}
                   </span>
                 )}
+                {activeStandard && <TemplateStatusTag status={templateStatus} />}
               </div>
               <div className={styles.sheetTools}>
                 {activeStandard && (
@@ -1618,6 +1911,21 @@ export function CoaIssuancePage() {
                     <span className={styles.stat}><b>{rows.length}</b>份报告</span>
                     <span className={styles.stat}><b>{items.length}</b>项检测</span>
                     <span className={styles.stat}><b>{batchFields.length}</b>个批次字段</span>
+                    {noLimitCount > 0 && (
+                      <Tooltip
+                        title={
+                          <>
+                            这些数值型项目没有下限/上限，结果不做超限提醒。
+                            <br />
+                            到「客户标准配置」填写下限或上限即可启用。
+                          </>
+                        }
+                      >
+                        <span className={`${styles.stat} ${styles.statUnset}`}>
+                          {noLimitCount} 项未设限度
+                        </span>
+                      </Tooltip>
+                    )}
                   </div>
                 )}
                 {canIssue && activeStandard && (
@@ -1630,8 +1938,72 @@ export function CoaIssuancePage() {
                     手工登记
                   </Button>
                 )}
+                {canIssue && activeStandard && activeProduct && !templateBound && (
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      router.push(
+                        `/qa/coa/standards?product=${encodeURIComponent(activeProduct.code)}&standard=${encodeURIComponent(activeStandard.code)}`
+                      )
+                    }
+                  >
+                    {templateStale ? '去核对模板标注' : '去标注模板'}
+                  </Button>
+                )}
               </div>
             </div>
+
+            {/* 汇总提醒：有越界结果才出现；清单里一行一项，点一行定位到单元格 */}
+            {limitCells.length > 0 && (
+              <div className={styles.limitStrip}>
+                <ExclamationCircleFilled className={styles.limitStripIcon} />
+                <span className={styles.limitStripText}>
+                  {overs > 0 && (
+                    <>
+                      <b className={styles.limitOvers}>{overs}</b> 项超出标准限度
+                    </>
+                  )}
+                  {overs > 0 && possible > 0 && '，'}
+                  {possible > 0 && (
+                    <>
+                      <b className={styles.limitPossible}>{possible}</b> 项可能超出
+                    </>
+                  )}
+                  <span className={styles.limitStripReports}>
+                    ，涉及 {limitReportIds.size} 份报告
+                  </span>
+                </span>
+                <Popover
+                  open={listOpen}
+                  onOpenChange={setListOpen}
+                  trigger="click"
+                  placement="bottomRight"
+                  content={
+                    <>
+                      <div className={limitStyles.listNote}>点一行定位到单元格</div>
+                      <CoaLimitList
+                        rows={limitCells.map(
+                          (cell): CoaLimitListRow => ({
+                            key: cell.key,
+                            batchNo: cell.report.batch_no,
+                            detail: cell.detail,
+                          }),
+                        )}
+                        onPick={(row) => {
+                          setListOpen(false)
+                          const cell = limitByKey.get(row.key)
+                          if (cell) jumpToLimitCell(cell)
+                        }}
+                      />
+                    </>
+                  }
+                >
+                  <Button size="small" icon={<UnorderedListOutlined />}>
+                    查看清单
+                  </Button>
+                </Popover>
+              </div>
+            )}
 
             {!activeStandard || standardsQuery.isLoading ? (
               <div className={styles.loadingBlock}>
@@ -1656,17 +2028,52 @@ export function CoaIssuancePage() {
                 tableLayout="auto"
                 scroll={{ x: 'max-content' }}
                 locale={{ emptyText: emptySheet }}
+                // 有越界结果的报告整行染极淡的底色
+                rowClassName={(record) => (limitReportIds.has(record.id) ? styles.rowHit : '')}
                 columns={[
                   {
                     title: '批号',
                     dataIndex: 'batch_no',
                     fixed: 'start',
                     align: 'center' as const,
-                    render: (v: string) => (
-                      <span className={`${styles.cellEllipsis} ${styles.batchNo}`} title={v}>
-                        {v}
-                      </span>
-                    ),
+                    // 批号后跟一枚越界计数标记：横向滚到别的列时，冻结的批号列仍看得出这份报告有问题
+                    render: (v: string, record) => {
+                      const cells = limitCells.filter((cell) => cell.report.id === record.id)
+                      const overs = cells.filter(
+                        (cell) => cell.detail.hit.certainty === 'definite',
+                      ).length
+                      const lead =
+                        cells.find((cell) => cell.detail.hit.certainty === 'definite') ?? cells[0]
+                      return (
+                        <span className={styles.batchCell}>
+                          <span className={`${styles.cellEllipsis} ${styles.batchNo}`} title={v}>
+                            {v}
+                          </span>
+                          {lead && (
+                            <CoaLimitMark
+                              hit={lead.detail.hit}
+                              title={
+                                <div className={limitStyles.tip}>
+                                  {cells.map((cell) => (
+                                    <div key={cell.key} className={limitStyles.tipRow}>
+                                      <span className={limitStyles.tipName}>
+                                        {cell.detail.item.name_cn}
+                                      </span>
+                                      <span>
+                                        {cell.detail.hit.display} {limitHitLabel(cell.detail.hit)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              }
+                            >
+                              {limitCaption({ overs, possible: cells.length - overs })}{' '}
+                              {cells.length}
+                            </CoaLimitMark>
+                          )}
+                        </span>
+                      )
+                    },
                   },
                   {
                     title: '流水号',
@@ -1685,6 +2092,24 @@ export function CoaIssuancePage() {
                     render: (_v, record) =>
                       canIssue && (
                         <div className={styles.rowActions}>
+                          <Tooltip
+                            title={
+                              templateBound
+                                ? '按模板标注生成 COA docx'
+                                : templateStale
+                                  ? '标注确认后字段配置变了，重新核对并保存标注后才能生成'
+                                  : '这份标准还没标注模板，暂时不能生成'
+                            }
+                          >
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<FileWordOutlined />}
+                              disabled={!templateBound}
+                              aria-label={`生成批号 ${record.batch_no} 的 COA`}
+                              onClick={() => setRendering(record)}
+                            />
+                          </Tooltip>
                           <Tooltip title="编辑">
                             <Button
                               type="text"
@@ -1716,6 +2141,22 @@ export function CoaIssuancePage() {
 
       {activeProduct && activeStandard && (
         <>
+          {rendering && (
+            <CoaRenderModal
+              key={rendering.id}
+              report={rendering}
+              productCode={activeProduct.code}
+              standardCode={activeStandard.code}
+              onClose={() => setRendering(null)}
+              onEdit={() => {
+                setRendering(null)
+                setEditing(rendering)
+              }}
+            />
+          )}
+          {verifyOpen && (
+            <CoaVerifyModal productId={activeProduct.id} onClose={() => setVerifyOpen(false)} />
+          )}
           <CoaImportReportModal
             open={importOpen}
             onClose={() => setImportOpen(false)}

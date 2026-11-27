@@ -1,7 +1,11 @@
 'use client'
 
+import { useId } from 'react'
 import { Input, Segmented } from 'antd'
 import type { CoaValueInput, CoaValueType } from '@/types/qa'
+import { CoaLimitMark } from './CoaLimitFlag'
+import { checkSpecLimit, limitHitDetail, limitHitLabel } from './coaSpecLimit'
+import type { CoaSpecLimit } from './coaSpecLimit'
 import styles from './CoaResultInput.module.css'
 
 export type CoaResultMode = 'num' | 'text'
@@ -79,6 +83,9 @@ function focusNextResultInput(current: HTMLElement) {
  * 检测结果录入格：[类型位][输入框][单位位]，手工登记与导入预览共用。
  * 类型位平时是一枚灰字，行悬停或行内聚焦时才换成「数值 / 文字」切换器——
  * 类型默认跟模板，绝大多数行用不到切换，不必每行都挂一个控件。
+ *
+ * 给了 limit 就顺带判越界：超限时输入框染底色，框内右侧出一枚文字标记，
+ * 悬停看详情。只提醒、不拦保存。
  */
 export function CoaResultInput({
   itemKey,
@@ -86,6 +93,10 @@ export function CoaResultInput({
   draft,
   unit,
   onChange,
+  limit,
+  specText,
+  settled = true,
+  onBlur,
 }: {
   /** 行键；同时是回车跳行时定位输入框的 data 键 */
   itemKey: string
@@ -95,8 +106,20 @@ export function CoaResultInput({
   /** 单位位：undefined=不留位（导入预览无单位数据）；null=留空位（同列单位宽窄不一，保持输入框对齐） */
   unit?: string | null
   onChange: (draft: CoaResultDraft) => void
+  /** 项目的标准限度；没有可判的限度（或调用方不判）就不传 */
+  limit?: CoaSpecLimit | null
+  /** 标准原文，拼进标记的悬停说明 */
+  specText?: string | null
+  /** 这格是否已输完（见 useSettledInput）：输入途中不显示越界标记 */
+  settled?: boolean
+  onBlur?: () => void
 }) {
   const isNum = draft.mode === 'num'
+  const hit =
+    limit && settled
+      ? checkSpecLimit(limit, { num: draft.num, text: draft.raw }, unit ?? null)
+      : null
+  const markId = useId()
   return (
     <div className={styles.cell}>
       <div className={styles.typeSlot}>
@@ -121,14 +144,37 @@ export function CoaResultInput({
       </div>
       <Input
         size="small"
-        className={styles.input}
+        className={`${styles.input} ${
+          hit ? (hit.certainty === 'possible' ? styles.inputPossible : styles.inputOvers) : ''
+        }`}
         aria-label={`${label} 的结果`}
+        aria-describedby={hit ? markId : undefined}
         data-coa-result-input={itemKey}
+        data-coa-limit-hit={hit ? '' : undefined}
         inputMode={isNum ? 'decimal' : undefined}
         placeholder={isNum ? undefined : '符合规定 / <0.20'}
         value={draft.raw}
         onChange={(e) => onChange(editResultDraft(draft, e.target.value))}
+        onBlur={onBlur}
         onPressEnter={(e) => focusNextResultInput(e.currentTarget)}
+        // 容器常驻：聚焦时才插入 suffix 会改变 DOM 结构，输入框会失焦（antd FAQ）
+        suffix={
+          <span className={styles.suffix}>
+            {hit && (
+              <CoaLimitMark
+                hit={hit}
+                bare
+                id={markId}
+                title={limitHitDetail({
+                  item: { spec_text: specText ?? null, unit: unit ?? null },
+                  hit,
+                })}
+              >
+                {limitHitLabel(hit)}
+              </CoaLimitMark>
+            )}
+          </span>
+        }
       />
       {unit !== undefined && (
         <span className={styles.unit} title={unit || undefined}>

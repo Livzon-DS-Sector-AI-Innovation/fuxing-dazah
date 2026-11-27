@@ -125,11 +125,35 @@
   gap: 16px;
 }
 
+/* 归属产品 + 三个头部字段都在表单里，两组之间留 16px */
+.formBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.productItem:global(.ant-form-item) {
+  margin-block-end: 0;
+}
+
 /* 底栏：12px 间距（antd 默认 8px 对两个主次按钮偏紧） */
 .footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 12px;
+}
+
+/* 保存去向的勾选项占住左侧空白，把按钮推到右边 */
+.footerOption {
+  margin-inline-end: auto;
+  color: var(--color-ink);
+}
+
+/* 整条标签都能点，点按区撑到 44px 高 */
+.footerOption:global(.ant-checkbox-wrapper) {
+  min-block-size: 44px;
+  align-items: center;
 }
 
 .sectionHead {

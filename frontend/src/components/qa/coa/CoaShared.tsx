@@ -1,9 +1,9 @@
 'use client'
 
 import type { CSSProperties } from 'react'
-import { App } from 'antd'
+import { App, Tag } from 'antd'
 import type { ButtonProps, ModalFuncProps } from 'antd'
-import type { CoaValueType } from '@/types/qa'
+import type { CoaTemplateStatus, CoaValueType } from '@/types/qa'
 
 export const VALUE_TYPE_LABEL: Record<CoaValueType, string> = {
   number: '数值',
@@ -19,6 +19,23 @@ export const VALUE_TYPE_OPTIONS: { value: CoaValueType; label: string }[] = [
 export const VALUE_TYPE_DOT: Record<CoaValueType, CSSProperties> = {
   number: { color: 'var(--color-link-blue)' },
   text: { color: 'var(--color-brand-purple)' },
+}
+
+const TEMPLATE_STATUS_LABEL: Record<CoaTemplateStatus, string> = {
+  none: '未上传模板',
+  unbound: '模板待标注',
+  bound: '可生成 COA',
+  stale: '需重新核对',
+}
+
+/** 模板状态标签：标注确认后，这份标准的报告才能生成 COA；确认之后字段配置变了，要重新核对。
+ *  列表接口可能还没带状态，按未上传显示。 */
+export function TemplateStatusTag({ status }: { status: CoaTemplateStatus | undefined }) {
+  if (status === 'bound') return <Tag color="success">{TEMPLATE_STATUS_LABEL.bound}</Tag>
+  if (status === 'unbound' || status === 'stale') {
+    return <Tag color="warning">{TEMPLATE_STATUS_LABEL[status]}</Tag>
+  }
+  return <Tag>{TEMPLATE_STATUS_LABEL.none}</Tag>
 }
 
 /**

@@ -12,6 +12,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.modules.qa.models import (
     CoaProduct,
     CoaProductField,
+    CoaRenderRecord,
     CoaReport,
     CoaReportValue,
     CoaStandard,
@@ -90,6 +91,23 @@ async def list_product_fields(
         select(CoaProductField)
         .where(
             CoaProductField.product_id == product_id,
+            CoaProductField.is_deleted.is_(False),
+        )
+        .order_by(CoaProductField.sort_order, CoaProductField.created_at)
+    )
+    return list(result.scalars())
+
+
+async def list_product_fields_of(
+    db: AsyncSession, product_ids: list[uuid.UUID]
+) -> list[CoaProductField]:
+    """多个产品的默认字段（一次取一批，列表上的模板状态用）。"""
+    if not product_ids:
+        return []
+    result = await db.execute(
+        select(CoaProductField)
+        .where(
+            CoaProductField.product_id.in_(product_ids),
             CoaProductField.is_deleted.is_(False),
         )
         .order_by(CoaProductField.sort_order, CoaProductField.created_at)
@@ -189,6 +207,23 @@ async def list_standard_fields(
         select(CoaStandardField)
         .where(
             CoaStandardField.standard_id == standard_id,
+            CoaStandardField.is_deleted.is_(False),
+        )
+        .order_by(CoaStandardField.sort_order, CoaStandardField.created_at)
+    )
+    return list(result.scalars())
+
+
+async def list_standard_fields_of(
+    db: AsyncSession, standard_ids: list[uuid.UUID]
+) -> list[CoaStandardField]:
+    """多份标准的覆盖字段（一次取一批，列表上的模板状态用）。"""
+    if not standard_ids:
+        return []
+    result = await db.execute(
+        select(CoaStandardField)
+        .where(
+            CoaStandardField.standard_id.in_(standard_ids),
             CoaStandardField.is_deleted.is_(False),
         )
         .order_by(CoaStandardField.sort_order, CoaStandardField.created_at)
@@ -339,7 +374,7 @@ async def replace_report_values(
     report_id: uuid.UUID,
     rows: list[dict[str, Any]],
 ) -> None:
-    """值全量替换：硬删后批量插入（矩阵单元格非审计对象，APR 同款）。"""
+    """值全量替换：硬删后批量插入（APR 同款）；变更留痕由 service 写操作日志。"""
     await db.execute(
         delete(CoaReportValue).where(CoaReportValue.report_id == report_id)
     )
@@ -353,3 +388,101 @@ async def delete_report_values(db: AsyncSession, report_id: uuid.UUID) -> None:
     await db.execute(
         delete(CoaReportValue).where(CoaReportValue.report_id == report_id)
     )
+
+
+# ───────────────────────── 生成留档 ─────────────────────────
+# 留档只增不改不删，一律不做软删过滤；报告作废后留档照样要查得到。
+
+
+async def add_render_record(db: AsyncSession, record: CoaRenderRecord) -> CoaRenderRecord:
+    db.add(record)
+    await db.flush()
+    return record
+
+
+async def get_render_record(
+    db: AsyncSession, record_id: uuid.UUID
+) -> CoaRenderRecord | None:
+    result = await db.execute(
+        select(CoaRenderRecord).where(CoaRenderRecord.id == record_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_render_records(
+    db: AsyncSession,
+    *,
+    product_id: uuid.UUID | None = None,
+    report_id: uuid.UUID | None = None,
+    batch_no: str | None = None,
+    ids: list[uuid.UUID] | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[list[CoaRenderRecord], int]:
+    """生成留档列表（新的在前）；batch_no 是模糊包含。"""
+    conditions: list[ColumnElement[bool]] = []
+    if product_id is not None:
+        conditions.append(CoaRenderRecord.product_id == product_id)
+    if report_id is not None:
+        conditions.append(CoaRenderRecord.report_id == report_id)
+    keyword = (batch_no or "").strip()
+    if keyword:
+        conditions.append(
+            CoaRenderRecord.batch_no.icontains(keyword, autoescape=True)
+        )
+    if ids is not None:
+        if not ids:
+            return [], 0
+        conditions.append(CoaRenderRecord.id.in_(ids))
+    base = select(CoaRenderRecord).where(*conditions)
+    total = int(
+        (
+            await db.execute(select(func.count()).select_from(base.subquery()))
+        ).scalar_one()
+    )
+    query = base.order_by(CoaRenderRecord.created_at.desc(), CoaRenderRecord.id).offset(
+        offset
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return list((await db.execute(query)).scalars()), total
+
+
+async def list_render_ids_in_text(db: AsyncSession, text: str) -> list[uuid.UUID]:
+    """批号出现在这段文字里的留档 id；匹配交给数据库，不把全部留档批号拉到应用层。
+
+    text 已按 ``render_archive._norm`` 规整（空白已去掉）；批号登记时去首尾，
+    内部不含空白。留档只增不删，这个查询随表增长——全表扫在库里，只回传命中的 id。
+    """
+    if not text:
+        return []
+    needle = func.replace(CoaRenderRecord.batch_no, " ", "")
+    result = await db.execute(
+        select(CoaRenderRecord.id).where(needle != "", func.strpos(text, needle) > 0)
+    )
+    return list(result.scalars())
+
+
+async def list_render_records_by_sha256(
+    db: AsyncSession, digest: str
+) -> list[CoaRenderRecord]:
+    result = await db.execute(
+        select(CoaRenderRecord)
+        .where(CoaRenderRecord.file_sha256 == digest)
+        .order_by(CoaRenderRecord.created_at.desc())
+    )
+    return list(result.scalars())
+
+
+async def list_report_states(
+    db: AsyncSession, report_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, bool]:
+    """报告 id → 是否已作废（不过滤软删行）。"""
+    if not report_ids:
+        return {}
+    result = await db.execute(
+        select(CoaReport.id, CoaReport.is_deleted).where(
+            CoaReport.id.in_(report_ids)
+        )
+    )
+    return {row[0]: bool(row[1]) for row in result.all()}
