@@ -377,7 +377,8 @@ def template_def_dict(tdef: TrainingTemplateDef, current: TrainingExportTemplate
         "description": tdef.description,
         "default_file": tdef.default_file,
         "section": tdef.section,
-        "usages": list(tdef.usages),
+        # usages 应为 tuple；单元素漏尾逗号会退化成 str，此处兜底避免逐字拆开
+        "usages": list(tdef.usages) if isinstance(tdef.usages, (tuple, list)) else [tdef.usages],
         "markers": [
             {"name": m.name, "description": m.description, "required": m.required}
             for m in tdef.markers

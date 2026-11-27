@@ -173,7 +173,7 @@ TEMPLATES: list[TrainingTemplateDef] = [
         description="新员工入职培训记录（含员工概况与培训内容）",
         default_file="新员工培训记录-模板.docx",
         section="新员工入职培训",
-        usages=("入职培训页·导出培训记录"),
+        usages=("入职培训页·导出培训记录",),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{性别}", "性别"),
@@ -194,7 +194,7 @@ TEMPLATES: list[TrainingTemplateDef] = [
         description="新员工上岗证，培训清单从岗位培训表自动带出",
         default_file="上岗证模板.docx",
         section="新员工入职培训",
-        usages=("入职培训页·导出上岗证"),
+        usages=("入职培训页·导出上岗证",),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{性别}", "性别"),
@@ -211,7 +211,7 @@ TEMPLATES: list[TrainingTemplateDef] = [
         description="新员工/异动人员岗前培训计划，培训内容按条目克隆行",
         default_file="新员工培训计划-模板.docx",
         section="新员工入职培训",
-        usages=("入职培训页·导出岗前培训计划"),
+        usages=("入职培训页·导出岗前培训计划",),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{学历}", "学历"),
@@ -241,7 +241,7 @@ TEMPLATES: list[TrainingTemplateDef] = [
         description="员工个人历年培训台账登记表，每人一页",
         default_file="个人培训登记表.docx",
         section="员工档案",
-        usages=("个人培训登记表导出"),
+        usages=("个人培训登记表导出",),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{性别}", "性别"),
@@ -267,7 +267,7 @@ TEMPLATES: list[TrainingTemplateDef] = [
         description="培训口径人员花名册导出",
         default_file="roster_template.docx",
         section="员工档案",
-        usages=("花名册导出"),
+        usages=("花名册导出",),
         markers=[
             _m("{$index+1}", "行序号"),
             _m("{体现部门}", "部门"),
@@ -288,7 +288,7 @@ TEMPLATES: list[TrainingTemplateDef] = [
         description="笔试考核试卷导出，题型区块由系统按试卷内容自动生成",
         default_file="试卷模板.docx",
         section="题库与试卷",
-        usages=("AI 出题/题库·试卷下载"),
+        usages=("AI 出题/题库·试卷下载",),
         markers=[
             _m("{{培训内容}}", "试卷标题：替换为「某某试题」（历史原因保留双花括号写法）"),
         ],
