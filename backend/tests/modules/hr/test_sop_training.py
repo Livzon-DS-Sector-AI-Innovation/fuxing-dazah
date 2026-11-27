@@ -229,6 +229,16 @@ class TestSopRegisterFlow:
         people = res2.json()["data"]
         assert {p["name"] for p in people} == {"员工甲", "员工乙"}
 
+        # 多分类取并集且去重（SOP001 同时在「新员工」「分类1」里只出现一次）
+        res3 = await client.get(
+            "/api/v1/hr/sop-training-entries/personnel",
+            params=[("classification", "新员工"), ("classification", "分类1")],
+        )
+        assert res3.status_code == 200, res3.text
+        people3 = res3.json()["data"]
+        assert {p["name"] for p in people3} == {"员工甲", "员工乙"}
+        assert len(people3) == 2
+
     @pytest.mark.asyncio
     async def test_dept_trainers_lookup(self, db_session, client):
         """选择涉及部门 → 自动关联各对应部门一级培训师（被培训人员）"""
@@ -362,7 +372,7 @@ class TestMaterialsHelpers:
 
         # 全范围用户：跨部门联动，标签成员全部带出（病假/产假仍排除）
         res = await sop_entry_personnel(
-            classification=tag, session=db_session, hr_scope=_scope("all", frozenset()),
+            classification=[tag], session=db_session, hr_scope=_scope("all", frozenset()),
         )
         names = [row["name"] for row in json.loads(res.body)["data"]]
         assert set(names) == {"正常甲", "他部丁"}
@@ -373,7 +383,7 @@ class TestMaterialsHelpers:
 
         # 受限用户：只返回授权部门内的人员
         res = await sop_entry_personnel(
-            classification=tag, session=db_session, hr_scope=_scope("department", frozenset({dept})),
+            classification=[tag], session=db_session, hr_scope=_scope("department", frozenset({dept})),
         )
         names = [row["name"] for row in json.loads(res.body)["data"]]
         assert names == ["正常甲"]
@@ -381,6 +391,37 @@ class TestMaterialsHelpers:
         res = await sop_entry_classifications(session=db_session, hr_scope=_scope("department", frozenset({dept})))
         counts = {row["tag_name"]: row["count"] for row in json.loads(res.body)["data"]}
         assert counts.get(tag) == 1
+
+    @pytest.mark.asyncio
+    async def test_entry_multi_classification_and_tags(self, db_session, client):
+        """分类多选：PUT 以「；」连接存储（去重/清洗）；生成打标每人写全部所选分类标签。"""
+        from app.modules.hr.models import SopTrainingEntry
+        from app.modules.hr.sop_training_routes import _link_classification_tags
+
+        e = SopTrainingEntry(record_id=None, department="甲部门")
+        db_session.add(e)
+        await db_session.flush()
+
+        # PUT 多选：「；」连接存储，重复与空段清洗
+        res = await client.put(f"/api/v1/hr/sop-training-entries/{e.id}", json={
+            "classification": "多选甲；多选乙；多选甲； ",
+            "personnel": [],
+        })
+        assert res.status_code == 200, res.text
+        await db_session.refresh(e)
+        assert e.classification == "多选甲；多选乙"
+
+        # 生成材料打标：每位涉及人员写入全部所选分类标签，幂等可重跑
+        e.personnel = json.dumps([{"employee_number": "MC001", "name": "多选丙"}], ensure_ascii=False)
+        await _link_classification_tags(db_session, e, "多选打标员")
+        await _link_classification_tags(db_session, e, "多选打标员")
+        rows = (await db_session.execute(
+            text(
+                "SELECT tag_name FROM hr.employee_tags "
+                "WHERE employee_number = 'MC001' AND is_deleted = false AND created_by = '多选打标员'"
+            ),
+        )).fetchall()
+        assert sorted(r[0] for r in rows) == ["多选乙", "多选甲"]
 
 
 class TestDeptTrainerLookup:

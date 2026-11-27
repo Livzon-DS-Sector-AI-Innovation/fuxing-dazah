@@ -664,8 +664,16 @@ async def update_sop_entry(
     if not e or e.is_deleted:
         raise HTTPException(404, "记录不存在")
     _ensure_entry_in_scope(hr_scope, e)
-    if "classification" in payload and len(str(payload.get("classification") or "")) > 64:
-        raise HTTPException(400, "分类名称过长（最多 64 字）")
+    # 分类可多选，前端以「；」连接存储；单个名称 ≤64 字，合计 ≤256 字
+    if "classification" in payload:
+        raw = str(payload.get("classification") or "")
+        parts = [p.strip() for p in raw.split("；") if p.strip()]
+        if any(len(p) > 64 for p in parts):
+            raise HTTPException(400, "单个分类名称过长（最多 64 字）")
+        joined = "；".join(dict.fromkeys(parts))
+        if len(joined) > 256:
+            raise HTTPException(400, "分类名称过长（多选合计最多 256 字）")
+        payload["classification"] = joined or None
     for key in ("classification", "trainer", "complete_time"):
         if key in payload:
             setattr(e, key, payload[key])
@@ -690,13 +698,15 @@ async def _mark_generated(session: AsyncSession, e, operator: str) -> None:
 async def _link_classification_tags(session: AsyncSession, e, operator: str) -> None:
     """生成材料自动关联分类：二级表涉及人员的自定义分类写入员工标签（幂等）。
 
+    分类可多选（「；」连接）：每位涉及人员写入全部所选分类的标签，
     之后「员工档案-分类」与「二级表按分类拉人」会自动包含这些人。
     """
     import json as _json
 
     from app.modules.hr.models import EmployeeTag
 
-    if not e.classification:
+    tags = [t.strip() for t in (e.classification or "").split("；") if t.strip()]
+    if not tags:
         return
     personnel = e.personnel or []
     if isinstance(personnel, str):
@@ -716,15 +726,16 @@ async def _link_classification_tags(session: AsyncSession, e, operator: str) -> 
     # ON CONFLICT DO NOTHING：与活跃行部分唯一索引配合，并发生成/批量打标不 500
     # （部分索引推断必须显式给出 index_where）
     from sqlalchemy.dialects.postgresql import insert as pg_insert
-    for num in numbers:
-        await session.execute(
-            pg_insert(EmployeeTag)
-            .values(employee_number=num, tag_name=e.classification, created_by=operator)
-            .on_conflict_do_nothing(
-                index_elements=["employee_number", "tag_name"],
-                index_where=text("is_deleted = false"),
-            ),
-        )
+    for tag in tags:
+        for num in numbers:
+            await session.execute(
+                pg_insert(EmployeeTag)
+                .values(employee_number=num, tag_name=tag, created_by=operator)
+                .on_conflict_do_nothing(
+                    index_elements=["employee_number", "tag_name"],
+                    index_where=text("is_deleted = false"),
+                ),
+            )
     await session.flush()
 
 
@@ -1192,8 +1203,12 @@ async def batch_generate_materials(
     # 培训对象口径：二级表材料默认「该部门 全体成员」；条目按标签选人时写「xx部门 标签名」
     # （多条不同标签按「、」连接），如「xx部门 班组长」。标签选人已排除病产假，
     # 全部门口径的「（病假x人、产假y人除外）」附注不适用，随之省略。
+    # 分类可多选（「；」连接），拆开参与去重
     groups = list(dict.fromkeys(
-        str(e.classification).strip() for e in rows if (e.classification or "").strip()
+        part.strip()
+        for e in rows
+        for part in (e.classification or "").split("；")
+        if part.strip()
     ))
     trainee_group = "、".join(groups) or None
     # 该部门培训师
@@ -1368,11 +1383,11 @@ async def sop_entry_classifications(
 
 @router.get("/sop-training-entries/personnel", summary="分类人员查询")
 async def sop_entry_personnel(
-    classification: str = Query(..., description="自定义分类"),
+    classification: list[str] = Query(..., description="自定义分类（可多选，取并集）"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """按自定义分类拉取人员（标签可多打，人员可重复分类）。
+    """按自定义分类拉取人员（可传多个分类取并集；标签可多打，人员可重复分类）。
 
     分类人员跨部门联动：只认本人打的标签，不按二级表记录的部门过滤；
     受限用户只返回授权部门内的人员。排除离职/待审批/病假/产假。
@@ -1380,7 +1395,9 @@ async def sop_entry_personnel(
     # 数据范围：受限用户只能查授权部门（员工姓名/工号/岗位/状态属于 PII）
     creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     dept_filter = ""
-    params: dict = {"tag": classification, "creator": creator}
+    params: dict = {"tags": [c for c in classification if c.strip()], "creator": creator}
+    if not params["tags"]:
+        raise HTTPException(400, "请至少选择一个分类")
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
@@ -1390,11 +1407,11 @@ async def sop_entry_personnel(
     # 与分类选项一致，只看本人打的标签，避免同名分类串到别人的测试数据
     rows = (await session.execute(
         text(f"""
-            SELECT p.employee_number, p.name, p.position, p.status
+            SELECT DISTINCT p.employee_number, p.name, p.position, p.status
             FROM hr.training_roster_profiles p
             JOIN hr.employee_tags t ON t.employee_number = p.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
-              AND t.tag_name = :tag AND t.created_by = :creator
+              AND t.tag_name = ANY(:tags) AND t.created_by = :creator
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
               {dept_filter}
             ORDER BY p.employee_number

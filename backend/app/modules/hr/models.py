@@ -1735,7 +1735,7 @@ class SopTrainingEntry(BaseModel):
     )
     complete_time: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="该部门培训完成时间/课时")
     classification: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="自定义分类（对应部门员工标签）"
+        String(256), nullable=True, comment="自定义分类，多选按「；」连接（对应创建人员工标签）"
     )
     personnel: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="分类人员，JSON 数组：[{\"employee_number\":\"\",\"name\":\"\"}]"

@@ -1,18 +1,19 @@
 'use client'
 
 // SOP 培训二级表：给一条二级表记录选「自定义分类」和「分类人员」。
-// 分类仅本人创建的可见；选分类后跨部门联动带出该分类全部人员并默认全选
-// （已保存过人员的记录不覆盖），可再调整。
+// 分类仅本人创建的可见，可多选（「；」连接存储）；选分类后跨部门联动带出
+// 所选分类的并集人员并默认全选（已保存过人员的记录不覆盖），可再调整。
 
 import { useEffect, useMemo, useState } from 'react'
 import { App, Button, Form, Modal, Select } from 'antd'
 import { fetchSopClassifications, fetchSopPersonnel, updateSopTrainingEntry } from '@/actions/hr'
 import { useUnsavedConfirm } from '@/hooks/hr'
 import type { SopPersonnelOption, SopTrainingEntry } from '@/types/hr'
+import { splitSopEntryClassifications } from './cells'
 import styles from './sop-training.module.css'
 
 interface FormValues {
-  classification?: string
+  classification?: string[]
   personnel?: string[]
 }
 
@@ -39,9 +40,13 @@ export default function SopEntryPersonnelModal({
   const [personnelOptions, setPersonnelOptions] = useState<SopPersonnelOption[]>([])
   const [personnelLoading, setPersonnelLoading] = useState(true)
 
+  const initialClassifications = useMemo(
+    () => splitSopEntryClassifications(entry?.classification),
+    [entry],
+  )
   const initialValues = useMemo<FormValues>(
     () => ({
-      classification: entry?.classification || undefined,
+      classification: splitSopEntryClassifications(entry?.classification),
       personnel: (entry?.personnel || []).map((p) => p.employee_number),
     }),
     [entry],
@@ -67,8 +72,8 @@ export default function SopEntryPersonnelModal({
       const [clsRes, peopleRes] = await Promise.all([
         fetchSopClassifications().catch(() => null),
         // 已有保存人员时只加载选项不覆盖；无保存人员时才默认全选分类下人员
-        entry.classification
-          ? fetchSopPersonnel(entry.classification).catch(() => null)
+        initialClassifications.length
+          ? fetchSopPersonnel(initialClassifications).catch(() => null)
           : Promise.resolve(null),
       ])
       if (cancelled) return
@@ -78,7 +83,7 @@ export default function SopEntryPersonnelModal({
       const people = peopleRes?.data || []
       setPersonnelOptions(people)
       setPersonnelLoading(false)
-      if (entry.classification && !(entry.personnel || []).length) {
+      if (initialClassifications.length && !(entry.personnel || []).length) {
         form.setFieldsValue({ personnel: people.map((p) => p.employee_number) })
       }
     })()
@@ -87,25 +92,25 @@ export default function SopEntryPersonnelModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const loadPersonnel = async (classification: string) => {
+  const loadPersonnel = async (classifications: string[]) => {
     if (!entry) return []
     try {
-      return (await fetchSopPersonnel(classification)).data || []
+      return (await fetchSopPersonnel(classifications)).data || []
     } catch (e) {
       message.error(e instanceof Error ? e.message : '获取分类人员失败')
       return []
     }
   }
 
-  const handleClassificationChange = async (value: string | undefined) => {
+  const handleClassificationChange = async (values: string[]) => {
     form.setFieldsValue({ personnel: [] })
     setPersonnelOptions([])
-    if (!value) return
+    if (!values.length) return
     setPersonnelLoading(true)
     try {
-      const people = await loadPersonnel(value)
+      const people = await loadPersonnel(values)
       setPersonnelOptions(people)
-      // 默认全选分类下人员，可自由调整
+      // 默认全选所选分类的并集人员，可自由调整
       form.setFieldsValue({ personnel: people.map((p) => p.employee_number) })
     } finally {
       setPersonnelLoading(false)
@@ -142,7 +147,10 @@ export default function SopEntryPersonnelModal({
     ]
     setSaving(true)
     try {
-      await updateSopTrainingEntry(entry.id, { classification: v.classification, personnel })
+      await updateSopTrainingEntry(entry.id, {
+        classification: (v.classification || []).join('；'),
+        personnel,
+      })
       message.success('已保存')
       setDirty(false)
       onSaved()
@@ -185,13 +193,14 @@ export default function SopEntryPersonnelModal({
         <Form.Item
           name="classification"
           label="自定义分类"
-          tooltip="我创建的员工分类（仅本人可见），选中后带出该分类全部人员；生成材料时，这里选的人员会自动归入该分类"
+          tooltip="我创建的员工分类（仅本人可见），可多选、人员取所选分类的并集；生成材料时，这里选的人员会自动归入所选分类"
         >
           <Select
             allowClear
+            mode="multiple"
             showSearch
             optionFilterProp="label"
-            placeholder="选择分类，自动带出该分类下的人员"
+            placeholder="选择分类（可多选），自动带出人员"
             options={classOptions}
             onChange={(v) => { void handleClassificationChange(v) }}
           />

@@ -594,10 +594,11 @@ export async function fetchSopClassifications(): Promise<{ code: number; message
   return fetchHrApi(`/hr/sop-training-entries/classifications`, { errorMessage: '获取分类失败' })
 }
 
-/** 分类人员：跨部门联动，只认本人打的标签，不按二级表记录的部门过滤 */
-export async function fetchSopPersonnel(classification: string): Promise<{ code: number; message: string; data: SopPersonnelOption[] }> {
-  const qs = buildQueryString({ classification })
-  return fetchHrApi(`/hr/sop-training-entries/personnel${qs}`, { errorMessage: '获取分类人员失败' })
+/** 分类人员：跨部门联动，只认本人打的标签，不按二级表记录的部门过滤；多分类取并集 */
+export async function fetchSopPersonnel(classifications: string[]): Promise<{ code: number; message: string; data: SopPersonnelOption[] }> {
+  const searchParams = new URLSearchParams()
+  for (const c of classifications) searchParams.append('classification', c)
+  return fetchHrApi(`/hr/sop-training-entries/personnel?${searchParams.toString()}`, { errorMessage: '获取分类人员失败' })
 }
 
 /** 导出二级表培训清单（xlsx） */

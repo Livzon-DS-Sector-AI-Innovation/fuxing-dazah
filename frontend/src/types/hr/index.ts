@@ -623,6 +623,7 @@ export interface SopTrainingEntry {
   trainer: string | null
   status: string
   complete_time: string | null
+  /** 自定义分类，多选按「；」连接（对应创建人员工标签），展示用 splitSopEntryClassifications 拆 */
   classification: string | null
   personnel: SopTrainingPersonnel[]
   personnel_count: number

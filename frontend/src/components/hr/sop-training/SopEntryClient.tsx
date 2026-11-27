@@ -22,7 +22,7 @@ import PageHeader from '@/components/hr/PageHeader'
 import { ClassificationChip } from '@/components/hr/training-roster/classificationChip'
 import SopEntryPersonnelModal from './SopEntryPersonnelModal'
 import SopMaterialsModal, { randomStats } from './SopMaterialsModal'
-import { FileCell, MethodTimeCell, SoftTag, entryStatusTagMeta } from './cells'
+import { FileCell, MethodTimeCell, SoftTag, entryStatusTagMeta, splitSopEntryClassifications } from './cells'
 import styles from './sop-training.module.css'
 
 const ALL_DEPARTMENTS = '__all__'
@@ -172,7 +172,7 @@ export default function SopEntryClient() {
   const chipColors = useMemo(
     () =>
       classificationChipColors(
-        [...new Set(entries.map((e) => e.classification).filter((c): c is string => !!c))].sort(byZh),
+        [...new Set(entries.flatMap((e) => splitSopEntryClassifications(e.classification)))].sort(byZh),
       ),
     [entries],
   )
@@ -326,16 +326,21 @@ export default function SopEntryClient() {
       title: '分类人员',
       key: 'personnel',
       render: (_, e) => {
-        if (!e.classification) return <span className={styles.placeholder}>未设置分类</span>
+        const classifications = splitSopEntryClassifications(e.classification)
+        if (!classifications.length) return <span className={styles.placeholder}>未设置分类</span>
         const names = e.personnel.map((p) => p.name)
-        const known = !!chipColors[e.classification]
         return (
           <div className="min-w-0">
-            <ClassificationChip
-              name={e.classification}
-              color={known ? chipColors[e.classification] : ORPHAN_TAG_CHIP_COLOR}
-              orphan={!known}
-            />
+            <div className="flex flex-wrap items-center gap-1">
+              {classifications.map((c) => (
+                <ClassificationChip
+                  key={c}
+                  name={c}
+                  color={chipColors[c] ?? ORPHAN_TAG_CHIP_COLOR}
+                  orphan={!chipColors[c]}
+                />
+              ))}
+            </div>
             <div className={`${styles.cellSecondary} mt-1`} title={names.join('、')}>
               {names.length > 0
                 ? `${names.slice(0, 3).join('、')}${names.length > 3 ? ` 等 ${names.length} 人` : ''}`

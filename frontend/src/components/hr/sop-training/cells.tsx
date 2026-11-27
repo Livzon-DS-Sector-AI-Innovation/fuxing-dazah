@@ -6,6 +6,11 @@ import { Tooltip } from 'antd'
 import { SOP_CHANGE_TYPE_META, SOP_ENTRY_STATUS_META, SOP_RECORD_STATUS_META } from '@/lib/hr'
 import styles from './sop-training.module.css'
 
+/** 二级表自定义分类多选，库里以「；」连接存储——统一从这里拆 */
+export function splitSopEntryClassifications(raw: string | null | undefined): string[] {
+  return (raw || '').split('；').map((t) => t.trim()).filter(Boolean)
+}
+
 type TagMeta = { bg: string; text: string }
 type ChangeMeta = TagMeta & { dot: string }
 
