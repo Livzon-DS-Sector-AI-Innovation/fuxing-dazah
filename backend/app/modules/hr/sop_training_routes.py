@@ -189,6 +189,7 @@ def _record_dict(r) -> dict:
         "color": r.color,
         "status": r.status,
         "assessment_method": r.assessment_method,
+        "files": _record_files(r),
         "initiator_department": r.initiator_department,
         "created_by": r.created_by,
         "created_at": str(r.created_at),
@@ -216,6 +217,46 @@ def _method_label(method: str | None) -> str:
     """R/T 转成 docx「培训方式」栏可读写法。"""
     m = (method or "").strip()
     return {"R": "自学", "T": "面授"}.get(m, m)
+
+
+# ─── 合并登记（一条记录含多份培训文件） ───
+
+
+def _normalize_files(raw) -> list[dict] | None:
+    """登记的 files 载荷清洗：剔除空行；返回 [{file_name, file_no}] 或 None。"""
+    if not isinstance(raw, list):
+        return None
+    files: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("file_name") or "").strip()
+        if not name:
+            continue
+        no = str(item.get("file_no") or "").strip() or None
+        files.append({"file_name": name, "file_no": no})
+    return files or None
+
+
+def _record_files(r) -> list[dict]:
+    """登记的文件列表：files JSON 优先，回落单文件列（历史数据）。"""
+    raw = _normalize_files(_json_loads(getattr(r, "files", None)))
+    if raw:
+        return raw
+    return [{"file_name": r.file_name, "file_no": r.file_no}]
+
+
+def _record_file_nos(r) -> list[str]:
+    """题库匹配用的文件编号列表（合并登记取全部）。"""
+    return [no for f in _record_files(r) if (no := f.get("file_no"))]
+
+
+def _joined_file_fields(files: list[dict]) -> tuple[str, str | None]:
+    """files → (file_name, file_no) 展示串（「；」连接），列表/导出/搜索沿用单列。"""
+    return (
+        "；".join(f["file_name"] for f in files),
+        "；".join(no for f in files if (no := f.get("file_no"))) or None,
+    )
 
 
 # ─── 登记表 ───
@@ -281,9 +322,14 @@ async def create_sop_record(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """登记培训文件，默认保存为草稿；点「提交/通知」后才生成二级表并通知各部门培训管理员。"""
+    """登记培训文件，默认保存为草稿；点「提交/通知」后才生成二级表并通知各部门培训管理员。
+
+    带 files（[{file_name, file_no}]）时为合并登记：一条记录含多份文件，
+    file_name/file_no 存「；」连接的展示串，结构化访问走 files。
+    """
     from app.modules.hr.models import SopTrainingRecord
-    if not payload.get("file_name"):
+    files = _normalize_files(payload.get("files"))
+    if not payload.get("file_name") and not files:
         raise HTTPException(400, "请填写文件名称")
     # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
     year_val = str(payload.get("year") or date.today().year).strip()
@@ -296,6 +342,11 @@ async def create_sop_record(
         raise HTTPException(400, "考核方式应为 阅读并理解 / 问答 / 笔试")
     if payload.get("color") and len(str(payload["color"]).strip()) > 8:
         raise HTTPException(400, "标记颜色值过长")
+    if not files:
+        files = [{"file_name": str(payload["file_name"]).strip(), "file_no": payload.get("file_no")}]
+    file_name, file_no = _joined_file_fields(files)
+    if len(file_name) > 512:
+        raise HTTPException(400, "合并后的文件名称过长，请拆分登记")
     involved = list(dict.fromkeys(
         str(d).strip() for d in _json_loads(payload.get("involved_departments")) if str(d).strip()
     ))
@@ -303,8 +354,9 @@ async def create_sop_record(
     r = SopTrainingRecord(
         year=year_val,
         training_date=payload.get("training_date"),
-        file_name=payload["file_name"],
-        file_no=payload.get("file_no"),
+        file_name=file_name,
+        file_no=file_no,
+        files=json.dumps(files, ensure_ascii=False),
         effective_date=payload.get("effective_date"),
         method=payload.get("method"),
         assessment_method=assessment,
@@ -378,6 +430,18 @@ async def update_sop_record(
         raise HTTPException(404, "记录不存在")
     if "file_name" in payload and not str(payload.get("file_name") or "").strip():
         raise HTTPException(400, "请填写文件名称")
+    # 合并登记：带 files 时重算展示串（file_name/file_no 存「；」连接）
+    if "files" in payload:
+        files = _normalize_files(payload.get("files"))
+        if files:
+            joined_name, joined_no = _joined_file_fields(files)
+            if len(joined_name) > 512:
+                raise HTTPException(400, "合并后的文件名称过长，请拆分登记")
+            payload["files"] = json.dumps(files, ensure_ascii=False)
+            payload["file_name"] = joined_name
+            payload["file_no"] = joined_no
+        else:
+            payload.pop("files")  # 空 files 不清历史数据
     if "color" in payload and not payload.get("color"):
         payload.pop("color")
     # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
@@ -395,7 +459,7 @@ async def update_sop_record(
         payload["assessment_method"] = assessment
     if payload.get("color") and len(str(payload["color"]).strip()) > 8:
         raise HTTPException(400, "标记颜色值过长")
-    for key in ("year", "training_date", "file_name", "file_no", "effective_date",
+    for key in ("year", "training_date", "file_name", "file_no", "files", "effective_date",
                 "method", "assessment_method", "complete_time", "trainer", "trainees",
                 "change_note", "color", "initiator_department"):
         if key in payload:
@@ -856,7 +920,7 @@ async def generate_record_materials(
     names = list(name_depts.keys())
     sick, maternity = await _query_leave_counts(session, initiator)
 
-    questions = await _lookup_exam_questions(session, [record.file_no] if record.file_no else [])
+    questions = await _lookup_exam_questions(session, _record_file_nos(record))
     assessment = _effective_assessment(record.assessment_method, record.method)
     # 模板字节一次取齐（DB 自定义版优先，无则回退仓库默认模板）
     from app.modules.hr.training_template_store import load_training_template_bytes
@@ -971,8 +1035,10 @@ async def batch_generate_materials(
         fname = (rec.file_name if rec else None) or e.file_name or "SOP培训"
         if fname not in file_names:
             file_names.append(fname)
-        if rec and rec.file_no and rec.file_no not in file_nos:
-            file_nos.append(rec.file_no)
+        if rec:
+            for no in _record_file_nos(rec):
+                if no and no not in file_nos:
+                    file_nos.append(no)
         personnel = _json_loads(e.personnel)
         if not personnel:
             raise HTTPException(400, f"「{fname}」尚未选择分类人员，请先在该条目选择分类人员后再生成材料")

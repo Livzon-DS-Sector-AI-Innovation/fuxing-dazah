@@ -591,6 +591,10 @@ export interface SopTrainingRecord {
   file_no: string | null
   effective_date: string | null
   method: string | null
+  /** 考核方式：阅读并理解/问答/笔试；空 = 后端按培训方式取默认（R→阅读并理解，T→问答） */
+  assessment_method?: string | null
+  /** 合并登记的文件列表；空 = 单文件（看 file_name/file_no） */
+  files?: { file_name: string; file_no: string | null }[] | null
   complete_time: string | null
   trainer: string | null
   trainees: string | null

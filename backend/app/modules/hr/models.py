@@ -1692,8 +1692,9 @@ class SopTrainingRecord(BaseModel):
 
     year: Mapped[str] = mapped_column(String(4), nullable=False, comment="登记年份，如 2026")
     training_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="培训日期，如 01.05")
-    file_name: Mapped[str] = mapped_column(String(512), nullable=False, comment="文件名称")
-    file_no: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="文件编号（SOP编号，(CA)前缀=草案）")
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False, comment="文件名称（合并登记时为「；」连接的展示串）")
+    file_no: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="文件编号（SOP编号，(CA)前缀=草案；合并登记时为「；」连接）")
+    files: Mapped[str | None] = mapped_column(Text, nullable=True, comment="登记的培训文件列表 JSON [{file_name, file_no}]；空=单文件（看 file_name/file_no）")
     effective_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="生效日期，草案填——")
     method: Mapped[str | None] = mapped_column(String(4), nullable=True, comment="培训方式：R（按完成时间）/ T（按课时）")
     assessment_method: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="考核方式：阅读并理解/问答/笔试（空=按培训方式取默认）")
