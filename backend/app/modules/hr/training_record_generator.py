@@ -49,11 +49,14 @@ def generate_training_record(
     training_items: list[dict[str, Any]] | None = None,
     training_position: str | None = None,
     template_bytes: bytes | None = None,
+    department: str | None = None,
 ) -> BytesIO:
     """生成新员工培训记录 Word 文档。
 
     training_items 每项包含: file_name, trainer, method, plan_date
     training_position: 培训岗位。传入时「体现岗位」写培训岗位，否则写员工实际岗位
+    department: 体现部门覆盖值。转岗/晋升员工传最近一次异动的目标部门（异动记录
+    不回写档案，档案同步跟进前按异动口径出文档），不传写员工档案部门
     """
     raw = template_bytes or find_hr_template_bytes("training_record")
     doc = Document(BytesIO(raw))
@@ -66,7 +69,7 @@ def generate_training_record(
         "{姓名}": employee.name or "",
         "{性别}": employee.gender or "",
         "{年龄}": age_str,
-        "{体现部门}": employee.department or "",
+        "{体现部门}": department or employee.department or "",
         "{体现岗位}": training_position or employee.position or "",
         "{入职日期}": str(employee.hire_date) if employee.hire_date else "",
         "{{入职日期}+3M-1day}": probation_end,

@@ -785,14 +785,35 @@ class OnboardingRecordRepository:
         return {row[0]: row[1] for row in result.all() if row[1]}
 
     @staticmethod
-    def _prejob_completed_exists() -> Exists:
-        """该员工培训台账存在入职培训记录表导出写入的记录（即入职培训已完成）。"""
+    def _last_transfer_date_sq():
+        """该员工最近一次职位变动（晋升/转岗/产假复岗，不筛类型）的生效日期；无异动为 NULL。"""
+        return (
+            select(func.max(TransferRecord.effective_date))
+            .where(
+                TransferRecord.employee_id == Employee.id,
+                TransferRecord.is_deleted.is_(False),
+            )
+            .correlate(Employee)
+            .scalar_subquery()
+        )
+
+    @classmethod
+    def _prejob_completed_exists(cls) -> Exists:
+        """该员工培训台账存在入职培训记录表导出写入的记录（即入职培训已完成）。
+
+        转岗/晋升等职位变动后需重新培训：完成记录的培训日期不得早于最近一次
+        职位变动生效日期（异动当日重训也算完成）；无异动者兜底到 1900-01-01、
+        判定行为与原口径完全一致。
+        """
         return (
             select(TrainingLedger.id)
             .where(
                 TrainingLedger.employee_number == Employee.employee_number,
                 TrainingLedger.is_deleted.is_(False),
                 TrainingLedger.source_type == TrainingLedger.SOURCE_PREJOB_EXPORT,
+                TrainingLedger.training_date >= func.coalesce(
+                    cls._last_transfer_date_sq(), date(1900, 1, 1),
+                ),
             )
             .correlate(Employee)
             .exists()
@@ -808,7 +829,9 @@ class OnboardingRecordRepository:
     ) -> tuple[list[tuple[Employee, bool]], dict[str, list[dict[str, Any]]]]:
         """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。
 
-        员工附带是否已完成入职培训，已完成的默认不返回。
+        员工附带是否已完成入职培训，已完成的默认不返回。转岗/晋升等职位变动后
+        需重新培训：完成判定只认最近一次异动生效日期之后的完成记录（见
+        _prejob_completed_exists），因此异动过的老员工会重新进入待培训名单。
         第二个返回值是按工号聚合的异动记录。
         """
         stmt = select(
@@ -818,7 +841,12 @@ class OnboardingRecordRepository:
             or_(Employee.status != "离职", Employee.status.is_(None)),
         )
         if year:
-            stmt = stmt.where(func.extract("year", Employee.hire_date) == year)
+            # 年份命中入职年份或最近异动年份：按异动年份重训的老员工（hire_date
+            # 在往年）也能进入默认「当年」视图
+            stmt = stmt.where(or_(
+                func.extract("year", Employee.hire_date) == year,
+                func.extract("year", self._last_transfer_date_sq()) == year,
+            ))
         if keyword:
             stmt = stmt.where(
                 Employee.name.ilike(f"%{keyword}%")
@@ -828,8 +856,13 @@ class OnboardingRecordRepository:
             stmt = stmt.where(~self._prejob_completed_exists())
         # apply_list_scope 自身未标注类型（deps.py），与模块内其余调用点一致地定向忽略
         stmt = hr_scope.apply_list_scope(stmt, Employee)  # type: ignore[no-untyped-call]
+        # 最近活动时间（入职或最近异动，取较晚者）倒序：当年异动的老员工不沉底
+        last_activity = func.greatest(
+            Employee.hire_date,
+            func.coalesce(self._last_transfer_date_sq(), Employee.hire_date),
+        )
         rows = (await self.session.execute(
-            stmt.order_by(Employee.hire_date.desc().nulls_last(), Employee.employee_number)
+            stmt.order_by(last_activity.desc().nulls_last(), Employee.employee_number)
         )).all()
         candidates = [(row[0], bool(row[1])) for row in rows]
 

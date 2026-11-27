@@ -1221,7 +1221,11 @@ class OnboardingRecordService:
         year: int | None = None,
         include_completed: bool = False,
     ) -> tuple[list[tuple[Employee, bool]], dict[str, list[dict[str, Any]]]]:
-        """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。"""
+        """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。
+
+        转岗/晋升等职位变动后需重新培训：异动过的员工只有重新完成入职培训
+        （培训日期不早于最近一次异动生效日期）才算完成，否则重新出现在待培训名单。
+        """
         return await self.repo.list_training_candidates(
             hr_scope=hr_scope,
             keyword=keyword,

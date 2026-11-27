@@ -24,6 +24,7 @@ def generate_work_permit(
     employee: Employee,
     training_items: list[dict[str, Any]] | None = None,
     template_bytes: bytes | None = None,
+    department: str | None = None,
 ) -> BytesIO:
     """生成上岗证 Word 文档。
 
@@ -31,6 +32,8 @@ def generate_work_permit(
     - 培训起止日期: 从 plan_date 中取最早和最晚
     - 培训清单内容: 所有 file_name 逗号拼接
     - 培训师: 所有 trainer 去重后逗号拼接
+    department: 体现部门覆盖值。转岗/晋升员工传最近一次异动的目标部门
+    （异动记录不回写档案，档案同步跟进前按异动口径出文档），不传写员工档案部门
     """
     raw = template_bytes or find_hr_template_bytes("work_permit")
     doc = Document(BytesIO(raw))
@@ -57,7 +60,7 @@ def generate_work_permit(
         "{姓名}": employee.name or "",
         "{性别}": employee.gender or "",
         "{学历}": employee.education or "",
-        "{体现部门}": employee.department or "",
+        "{体现部门}": department or employee.department or "",
         "{培训起止日期}": date_range,
         "{培训清单内容}": content_list,
         "{培训师}": trainer_list,

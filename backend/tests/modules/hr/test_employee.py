@@ -4,7 +4,7 @@
 走 service 层（真实 DB 回滚）。
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import DuplicateException, NotFoundException
 from app.main import app
 from app.modules.hr.deps import HrAccessContext, get_hr_scope
-from app.modules.hr.models import Employee
+from app.modules.hr.models import Employee, TransferRecord
 from app.modules.hr.schemas import EmployeeCreate, EmployeeUpdate
 from app.modules.hr.service import EmployeeService
 from app.platform.identity.models import User
@@ -373,6 +373,26 @@ async def _get_candidates(client: AsyncClient, **params: Any) -> dict[str, dict[
     return {c["name"]: c for c in resp.json()["data"]}
 
 
+async def _add_transfer(
+    db: AsyncSession,
+    emp: Employee,
+    *,
+    effective_date: date,
+    transfer_type: str = "转岗",
+) -> TransferRecord:
+    """直接落一条职位变动记录（真实入口 POST /transfers，这里为聚焦判定逻辑走 ORM）。"""
+    t = TransferRecord(
+        employee_id=emp.id,
+        transfer_type=transfer_type,
+        from_department=emp.department,
+        to_department=emp.department,
+        effective_date=effective_date,
+    )
+    db.add(t)
+    await db.flush()
+    return t
+
+
 @pytest.mark.asyncio
 async def test_training_candidates_include_synced_employee_without_onboarding_row(
     db_session: AsyncSession, client: AsyncClient,
@@ -416,6 +436,101 @@ async def test_training_candidates_hide_completed_by_default(
     assert name not in await _get_candidates(client, keyword=name)
     shown = await _get_candidates(client, keyword=name, include_completed="true")
     assert shown[name]["prejob_completed"] is True
+
+
+async def _add_prejob_export_ledger(client: AsyncClient, number: str, training_date: date) -> None:
+    """经培训台账接口写入一条入职培训完成记录（与页面导出写台账同链路）。"""
+    resp = await client.post("/api/v1/hr/training-ledgers", json={
+        "employee_number": number,
+        "training_date": str(training_date),
+        "training_subject": f"入职培训记录表导出写入-{training_date}",
+        "source_type": "prejob_export",
+    })
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_transfer_resets_completion(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """转岗/晋升后需重新培训：异动前的完成记录不算数，员工重新进入待培训名单；
+    异动生效日期之后重新完成（培训日期 ≥ 生效日）才再次视为完成。"""
+    name = _rand("转岗员工")
+    emp = await _add_synced_employee(db_session, name=name)
+    transfer_day = date.today()
+
+    # 异动前的完成记录（培训日期早于异动生效日）
+    await _add_prejob_export_ledger(client, emp.employee_number, date.today() - timedelta(days=30))
+    await _add_transfer(db_session, emp, effective_date=transfer_day, transfer_type="转岗")
+
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["prejob_completed"] is False
+    assert found[name]["transfers"][0]["transfer_type"] == "转岗"
+    assert found[name]["transfers"][0]["effective_date"] == str(transfer_day)
+
+    # 异动后重新完成 → 默认隐藏，include_completed 时标记已完成
+    await _add_prejob_export_ledger(client, emp.employee_number, transfer_day)
+    assert name not in await _get_candidates(client, keyword=name)
+    shown = await _get_candidates(client, keyword=name, include_completed="true")
+    assert shown[name]["prejob_completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_maternity_return_triggers_retraining(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """产假复岗与晋升/转岗同口径：复岗异动同样重置入职培训完成状态。"""
+    name = _rand("产假复岗员工")
+    emp = await _add_synced_employee(db_session, name=name)
+    await _add_prejob_export_ledger(client, emp.employee_number, date.today() - timedelta(days=60))
+    return_day = date.today() - timedelta(days=7)
+    await _add_transfer(db_session, emp, effective_date=return_day, transfer_type="产假复岗")
+
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["prejob_completed"] is False
+    assert found[name]["transfers"][0]["transfer_type"] == "产假复岗"
+
+    # 复岗后重新完成（培训日期 ≥ 复岗生效日）→ 再次视为完成
+    await _add_prejob_export_ledger(client, emp.employee_number, return_day)
+    assert name not in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_multiple_transfers_use_latest(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """多次职位变动取最近一次生效日期判定：完成记录夹在两次异动之间不算完成，
+    transfers 按生效日期降序、[0] 是最近一次。"""
+    name = _rand("多次异动员工")
+    emp = await _add_synced_employee(db_session, name=name)
+    today = date.today()
+    await _add_transfer(db_session, emp, effective_date=today - timedelta(days=20), transfer_type="调动")
+    await _add_transfer(db_session, emp, effective_date=today - timedelta(days=5), transfer_type="晋升")
+
+    # 完成记录晚于第一次异动、早于最近一次 → 仍需重新培训
+    await _add_prejob_export_ledger(client, emp.employee_number, today - timedelta(days=10))
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["prejob_completed"] is False
+    assert [t["transfer_type"] for t in found[name]["transfers"]] == ["晋升", "调动"]
+
+    # 异动当日或之后完成才算完成（≥ 口径）
+    await _add_prejob_export_ledger(client, emp.employee_number, today - timedelta(days=5))
+    assert name not in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_year_matches_transfer_year(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """year 命中入职年份或最近异动年份：往年入职、今年异动的员工进默认「当年」视图。"""
+    name = _rand("异动年份员工")
+    this_year = date.today().year
+    emp = await _add_synced_employee(db_session, name=name, hire_date=date(this_year - 3, 6, 1))
+    await _add_transfer(db_session, emp, effective_date=date(this_year, 3, 1))
+
+    assert name in await _get_candidates(client, keyword=name, year=this_year)
+    assert name in await _get_candidates(client, keyword=name, year=this_year - 3)
+    assert name not in await _get_candidates(client, keyword=name, year=this_year - 1)
 
 
 @pytest.mark.asyncio

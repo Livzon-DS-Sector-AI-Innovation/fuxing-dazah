@@ -549,6 +549,9 @@ async def training_candidates(
     """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。
 
     已完成入职培训（培训台账存在入职培训记录表导出写入的记录）的员工默认不返回。
+    转岗/晋升等职位变动后需重新培训：异动员工只有异动生效日期之后的完成记录
+    才算完成，否则自动重新进入待培训名单；year 命中入职年份或最近异动年份。
+    transfers 按生效日期降序，[0] 即最近一次异动。
     """
     candidates, transfer_map = await service.list_training_candidates(
         hr_scope=hr_scope,
@@ -1607,11 +1610,15 @@ async def export_training_record(
     employee = await service.get_employee_by_number(employee_number)
     hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
+    # 转岗/晋升员工按最近一次异动的目标部门/岗位出文档（HR 显式选的培训岗位优先）
+    eff_dept, eff_pos = await _effective_position_fields(session, employee)
     try:
         buffer: BytesIO = await render_training_document(
             session, "training_record",
             lambda tb: generate_training_record(
-                employee, training_items=items, training_position=body.training_position,
+                employee, training_items=items,
+                training_position=body.training_position or eff_pos,
+                department=eff_dept,
                 template_bytes=tb,
             ),
         )
@@ -1649,10 +1656,14 @@ async def export_work_permit(
 
     employee = await service.get_employee_by_number(employee_number)
     items = [it.model_dump() for it in body.training_items]
+    # 转岗/晋升员工上岗证的「体现部门」按最近一次异动的目标部门
+    eff_dept, _ = await _effective_position_fields(session, employee)
     try:
         buffer: BytesIO = await render_training_document(
             session, "work_permit",
-            lambda tb: generate_work_permit(employee, training_items=items, template_bytes=tb),
+            lambda tb: generate_work_permit(
+                employee, training_items=items, department=eff_dept, template_bytes=tb,
+            ),
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1673,6 +1684,31 @@ class PrejobTrainingItems(BaseModel):
     training_items: list[dict] = []
     # 培训岗位：传入时文档里的「体现岗位」写它，而不是员工实际岗位
     training_position: str | None = None
+
+
+async def _latest_transfer(session: AsyncSession, employee):
+    """员工最近一次异动记录（晋升/转岗/产假复岗，按生效日期取最新）；无则 None。"""
+    from app.modules.hr.models import TransferRecord
+    return (await session.execute(
+        select(TransferRecord).where(
+            TransferRecord.employee_id == employee.id,
+            TransferRecord.is_deleted == False,  # noqa: E712
+        ).order_by(TransferRecord.effective_date.desc()).limit(1)
+    )).scalar_one_or_none()
+
+
+async def _effective_position_fields(
+    session: AsyncSession, employee,
+) -> tuple[str | None, str | None]:
+    """转岗/晋升员工的「有效部门/岗位」：最近一次异动的目标部门/岗位优先。
+
+    异动记录只落历史、不回写档案（档案部门靠飞书同步/手工更新），同步跟进前
+    培训内容与导出文档应按异动后的岗位口径取值。无异动记录返回 (None, None)。
+    """
+    t = await _latest_transfer(session, employee)
+    if not t:
+        return None, None
+    return t.to_department or None, t.to_position or None
 
 
 async def _sync_prejob_plan_to_ledger(
@@ -1773,6 +1809,16 @@ async def export_prejob_training_plan(
         dept = person.department
         pos = person.position
 
+    # 转岗/晋升员工按最近一次异动的目标部门/岗位（异动记录不回写档案，
+    # 档案/入职台账同步跟进前按异动口径取培训内容与文档字段）；
+    # 类别同步用异动类型（如 转岗/产假复岗），不再写「新员工」
+    latest_t = await _latest_transfer(session, employee)
+    eff_dept = latest_t.to_department if latest_t else None
+    eff_pos = latest_t.to_position if latest_t else None
+    transfer_category = latest_t.transfer_type if latest_t else None
+    dept = eff_dept or dept
+    pos = eff_pos or pos
+
     # 指定了培训岗位时，后面按培训岗位查关联培训内容
     if payload and payload.training_position:
         pos = payload.training_position
@@ -1821,7 +1867,8 @@ async def export_prejob_training_plan(
         buffer: BytesIO = await render_training_document(
             session, "prejob_plan",
             lambda tb: generate_prejob_training_plan(
-                person, training_items, payload.training_position if payload else None,
+                person, training_items, pos,
+                department=dept, transfer_type=transfer_category,
                 template_bytes=tb,
             ),
         )

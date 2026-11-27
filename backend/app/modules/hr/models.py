@@ -1238,7 +1238,7 @@ class TransferRecord(BaseModel):
     )
 
     employee_id: Mapped[UUID] = mapped_column(nullable=False, comment="员工ID")
-    transfer_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default="调动", comment="调动/晋升/降职/转岗")
+    transfer_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default="调动", comment="类型: 晋升/转岗/产假复岗（档案页异动记录维护）")
     from_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="原部门")
     to_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="新部门")
     from_position: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="原岗位")
