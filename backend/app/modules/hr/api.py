@@ -3725,6 +3725,28 @@ async def qbank_search(file_no: str | None = Query(None), keyword: str | None = 
     )
 
 
+@router.get("/question-bank/counts", summary="按文件编号批量统计题库题数")
+async def qbank_counts(
+    file_nos: str = Query("", description="逗号分隔的文件编号（精确匹配，同材料打包口径）"),
+    session: AsyncSession = Depends(get_db),
+):
+    """SOP 培训总表/登记表单展示「题库已有几题」用；编号无题也返回 0，不跳过。"""
+    nos = list(dict.fromkeys(s.strip() for s in file_nos.split(",") if s.strip()))
+    counts = {n: 0 for n in nos}
+    if nos:
+        rows = (await session.execute(
+            text(
+                "SELECT file_no, COUNT(*) FROM hr.question_bank "
+                "WHERE is_deleted = false AND file_no = ANY(:nos) GROUP BY file_no"
+            ),
+            {"nos": nos},
+        )).all()
+        for file_no, cnt in rows:
+            if file_no in counts:
+                counts[file_no] = int(cnt)
+    return success_response(data={"counts": counts})
+
+
 @router.delete("/question-bank/{item_id}", summary="删除题目")
 async def delete_question_bank_item(
     item_id: UUID,

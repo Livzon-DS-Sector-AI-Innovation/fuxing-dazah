@@ -15,8 +15,6 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
-  FileZipOutlined,
-  MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
   RightOutlined,
@@ -26,6 +24,7 @@ import {
   deleteSopTrainingRecord,
   downloadSopMasterMaterials,
   exportSopTrainingRecords,
+  fetchQuestionBankCounts,
   fetchSopRecordYears,
   fetchSopTrainingAdmins,
   fetchSopTrainingEntries,
@@ -38,6 +37,7 @@ import { useHasPermission } from '@/hooks/hr'
 import type { SopEvaluationStats, SopMaterialsPreview, SopTrainingRecord } from '@/types/hr'
 import PageHeader from '@/components/hr/PageHeader'
 import SopRecordFormModal from './SopRecordFormModal'
+import SopQaGenerateModal from './SopQaGenerateModal'
 import SopMaterialsModal, { randomStats } from './SopMaterialsModal'
 import {
   ChangeTypeFilter,
@@ -78,15 +78,33 @@ function withCount(text: string, count: number): ReactNode {
   )
 }
 
+/** 登记的全部文件：合并登记看 files，单文件回落 file_name/file_no 两列 */
+function recordFiles(r: SopTrainingRecord): { file_name: string; file_no: string | null }[] {
+  return r.files?.length ? r.files : [{ file_name: r.file_name, file_no: r.file_no }]
+}
+
+/** 考核方式没登记时按培训方式取默认（与后端 _effective_assessment 同口径） */
+function effectiveAssessment(r: SopTrainingRecord): string {
+  return r.assessment_method || (r.method === 'T' ? '问答' : r.method === 'R' ? '阅读并理解' : '')
+}
+
 export default function SopMasterClient() {
   const { message, modal } = App.useApp()
   const canManage = useHasPermission('hr:training:manage')
   const canGenerateDoc = useHasPermission('hr:training:document')
+  const canUseAiExam = useHasPermission('hr:training:exam')
 
   const [years, setYears] = useState<string[]>([])
   const [year, setYear] = useState(() => String(new Date().getFullYear()))
   const [records, setRecords] = useState<SopTrainingRecord[]>([])
   const [dispatchProgress, setDispatchProgress] = useState<Record<string, DispatchProgress>>({})
+  // 题库按 SOP 编号计数：问答/笔试的材料按编号带题，列表上先让人看见「哪些还没题」
+  const [qaCounts, setQaCounts] = useState<Record<string, number>>({})
+  const [qaCountsTick, bumpQaCounts] = useReducer((n: number) => n + 1, 0)
+  const [qaOpen, setQaOpen] = useState(false)
+  const [qaTarget, setQaTarget] = useState<SopTrainingRecord | null>(null)
+  // 每次打开弹窗换 key：AI 出题弹窗整体重新挂载，上传/生成状态不用靠 effect 复位
+  const [qaSeq, setQaSeq] = useState(0)
   const [loading, setLoading] = useState(true)
   const [progress, setProgress] = useState<ProgressFilter>('all')
   const [changeFilter, setChangeFilter] = useState<string | null>(null)
@@ -159,6 +177,25 @@ export default function SopMasterClient() {
     })()
     return () => { cancelled = true }
   }, [])
+
+  // 题库题数按编号批量拉一次；AI 出题入库后 bumpQaCounts 重拉
+  useEffect(() => {
+    const nos = [
+      ...new Set(
+        records
+          .flatMap((r) => recordFiles(r).map((f) => (f.file_no ?? '').trim()))
+          .filter(Boolean),
+      ),
+    ]
+    let cancelled = false
+    ;(async () => {
+      const r = nos.length ? await fetchQuestionBankCounts(nos).catch(() => null) : null
+      if (cancelled) return
+      // 计数拉不到不影响主表，考核题库列退成占位
+      setQaCounts(r?.data?.counts ?? {})
+    })()
+    return () => { cancelled = true }
+  }, [records, qaCountsTick])
 
   const stats = useMemo(() => {
     const byChange: Record<string, number> = {}
@@ -435,9 +472,41 @@ export default function SopMasterClient() {
       },
     },
     {
+      title: '考核题库',
+      key: 'qabank',
+      width: 96,
+      render: (_, r) => {
+        const assessment = effectiveAssessment(r)
+        // 阅读并理解不消费题库
+        if (assessment !== '问答' && assessment !== '笔试') {
+          return <span className={styles.placeholder}>—</span>
+        }
+        const nos = recordFiles(r).map((f) => (f.file_no ?? '').trim()).filter(Boolean)
+        const total = nos.reduce((sum, no) => sum + (qaCounts[no] ?? 0), 0)
+        return total > 0 ? (
+          <span
+            className={styles.num}
+            title={`题库按编号匹配：${nos.map((no) => `${no} ${qaCounts[no] ?? 0} 题`).join('、')}`}
+          >
+            {total} 题
+          </span>
+        ) : (
+          <Tooltip
+            title={
+              nos.length
+                ? '题库还没有这些编号的考题，用行上「AI 出题」入库后，生成的材料自动带题'
+                : '登记没填 SOP 编号：题库按编号匹配不到，生成材料时留空白行手写'
+            }
+          >
+            <span className={styles.placeholder}>尚无题</span>
+          </Tooltip>
+        )
+      },
+    },
+    {
       title: '操作',
       key: 'actions',
-      width: 156,
+      width: 268,
       fixed: 'right',
       render: (_, r) => {
         const moreItems: MenuProps['items'] = canManage
@@ -460,17 +529,30 @@ export default function SopMasterClient() {
                 转培训
               </Button>
             )}
-            {canGenerateDoc && (
-              <Tooltip title="下载全套培训材料">
+            {canUseAiExam && effectiveAssessment(r) === '问答' && (
+              <Tooltip title="AI 问答出题：上传培训文档生成题目，勾选后按 SOP 编号沉淀题库">
                 <Button
                   type="text"
                   size="small"
-                  aria-label="下载全套培训材料"
-                  icon={<FileZipOutlined />}
-                  loading={generatingId === r.id}
-                  onClick={() => { void handleMaterials(r) }}
-                />
+                  onClick={() => {
+                    setQaTarget(r)
+                    setQaSeq((s) => s + 1)
+                    setQaOpen(true)
+                  }}
+                >
+                  AI出题
+                </Button>
               </Tooltip>
+            )}
+            {canGenerateDoc && (
+              <Button
+                type="text"
+                size="small"
+                loading={generatingId === r.id}
+                onClick={() => { void handleMaterials(r) }}
+              >
+                生成材料
+              </Button>
             )}
             {moreItems.length > 0 && (
               <Dropdown
@@ -483,7 +565,7 @@ export default function SopMasterClient() {
                   },
                 }}
               >
-                <Button type="text" size="small" aria-label="更多操作" icon={<MoreOutlined />} />
+                <Button type="text" size="small">更多</Button>
               </Dropdown>
             )}
           </Space>
@@ -569,7 +651,7 @@ export default function SopMasterClient() {
         loading={loading}
         columns={columns}
         dataSource={visible}
-        scroll={{ x: 1060 }}
+        scroll={{ x: 1260 }}
         rowClassName={(r) => ROW_CLASS[r.color] ?? ''}
         pagination={{
           current: page,
@@ -609,6 +691,15 @@ export default function SopMasterClient() {
           refresh()
         }}
       />
+
+      <SopQaGenerateModal
+        key={qaSeq}
+        open={qaOpen}
+        files={qaTarget ? recordFiles(qaTarget) : []}
+        onClose={() => setQaOpen(false)}
+        onSynced={() => bumpQaCounts()}
+      />
+
       <SopMaterialsModal
         key={materialsSeq}
         open={materialsTarget !== null}
